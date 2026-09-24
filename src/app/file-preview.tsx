@@ -1,21 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { AppLoader, withLoading } from '@/components/app-loader';
+import { ScreenHeader } from '@/components/screen-header';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { File } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { HelpButton } from '@/components/help-button';
+import { showDialog } from '@/components/app-dialog';
+import { toast } from '@/components/toast';
 import { ToolButton } from '@/components/tool-button';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
 import { MediaPreview } from '@/features/files/media-preview';
 import { MediaOptions } from '@/features/files/media-options';
+import { EDITOR_TOOL_TABS, MediaToolbar } from '@/features/files/media-toolbar';
 import { getRecentFile, touchRecentFile, type RecentFile } from '@/features/files/recent-files';
 import { formatSize } from '@/features/files/file-storage';
+import { concreteMimeType, saveToDevice } from '@/features/files/save-file';
 import { createImagePdfToolForFile, discardPdfToolSession } from '@/features/pdf/pdf-tool-session';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { usePalette } from '@/theme/colors';
-import { getGradients } from '@/theme/dashboard';
+import { getGradients, typography as t } from '@/theme/dashboard';
 
 export default function FilePreviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -26,6 +32,8 @@ export default function FilePreviewScreen() {
   const [loading, setLoading] = useState(true);
   const [options, setOptions] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [landscape, setLandscape] = useState(false);
   const lock = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -42,32 +50,42 @@ export default function FilePreviewScreen() {
   async function action(value: string) {
     if (!file || lock.current) return;
     setOptions(false);
-    if (value === 'info') { Alert.alert('File details', `${file.name}\n${formatSize(file.size)}\n${file.mimeType}`); return; }
+    if (value === 'text' || value === 'edit_text') { router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } }); return; }
+    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value] } }); return; }
+    if (value === 'info') { showDialog('File details', `${file.name}\n${formatSize(file.size)}\n${file.mimeType}`, undefined, { ios: 'info.circle', android: 'info-outline' }); return; }
     lock.current = true; setBusy(true); setError(null);
     let session: string | null = null;
     try {
       if (value === 'pdf') {
-        session = await createImagePdfToolForFile(file);
+        toast('Preparing PDF…');
+        session = await withLoading('Preparing your PDF…', () => createImagePdfToolForFile(file));
         if (!mounted.current) { discardPdfToolSession(session); return; }
         router.push({ pathname: '/pdf-tool', params: { session } });
       } else if (value === 'save') {
+        const saved = await withLoading('Saving to your device…', () => saveToDevice(file.uri, file.name, concreteMimeType(file)));
+        if (mounted.current) showDialog('Saved to your device', `${saved.name}\nSaved to ${saved.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
+      } else if (value === 'share') {
         const Sharing = await import('expo-sharing');
-        if (!(await Sharing.isAvailableAsync())) throw new Error('Saving is not available on this device.');
-        if (mounted.current) await Sharing.shareAsync(file.uri, { mimeType: file.mimeType.includes('*') ? undefined : file.mimeType, dialogTitle: 'Save a copy' });
+        if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is not available on this device.');
+        if (mounted.current) await Sharing.shareAsync(file.uri, { mimeType: file.mimeType.includes('*') ? undefined : file.mimeType, dialogTitle: 'Share' });
       }
     } catch (cause) { if (session) discardPdfToolSession(session); if (mounted.current) setError((cause as Error).message || 'Could not complete this action. Try again.'); }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <View style={[styles.header, { borderColor: colors.separator }]}><ThemedText numberOfLines={1} style={styles.title}>{file?.name ?? 'Preview'}</ThemedText><HelpButton tool={file?.kind === 'pdf' ? 'viewer' : undefined} /><Pressable accessibilityRole="button" accessibilityLabel="Close preview" onPress={close} style={[styles.close, { backgroundColor: colors.navBackground }]}><UniversalIcon ios="xmark" android="close" size={24} color={colors.navIcon} /></Pressable></View>
-    {loading ? <View style={styles.empty}><ActivityIndicator color={colors.systemBlue} /><ThemedText>Opening file...</ThemedText></View> : <>
+    <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
+    {!focused && <ScreenHeader variant="close" title={file?.name ?? 'Preview'} onBack={close}><HelpButton tool={file?.kind === 'pdf' ? 'viewer' : undefined} /></ScreenHeader>}
+    {loading ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
-      {!file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer initialDocument={file} /> : <>
-        {active ? <MediaPreview key={file.uri} file={file} /> : <View style={styles.screen} />}
-        <View style={[styles.footer, { borderColor: colors.separator }]}><ThemedText style={{ flex: 1, color: colors.secondaryLabel }}>{formatSize(file.size)}</ThemedText><Pressable accessibilityRole="button" accessibilityLabel={`${file.kind} options`} disabled={busy} onPress={() => setOptions(true)} style={[styles.options, getGradients(colors).module]}>{busy ? <ActivityIndicator color={colors.moduleText} /> : <UniversalIcon ios="ellipsis" android="more-horiz" size={22} color={colors.moduleText} />}<ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>{busy ? 'Preparing...' : 'Options'}</ThemedText></Pressable></View>
-        <MediaOptions file={file} visible={options && active} onClose={() => setOptions(false)} onAction={value => void action(value)} />
+      {!file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer initialDocument={file} onFocusChange={setFocused} /> : <>
+        {file.kind === 'image' || file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
+          {active ? <MediaPreview key={file.uri} file={file} onClose={close} /> : <View style={styles.screen} />}
+          <MediaToolbar kind={file.kind} busy={busy} landscape={landscape} onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />
+        </View> : <>
+        {active ? <MediaPreview key={file.uri} file={file} onClose={close} /> : <View style={styles.screen} />}<View style={[styles.footer, { borderColor: colors.separator }]}><ThemedText style={[styles.meta, { color: colors.secondaryLabel }]}>{formatSize(file.size)}</ThemedText><Pressable accessibilityRole="button" accessibilityLabel={`${file.kind} toolbox`} disabled={busy} onPress={() => setOptions(true)} style={[styles.options, getGradients(colors).module]}>{busy ? <AppLoader color={colors.moduleText} /> : <UniversalIcon ios="wrench.and.screwdriver" android="handyman" size={20} color={colors.moduleText} />}<ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>{busy ? 'Preparing...' : 'Toolbox'}</ThemedText></Pressable></View>
+        <MediaOptions file={file} visible={options && active} onClose={() => setOptions(false)} onAction={value => void action(value)} /></>}
       </>}
     </>}
   </SafeAreaView>;
 }
-const styles = StyleSheet.create({ screen: { flex: 1 }, header: { minHeight: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: StyleSheet.hairlineWidth }, title: { flex: 1, fontSize: 16, fontWeight: '600' }, close: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }, error: { padding: 16 }, footer: { padding: 12, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 12 }, options: { minHeight: 48, borderRadius: 24, paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ screen: { flex: 1 }, row: { flexDirection: 'row' }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }, error: { padding: 16 }, footer: { padding: 12, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 12 }, meta: { flex: 1, ...t.caption }, options: { minHeight: 48, borderRadius: 24, paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' } });

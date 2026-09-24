@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScreenHeader } from '@/components/screen-header';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
@@ -17,11 +18,11 @@ export default function GuideScreen() {
   const [practising, setPractising] = useState(false);
   function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <View style={styles.header}><ThemedText accessibilityRole="header" style={styles.title}>{instructions ? 'How to use this tool' : 'A quick start'}</ThemedText><Pressable accessibilityRole="button" accessibilityLabel="Close guide" onPress={close} style={styles.close}><UniversalIcon ios="xmark" android="close" size={24} color={colors.systemBlue} /></Pressable></View>
+    <ScreenHeader title={instructions ? 'How to use this tool' : 'A quick start'} onBack={close} />
     <ScrollView contentContainerStyle={styles.content}>
       {!practising ? <>
         <ThemedText style={{ color: colors.secondaryLabel }}>Just a few steps. Go at your own pace.</ThemedText>
-        {(instructions ?? ['Choose PDF, Image, Video or Audio. Open a file or pick one from Recents.', 'Preview your file. In a PDF, tap the small pages below to jump ahead. Open Options to choose a tool.', 'Make your changes and save the result as a new copy.']).map((text, index) => <View key={text} style={styles.row}><View style={[styles.number, { backgroundColor: colors.accentSurface }]}><ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>{index + 1}</ThemedText></View><ThemedText style={styles.grow}>{text}</ThemedText></View>)}
+        {(instructions ?? ['Choose PDF, Image, Video or Audio. Open a file or pick one from Recents.', 'Preview your file. In a PDF, tap the small pages below to jump ahead. Open Toolbox for editing tools.', 'Make your changes and save the result as a new copy.']).map((text, index) => <View key={text} style={styles.row}><View style={[styles.number, { backgroundColor: colors.accentSurface }]}><ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>{index + 1}</ThemedText></View><ThemedText style={styles.grow}>{text}</ThemedText></View>)}
         <View style={[styles.note, { backgroundColor: colors.secondarySystemBackground }]}><UniversalIcon ios="lock.shield" android="security" size={22} color={colors.systemBlue} /><ThemedText style={styles.grow}>File processing happens on your device. Your original stays unchanged.</ThemedText></View>
         <ToolButton title="Try a short practice demo" onPress={() => setPractising(true)} />
         <ToolButton title="Got it" secondary onPress={close} />
@@ -41,8 +42,8 @@ export default function GuideScreen() {
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({
-  screen: { flex: 1 }, header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, gap: 12 }, title: { fontSize: 20, fontWeight: '600', flex: 1 },
-  close: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }, content: { padding: 20, gap: 20, width: '100%', maxWidth: 600, alignSelf: 'center' },
+  screen: { flex: 1 }, title: { fontSize: 20, fontWeight: '600', flex: 1 },
+  content: { padding: 20, gap: 20, width: '100%', maxWidth: 600, alignSelf: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 60 }, grow: { flex: 1 }, number: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   note: { padding: 16, borderRadius: 16, gap: 12, flexDirection: 'row', alignItems: 'center' }, sample: { padding: 20, borderRadius: 20, borderWidth: 1, alignItems: 'center', gap: 12 }, sampleTitle: { fontSize: 14, fontWeight: '600' },
   paper: { padding: 20, gap: 12, width: '100%', maxWidth: 240, borderWidth: 1, backgroundColor: '#FFFFFF', borderRadius: 8 }, paperTitle: { color: '#101643', fontSize: 18, fontWeight: '600' }, paperText: { color: '#101643' }, line: { height: 5, backgroundColor: '#DADFF4', borderRadius: 3 },

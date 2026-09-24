@@ -1,7 +1,9 @@
 import { rememberPdfResults, forgetRecentUri } from '../files/recent-files';
+import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { Image } from 'expo-image';
 import { Host, Picker } from '@expo/ui';
@@ -12,7 +14,8 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
-import { PdfViewer } from './pdf-viewer';
+import { savePdfResult } from '../files/save-file';
+import { openPdfScreen } from './open-pdf-screen';
 
 export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSelection } = {}) {
   const colors = usePalette();
@@ -24,8 +27,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<(PdfResult & { name: string }) | null>(null);
-  const [preview, setPreview] = useState(false);
+  const [result, setResult] = useState<(PdfResult & { name: string }) | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -65,6 +67,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   async function convert() {
     if (!PdfEngine?.imagesToPdf || locked.current || !files.length) return;
     locked.current = true; setBusy(true); setProgress(0); setError(''); setCancelling(false);
+    toast('Creating PDF…');
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     job.current = id;
     const safeName = name.trim().replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) || 'Images';
@@ -74,6 +77,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
       const output = new File(savedPdfDirectory(), outputName);
       const created = await PdfEngine.imagesToPdf({ jobId: id, uris: files.map(file => file.uri), outputUri: output.uri, pageSize });
       if (mounted.current) setResult({ ...created, name: outputName });
+      toast('PDF created and saved');
       // History failure must not discard an otherwise successful native export.
       void rememberPdfResults([{ ...created, name: outputName }]).catch(() => {});
       // Preserve completed PDFs in app storage if the sheet closes at completion.
@@ -86,6 +90,16 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     }
   }
 
+  async function saveResult() {
+    if (!result || locked.current) return;
+    locked.current = true; setBusy(true); setError('');
+    try {
+      const saved = await savePdfResult(result);
+      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name });
+    } catch (cause) { if (mounted.current) setError(cause instanceof Error ? cause.message : 'Could not save the PDF.'); }
+    finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
+  }
+
   async function share() {
     if (!result || locked.current) return;
     locked.current = true; setBusy(true); setError('');
@@ -94,16 +108,16 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
   }
 
-  if (preview && result) return <PdfViewer initialDocument={result} onBack={() => setPreview(false)} />;
 
   if (result) return <View style={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
-    <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{result.pageCount} pages · {formatSize(result.size)}{ '\n' }Save or share a copy to your preferred folder.</ThemedText>
+    <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{result.pageCount} pages · {formatSize(result.size)}{ '\n' }Save it to your device or share a copy.</ThemedText>
     <ThemedText numberOfLines={2} style={styles.body}>{result.name}</ThemedText>
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
-    <ToolButton title="Open PDF" onPress={() => setPreview(true)} disabled={busy} />
-    <ToolButton title="Save or share a copy" onPress={share} disabled={busy} />
+    <ToolButton title="Open PDF" onPress={() => result && openPdfScreen(result)} disabled={busy} />
+    <ToolButton title="Save to device" onPress={saveResult} disabled={busy} />
+    <ToolButton title="Share" secondary onPress={share} disabled={busy} />
     <ToolButton title="Create another PDF" secondary onPress={() => { setResult(null); setError(''); }} disabled={busy} />
     <ToolButton title="Delete this PDF" secondary disabled={busy} onPress={() => {
       try { new File(result.uri).delete(); void forgetRecentUri(result.uri).catch(() => {}); setResult(null); setError(''); }
@@ -129,7 +143,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     </View>} />
     <View style={[styles.footer, { borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      {busy && <ActivityIndicator color={colors.systemBlue} />}
+      {busy && <AppLoader />}
       {progress !== null ? <><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling…' : progress === 1 ? 'Saving PDF…' : `Creating pages… ${Math.round(progress * 100)}%`}</ThemedText><ToolButton title="Cancel conversion" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} /></> : <ToolButton title={`Create PDF${files.length ? ` · ${files.length} pages` : ''}`} disabled={!files.length || busy || !nativeAvailable} onPress={convert} />}
     </View>
   </View>;

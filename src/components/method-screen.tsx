@@ -1,22 +1,21 @@
+import type { Method, MethodSection } from '@/constants/pdf-methods';
+import { usePalette } from '@/theme/colors';
+import { radius, spacing as s, typography as t } from '@/theme/dashboard';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
-import { ToolSheet } from './tool-sheet';
-import { pickPdfTool, discardPdfToolSession, implementedPdfTools, type PdfTool } from '@/features/pdf/pdf-tool-session';
-import { AppearanceButtons } from './appearance-buttons';
 import { HelpButton } from './help-button';
+import { LayoutToggle, useLayoutPreference } from './layout-toggle';
 import { ModuleCard } from './module-card';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
-import { usePalette } from '@/theme/colors';
-import { radius, spacing as s, typography as t } from '@/theme/dashboard';
-import type { Method, MethodSection } from '@/constants/pdf-methods';
+import { implementedPdfTools, discardPdfToolSession, type PdfTool, pickPdfTool } from '@/features/pdf/pdf-tool-session';
 
 type Props = { title: string; subtitle: string; sections: readonly MethodSection[]; upcomingSections?: readonly MethodSection[] };
 export function MethodScreen({ title, subtitle, sections, upcomingSections = [] }: Props) {
   const colors = usePalette();
-  const [selected, setSelected] = useState<Method | null>(null);
-  const [isPresented, setIsPresented] = useState(false);
+  const [grid] = useLayoutPreference();
+  const columns = grid ? 3 : 1;
   const [query, setQuery] = useState('');
   const [picking, setPicking] = useState<string | null>(null);
   const [showUpcoming, setShowUpcoming] = useState(false);
@@ -33,7 +32,10 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
     setPickerError('');
     const toolId = title === 'Image' && tool.id === 'pdf' ? 'from_image' : tool.id;
     const needsFile = (title === 'PDF' && implementedPdfTools.has(toolId)) || (title === 'Image' && tool.id === 'pdf');
-    if (!needsFile) { setSelected(tool); setIsPresented(true); return; }
+    if (!needsFile) {
+      router.push({ pathname: '/tool-preview', params: { id: tool.id, title: tool.title, subtitle: tool.subtitle, ios: tool.ios, android: tool.android } });
+      return;
+    }
     pickerLock.current = true; setPicking(tool.id);
     let session: string | null = null;
     try {
@@ -67,7 +69,7 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
             <Pressable accessibilityRole="button" accessibilityLabel="Back to dashboard" onPress={() => router.navigate('/(tabs)')} style={({ pressed }) => [styles.back, { opacity: pressed ? 0.6 : 1 }]}><UniversalIcon ios="chevron.left" android="arrow-back" size={20} color={colors.systemBlue} />{title !== 'PDF' && <ThemedText style={{ color: colors.systemBlue }}>Toolbox</ThemedText>}</Pressable>
             {title === 'PDF' && <ThemedText accessibilityRole="header" style={styles.compactTitle}>PDF</ThemedText>}
             <HelpButton />
-            <AppearanceButtons compact />
+            <LayoutToggle />
           </View>
           {title !== 'PDF' && <View style={styles.heading}><ThemedText accessibilityRole="header" style={styles.title}>{title}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{subtitle}</ThemedText></View>}
 
@@ -80,10 +82,10 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
           {filtered.map(section => (
             <View key={section.title} style={styles.section}>
               <ThemedText accessibilityRole="header" style={styles.sectionTitle}>{section.title}</ThemedText>
-              {section.tools.filter((_, index) => index % 3 === 0).map((first, row) => (
+              {section.tools.filter((_, index) => index % columns === 0).map((first, row) => (
                 <View key={first.id} style={styles.row}>
-                  {section.tools.slice(row * 3, row * 3 + 3).map(tool => <ModuleCard key={tool.id} variant="compact" loading={picking === tool.id} disabled={!!picking} detail={(title === 'PDF' && implementedPdfTools.has(tool.id)) || (title === 'Image' && tool.id === 'pdf') ? undefined : 'Coming soon'} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android} onPress={() => openTool(tool)} />)}
-                  {[1, 2].map(column => !section.tools[row * 3 + column] && <View key={column} style={styles.spacer} />)}
+                  {section.tools.slice(row * columns, row * columns + columns).map(tool => <ModuleCard key={tool.id} variant={grid ? 'compact' : 'list'} loading={picking === tool.id} disabled={!!picking} detail={(title === 'PDF' && implementedPdfTools.has(tool.id)) || (title === 'Image' && tool.id === 'pdf') ? undefined : 'Coming soon'} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android} onPress={() => openTool(tool)} />)}
+                  {grid && [1, 2].map(column => !section.tools[row * columns + column] && <View key={column} style={styles.spacer} />)}
                 </View>
               ))}
             </View>
@@ -108,15 +110,6 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
           {!filtered.length && !upcomingFiltered.length && <View style={styles.heading}><ThemedText style={styles.sectionTitle}>No tools found</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>Try a different name or clear your search.</ThemedText></View>}
         </View>
       </ScrollView>
-      <ToolSheet title={selected?.title ?? 'Tool'} isPresented={isPresented} onClose={() => { setIsPresented(false); }}>
-        {isPresented && selected && (
-          <ScrollView contentContainerStyle={styles.sheet} keyboardShouldPersistTaps="handled">
-            <View style={[styles.sheetIcon, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={selected.ios} android={selected.android} size={30} color={colors.systemBlue} /></View>
-            <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{selected.subtitle}</ThemedText>
-            <View style={[styles.preview, { backgroundColor: colors.systemBackground }]}><ThemedText style={styles.sectionTitle}>Tool preview</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>This is a preview of the interface. Processing will be available in a future update.</ThemedText></View>
-          </ScrollView>
-        )}
-      </ToolSheet>
     </View>
   );
 }

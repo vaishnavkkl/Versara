@@ -26,6 +26,7 @@ export const IMAGE_SECTIONS = [
     { id: 'filters', title: 'Filters', subtitle: 'Monochrome, sepia & more', ios: 'camera.filters', android: 'filter-vintage' },
   ] },
   { title: 'Create & protect', tools: [
+    { id: 'edit_text', title: 'Edit Text', subtitle: 'Change words already in the photo', ios: 'character.cursor.ibeam', android: 'edit-note' },
     { id: 'text', title: 'Add Text', subtitle: 'Captions, labels & typography', ios: 'textformat', android: 'text-fields' },
     { id: 'draw', title: 'Draw & Annotate', subtitle: 'Mark up with pens & shapes', ios: 'pencil.tip', android: 'draw' },
     { id: 'watermark', title: 'Watermark', subtitle: 'Add a text or image mark', ios: 'seal', android: 'branding-watermark' },

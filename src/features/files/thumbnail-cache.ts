@@ -43,6 +43,14 @@ async function drain() {
     }
   } finally { running = false; }
 }
+/** Drops finished thumbnails of a file whose contents were replaced in place. */
+export function invalidateThumbnails(source: string) {
+  for (const [key, entry] of entries) {
+    if (entry.source !== source || !entry.done) continue;
+    entries.delete(key);
+    if (!entry.users) remove(entry.uri);
+  }
+}
 export function requestThumbnail(source: string, kind: FileKind, page = 0) {
   const key = `${source}|${kind}|${page}`;
   let entry = entries.get(key);

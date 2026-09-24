@@ -2,7 +2,7 @@ import { Directory, File } from 'expo-file-system';
 import { PdfEngine } from '../../../modules/pdf-engine';
 import type { PdfTextObject } from './pdf-edit-canvas';
 
-export type PagePreview = { imageUri: string; width: number; height: number; pageCount: number; objects: PdfTextObject[]; nestedForms: number };
+export type PagePreview = { imageUri: string; width: number; height: number; pointWidth?: number; pageCount: number; objects: PdfTextObject[]; nestedForms: number; fontFallbacks?: number };
 type Request = { uri: string; page: number; edits: string; generation: number; resolve: (preview: PagePreview | null) => void; reject: (error: unknown) => void };
 
 /** One native page render at a time, with only the newest request allowed to publish. */

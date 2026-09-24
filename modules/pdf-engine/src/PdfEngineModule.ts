@@ -10,6 +10,7 @@ declare class PdfEngine extends NativeModule<{ onConversionProgress: (event: Con
   renderFileThumbnail(jobId: string, uri: string, kind: string, page: number, outputUri: string): Promise<string>;
   cancelThumbnail(jobId: string): void;
   editPdfText(jobId: string, request: string): Promise<string>;
+  readonly nativeEditCanvasVersion?: number;
   cancelTextEdit(jobId: string): void;
   imagesToPdf(options: ImagePdfOptions): Promise<PdfResult>;
   cancelConversion(jobId: string): void;

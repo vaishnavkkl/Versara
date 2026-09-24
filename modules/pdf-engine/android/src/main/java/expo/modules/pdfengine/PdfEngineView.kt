@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
+import android.animation.ValueAnimator
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Handler
@@ -17,11 +18,14 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.ListView
 import android.widget.ImageView
+import android.widget.TextView
+import android.graphics.drawable.ColorDrawable
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
@@ -76,6 +80,13 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   @Volatile private var disposed = false
   private val image = ZoomImageView(context)
   private val list = ListView(context)
+  private val badge = TextView(context)
+  private val hideBadge = Runnable { badge.animate().alpha(0f).setDuration(250).start() }
+  private fun showBadge() {
+    if (!vertical || pageCount < 2) return
+    badge.text = "${max(0, lastPage) + 1} / $pageCount"
+    badge.animate().alpha(1f).setDuration(120).start()
+  }
   private val pages = object : BaseAdapter() {
     override fun getCount() = pageCount
     override fun getItem(position: Int): Any = position
@@ -90,7 +101,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       row.setZoom(1f)
       row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, max(1, (width * (ratios[position] ?: 1.414)).toInt()).coerceAtMost(100000))
       row.contentDescription = "PDF page ${position + 1} of $pageCount. Pinch to zoom."
-      row.onZoomChanged = { zoom -> onZoomChange(mapOf("zoom" to zoom.toDouble())) }
+      row.detailed = false
+      row.onZoomChanged = { zoom ->
+        onZoomChange(mapOf("zoom" to zoom.toDouble()))
+        if (zoom > 1.4f && !row.detailed && row.binding == binding) renderRow(row, position, min(zoom, 2.5f))
+      }
       val cached = bitmapCache.get(binding)
       if (cached != null) row.setImageBitmap(cached) else renderRow(row, position)
       return row
@@ -102,20 +117,45 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     clipChildren = true
     image.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
     addView(image)
+    list.divider = ColorDrawable(Color.TRANSPARENT)
     list.dividerHeight = (8 * resources.displayMetrics.density).toInt()
+    list.selector = ColorDrawable(Color.TRANSPARENT)
+    list.isVerticalScrollBarEnabled = true
+    list.scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+    // Native draggable thumb for long documents; it appears while flinging and fades when idle.
+    list.isFastScrollEnabled = true
     list.adapter = pages
     list.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
     list.setRecyclerListener { (it as? ZoomImageView)?.let { row -> row.ticket.incrementAndGet(); row.binding = ""; row.setImageDrawable(null) } }
     list.setOnScrollListener(object : AbsListView.OnScrollListener {
-      override fun onScrollStateChanged(view: AbsListView?, state: Int) { }
+      override fun onScrollStateChanged(view: AbsListView?, state: Int) {
+        main.removeCallbacks(hideBadge)
+        if (state == AbsListView.OnScrollListener.SCROLL_STATE_IDLE) main.postDelayed(hideBadge, 900) else showBadge()
+      }
       override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
-        if (vertical && visible > 0 && first != lastPage) {
-          lastPage = first
-          onPageChange(mapOf("page" to first, "pageCount" to total))
+        if (!vertical || visible <= 0) return
+        // The page filling the middle of the screen is the one being read.
+        val top = view?.getChildAt(0)
+        val current = if (top != null && top.bottom < (view.height / 2) && first + 1 < total) first + 1 else first
+        if (current != lastPage) {
+          lastPage = current
+          badge.text = "${current + 1} / $total"
+          onPageChange(mapOf("page" to current, "pageCount" to total))
         }
       }
     })
     addView(list)
+    badge.apply {
+      setTextColor(Color.WHITE)
+      textSize = 13f
+      typeface = android.graphics.Typeface.DEFAULT_BOLD
+      val density = resources.displayMetrics.density
+      setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+      background = android.graphics.drawable.GradientDrawable().apply { setColor(0xCC1B1F2A.toInt()); cornerRadius = 16 * density }
+      alpha = 0f
+      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+    addView(badge)
     image.onZoomChanged = { zoom ->
       onZoomChange(mapOf("zoom" to zoom.toDouble()))
     }
@@ -126,6 +166,10 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     image.layout(0, 0, right - left, bottom - top)
     list.measure(View.MeasureSpec.makeMeasureSpec(right - left, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(bottom - top, View.MeasureSpec.EXACTLY))
     list.layout(0, 0, right - left, bottom - top)
+    val margin = (12 * resources.displayMetrics.density).toInt()
+    badge.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+    val badgeLeft = (right - left - badge.measuredWidth) / 2
+    badge.layout(badgeLeft, margin, badgeLeft + badge.measuredWidth, margin + badge.measuredHeight)
     if (changed && loadedSource.isNotEmpty()) { if (vertical) pages.notifyDataSetChanged() else renderPage() }
   }
 
@@ -178,6 +222,12 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         val fd = descriptor ?: throw java.io.FileNotFoundException()
         renderer = PdfRenderer(fd)
         val count = renderer!!.pageCount
+        // Known page heights keep rows and the fast-scroll thumb stable instead of jumping as pages render.
+        val sizes = HashMap<Int, Double>()
+        for (index in 0 until min(count, 2000)) {
+          if (disposed || version != documentVersion.get()) return@execute
+          renderer!!.openPage(index).use { sizes[index] = it.height.toDouble() / max(1, it.width) }
+        }
         if (count == 0) {
           closeDocument()
           reportError(version, "PDF_EMPTY_DOCUMENT", "This PDF has no readable pages.")
@@ -185,6 +235,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         }
         main.post {
           if (!disposed && version == documentVersion.get()) {
+            ratios.putAll(sizes)
             onLoad(mapOf("pageCount" to count))
             pageCount = count
             pages.notifyDataSetChanged()
@@ -257,7 +308,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   }
 
   // Recycle page views and render only visible rows. PDF bytes and bitmaps never cross JS.
-  private fun renderRow(row: ZoomImageView, index: Int) {
+  private fun renderRow(row: ZoomImageView, index: Int, detail: Float = 1f) {
     val version = documentVersion.get()
     val ticket = row.ticket.incrementAndGet()
     val targetWidth = max(1, width)
@@ -270,7 +321,9 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         var ratio = 1.414
         pdf.openPage(index).use { page ->
           ratio = page.height.toDouble() / page.width
-          val scale = min(targetWidth.toDouble() * 2 / page.width, sqrt(pixelBudget / (page.width.toDouble() * page.height)))
+          // Rows match the screen; a zoomed row is re-rendered sharper within a larger single-page budget.
+          val budget = if (detail > 1f) pixelBudget * 2.5 else pixelBudget
+          val scale = min(targetWidth.toDouble() * detail / page.width, sqrt(budget / (page.width.toDouble() * page.height)))
           bitmap = Bitmap.createBitmap(max(1, (page.width * scale).toInt()), max(1, (page.height * scale).toInt()), Bitmap.Config.ARGB_8888)
           bitmap!!.eraseColor(Color.WHITE)
           page.render(bitmap!!, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -280,11 +333,17 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
           if (disposed || version != documentVersion.get() || ticket != row.ticket.get()) result.recycle()
           else {
             ratios[index] = ratio
-            bitmapCache.put(binding, result)
             val rowHeight = max(1, (targetWidth * ratio).toInt()).coerceAtMost(100000)
             if (row.layoutParams.height != rowHeight) { row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight) }
-            row.setImageBitmap(result)
-            row.setZoom(1f)
+            if (detail > 1f) {
+              row.detailed = true
+              row.setImageBitmap(result)
+              row.refreshTransform()
+            } else {
+              bitmapCache.put(binding, result)
+              row.setImageBitmap(result)
+              row.setZoom(1f)
+            }
             if (index == list.firstVisiblePosition) onPageChange(mapOf("page" to index, "pageCount" to pageCount))
           }
         }
@@ -317,6 +376,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     if (disposed) return
     disposed = true
     context.applicationContext.unregisterComponentCallbacks(memoryCallbacks)
+    main.removeCallbacks(hideBadge)
     bitmapCache.evictAll()
     documentVersion.incrementAndGet()
     renderVersion.incrementAndGet()
@@ -343,35 +403,77 @@ private class ZoomImageView(context: Context) : ImageView(context) {
   private var offsetY = 0f
   private var lastX = 0f
   private var lastY = 0f
+  private var lastFocusX = 0f
+  private var lastFocusY = 0f
+  private var activePointer = MotionEvent.INVALID_POINTER_ID
+  private var animator: ValueAnimator? = null
   private val transform = Matrix()
   private val scaleGesture = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+    override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+      animator?.cancel()
+      lastFocusX = detector.focusX
+      lastFocusY = detector.focusY
+      return true
+    }
     override fun onScaleEnd(detector: ScaleGestureDetector) { onZoomChanged?.invoke(zoom) }
     override fun onScale(detector: ScaleGestureDetector): Boolean {
-      zoom = (zoom * detector.scaleFactor).coerceIn(1f, 5f)
-      updateTransform()
+      // Follow the fingers while zooming around the point between them.
+      offsetX += detector.focusX - lastFocusX
+      offsetY += detector.focusY - lastFocusY
+      lastFocusX = detector.focusX
+      lastFocusY = detector.focusY
+      zoomAround(zoom * detector.scaleFactor, detector.focusX, detector.focusY)
       return true
     }
   })
   private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
     override fun onDown(event: MotionEvent) = true
     override fun onDoubleTap(event: MotionEvent): Boolean {
-      setZoom(if (zoom > 1.1f) 1f else 2.5f)
-      onZoomChanged?.invoke(zoom)
+      animateZoom(if (zoom > 1.1f) 1f else 2.5f, event.x, event.y)
       return true
     }
-    override fun onSingleTapUp(event: MotionEvent): Boolean { performClick(); return true }
+    override fun onSingleTapConfirmed(event: MotionEvent): Boolean { performClick(); return true }
   })
 
+  var detailed = false
   init { scaleType = ImageView.ScaleType.MATRIX }
+  fun refreshTransform() = updateTransform()
   fun setZoom(value: Float) {
+    animator?.cancel()
     zoom = value.coerceIn(1f, 5f)
     offsetX = 0f
     offsetY = 0f
     updateTransform()
   }
+  private fun zoomAround(value: Float, focusX: Float, focusY: Float) {
+    val next = value.coerceIn(1f, 5f)
+    val ratio = next / zoom
+    val pointX = focusX - width / 2f
+    val pointY = focusY - height / 2f
+    offsetX = pointX - (pointX - offsetX) * ratio
+    offsetY = pointY - (pointY - offsetY) * ratio
+    zoom = next
+    updateTransform()
+  }
+  private fun animateZoom(target: Float, focusX: Float, focusY: Float) {
+    animator?.cancel()
+    animator = ValueAnimator.ofFloat(zoom, target).apply {
+      duration = 220
+      interpolator = DecelerateInterpolator()
+      addUpdateListener { zoomAround(it.animatedValue as Float, focusX, focusY) }
+      addListener(object : android.animation.AnimatorListenerAdapter() {
+        override fun onAnimationEnd(animation: android.animation.Animator) { onZoomChanged?.invoke(zoom) }
+      })
+      start()
+    }
+  }
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     updateTransform()
+  }
+  override fun onDetachedFromWindow() {
+    animator?.cancel()
+    super.onDetachedFromWindow()
   }
   private fun updateTransform() {
     val image = drawable ?: return
@@ -394,17 +496,30 @@ private class ZoomImageView(context: Context) : ImageView(context) {
     scaleGesture.onTouchEvent(event)
     taps.onTouchEvent(event)
     when (event.actionMasked) {
-      MotionEvent.ACTION_DOWN -> { lastX = event.x; lastY = event.y }
+      MotionEvent.ACTION_DOWN -> { activePointer = event.getPointerId(0); lastX = event.x; lastY = event.y }
+      MotionEvent.ACTION_POINTER_UP -> {
+        // Continue panning with a remaining finger instead of jumping to it.
+        val lifted = event.actionIndex
+        if (event.getPointerId(lifted) == activePointer) {
+          val next = if (lifted == 0) 1 else 0
+          activePointer = event.getPointerId(next)
+          lastX = event.getX(next)
+          lastY = event.getY(next)
+        }
+      }
       MotionEvent.ACTION_MOVE -> {
-        if (!scaleGesture.isInProgress && event.pointerCount == 1) {
-          offsetX += event.x - lastX
-          offsetY += event.y - lastY
+        val index = event.findPointerIndex(activePointer).takeIf { it >= 0 } ?: 0
+        val x = event.getX(index)
+        val y = event.getY(index)
+        if (!scaleGesture.isInProgress && event.pointerCount == 1 && zoom > 1.01f) {
+          offsetX += x - lastX
+          offsetY += y - lastY
           updateTransform()
         }
-        lastX = event.x
-        lastY = event.y
+        lastX = x
+        lastY = y
       }
-      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { activePointer = MotionEvent.INVALID_POINTER_ID; parent?.requestDisallowInterceptTouchEvent(false) }
     }
     return true
   }

@@ -1,8 +1,10 @@
 import { rememberPdfResults, forgetRecentUri } from '../files/recent-files';
+import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { Host, Picker } from '@expo/ui';
 import { PdfEngine, type PdfRange, type PdfResult } from '../../../modules/pdf-engine';
@@ -12,7 +14,10 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
-import { PdfViewer } from './pdf-viewer';
+import { savePdfResult } from '../files/save-file';
+import { FileThumbnail } from '@/components/file-thumbnail';
+import { useScreenActive } from '@/hooks/use-screen-active';
+import { openPdfScreen } from './open-pdf-screen';
 import { splitRanges, type SplitMode } from './pdf-ranges';
 
 type Source = LocalFile & { pageCount: number };
@@ -22,6 +27,7 @@ const jobId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export function OrganizePdf({ operation, initialSelection }: { operation: 'merge' | 'split'; initialSelection?: InitialSelection }) {
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
+  const active = useScreenActive();
   const merge = operation === 'merge';
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
@@ -36,7 +42,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState<Result[]>([]);
-  const [preview, setPreview] = useState<Result | null>(null);
+
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
@@ -75,7 +81,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     let picked: LocalFile[] = [];
     let accepted = false;
     try {
-      picked = initialFiles ?? await browseFiles(directory, false, merge ? 30 - sources.length : 1, true);
+      picked = Array.isArray(initialFiles) ? initialFiles : await browseFiles(directory, false, merge ? 30 - sources.length : 1, true);
       if (!picked.length || !mounted.current) return;
       const id = jobId(); job.current = id;
       setPhase('Reading PDF details…');
@@ -88,7 +94,9 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
       accepted = true;
     } catch (cause) { fail(cause); }
     finally {
-      if (!accepted) for (const file of picked) { try { const local = new File(file.uri); if (local.exists) local.delete(); } catch { /* Session cleanup retries. */ } }
+      if (!accepted && Array.isArray(picked)) {
+        for (const file of picked) { try { const local = new File(file.uri); if (local.exists) local.delete(); } catch { /* Session cleanup retries. */ } }
+      }
       finish();
     }
   }
@@ -105,6 +113,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   async function process() {
     if (!PdfEngine?.organizePdfs || locked.current || !canRun) return;
     locked.current = true; setBusy(true); setError(''); setProgress(0); setCancelling(false); setPhase(merge ? 'Merging PDFs…' : 'Splitting PDF…');
+    toast(merge ? 'Merging PDFs…' : 'Splitting PDF…');
     const id = jobId(); job.current = id;
     const safeName = name.trim().replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) || (merge ? 'Merged' : 'Split');
     const stamp = new Date().toISOString().replace(/[T:.]/g, '-').replace(/Z$/, '');
@@ -112,8 +121,18 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: sources.map(source => source.uri), outputUris: names.map(filename => new File(savedPdfDirectory(), filename).uri), ranges: merge ? [] : ranges });
       if (mounted.current) setResults(outputs.map((output, index) => ({ ...output, name: names[index], part: index + 1 })));
+      toast(merge ? 'Merged PDF saved' : `Split into ${outputs.length} PDFs`);
       // History failure must not discard an otherwise successful native export.
       void rememberPdfResults(outputs.map((output, index) => ({ ...output, name: names[index] }))).catch(() => {});
+    } catch (cause) { fail(cause); }
+    finally { finish(); }
+  }
+  async function saveResult(result: Result) {
+    if (locked.current) return;
+    locked.current = true; setBusy(true); setError('');
+    try {
+      const saved = await savePdfResult(result);
+      if (saved && mounted.current) setResults(current => current.map(item => item.uri === result.uri ? { ...item, uri: saved.file.uri, name: saved.file.name } : item));
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -128,16 +147,15 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   function move(index: number, direction: number) { setSources(current => { const next = [...current]; [next[index], next[index + direction]] = [next[index + direction], next[index]]; return next; }); }
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
 
-  if (preview) return <PdfViewer key={preview.uri} initialDocument={preview} onBack={() => setPreview(null)} />;
   if (results.length) return <View style={styles.screen}>
-    <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Save or share the PDFs you want to keep in your preferred folder.</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
+    <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Save the PDFs you want to keep to your device, or share them.</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
       <ThemedText numberOfLines={2} style={styles.label}>{merge ? 'Merged document' : `Part ${item.part}`}</ThemedText>
       <ThemedText numberOfLines={2} style={styles.body}>{item.name}</ThemedText>
       <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{item.pageCount} pages · {formatSize(item.size)}</ThemedText>
-      <View style={styles.actions}><View style={styles.grow}><ToolButton title="Open" onPress={() => setPreview(item)} disabled={busy} /></View><View style={styles.grow}><ToolButton title="Save / share" onPress={() => share(item)} disabled={busy} /></View></View>
+      <View style={styles.actions}><View style={styles.grow}><ToolButton title="Open" onPress={() => openPdfScreen(item)} disabled={busy} /></View><View style={styles.grow}><ToolButton title="Save" onPress={() => saveResult(item)} disabled={busy} /></View><View style={styles.grow}><ToolButton title="Share" secondary onPress={() => share(item)} disabled={busy} /></View></View>
       <ToolButton title="Delete output" secondary disabled={busy} onPress={() => { try { new File(item.uri).delete(); void forgetRecentUri(item.uri).catch(() => {}); setResults(current => current.filter(file => file.uri !== item.uri)); } catch { setError('Could not delete this PDF. Try again.'); } }} />
     </View>} />
-    <View style={styles.footer}>{busy && <ActivityIndicator color={colors.systemBlue} />}<ToolButton title={merge ? 'Merge more PDFs' : 'Split another PDF'} secondary disabled={busy} onPress={() => { setResults([]); setError(''); }} /></View>
+    <View style={styles.footer}>{busy && <AppLoader />}<ToolButton title={merge ? 'Merge more PDFs' : 'Split another PDF'} secondary disabled={busy} onPress={() => { setResults([]); setError(''); }} /></View>
   </View>;
 
   return <View style={styles.screen}>
@@ -154,13 +172,14 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
       </>}
       {!!sources.length && <ThemedText style={styles.label}>{merge ? `Merge order · ${pageCount} pages` : 'Source document'}</ThemedText>}
     </View>} renderItem={({ item, index }) => <View style={[styles.sourceRow, { backgroundColor: colors.accentSurface }]}>
-      <View style={styles.grow}><ThemedText numberOfLines={2} style={styles.label}>{merge ? `${index + 1}. ` : ''}{item.name}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{item.pageCount} pages · {formatSize(item.size)}</ThemedText></View>
+      <View style={styles.thumb}><FileThumbnail uri={item.uri} kind="pdf" page={0} active={active} /></View>
+      <View style={styles.grow}><ThemedText numberOfLines={2} style={styles.label}>{merge ? `${index + 1}. ` : ''}{item.name}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{item.pageCount} pages · {formatSize(item.size)}{merge ? ' · first page' : ''}</ThemedText></View>
       {merge && ([-1, 1] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={`Move PDF ${index + 1} ${direction < 0 ? 'up' : 'down'}`} disabled={busy || index + direction < 0 || index + direction >= sources.length} style={[styles.iconButton, (busy || index + direction < 0 || index + direction >= sources.length) && styles.disabled]} onPress={() => move(index, direction)}><UniversalIcon ios={direction < 0 ? 'chevron.up' : 'chevron.down'} android={direction < 0 ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={colors.systemBlue} /></Pressable>)}
       <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} disabled={busy} style={styles.iconButton} onPress={() => removeSource(index)}><UniversalIcon ios="xmark" android="close" size={20} color={colors.systemBlue} /></Pressable>
     </View>} />
     <View style={[styles.footer, { borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      {busy && <><ActivityIndicator color={colors.systemBlue} /><ThemedText accessibilityLiveRegion="polite" style={styles.body}>{cancelling ? 'Cancelling…' : progress === 1 ? 'Saving and verifying PDFs…' : `${phase}${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}`}</ThemedText></>}
+      {busy && <><AppLoader /><ThemedText accessibilityLiveRegion="polite" style={styles.body}>{cancelling ? 'Cancelling…' : progress === 1 ? 'Saving and verifying PDFs…' : `${phase}${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}`}</ThemedText></>}
       {busy && (progress !== null || phase === 'Reading PDF details…') ? <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} /> : <ToolButton title={merge ? 'Merge PDFs' : 'Split PDF'} onPress={process} disabled={!canRun} />}
     </View>
   </View>;
@@ -171,7 +190,8 @@ const styles = StyleSheet.create({
   heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body },
   input: { minHeight: 48, borderRadius: radius.sm, paddingHorizontal: s.lg, paddingVertical: s.md, ...t.body },
   options: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' },
-  sourceRow: { flexDirection: 'row', alignItems: 'center', padding: s.sm, borderRadius: radius.sm },
+  sourceRow: { flexDirection: 'row', alignItems: 'center', padding: s.sm, borderRadius: radius.sm, gap: s.sm },
+  thumb: { width: 48, height: 64 },
   iconButton: { width: 44, minHeight: 48, alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.3 },
   footer: { padding: s.lg, gap: s.sm, borderTopWidth: StyleSheet.hairlineWidth },
   resultCard: { padding: s.lg, gap: s.md, borderRadius: radius.md }, actions: { flexDirection: 'row', gap: s.sm },

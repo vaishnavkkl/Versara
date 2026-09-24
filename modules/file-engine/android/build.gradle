@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.fileengine'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.fileengine"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Bundled Latin model: runs offline without Google Play services or downloads.
+  implementation 'com.google.mlkit:text-recognition:16.0.1'
+}

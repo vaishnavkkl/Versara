@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": "FileEngine.podspec",
+    "modules": ["FileEngineModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.fileengine.FileEngineModule"]
+  }
+}

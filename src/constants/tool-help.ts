@@ -1,5 +1,5 @@
 export const TOOL_HELP: Record<string, readonly [string, string, string]> = {
-  viewer: ['Open a PDF from Recents or choose one from Files.', 'Tap a page thumbnail below the preview. Pinch to zoom.', 'Tap Options for tools, vertical scrolling or saving a copy.'],
+  viewer: ['Open a PDF from Recents or choose one from Files.', 'Tap a page thumbnail below the preview. Pinch to zoom.', 'Tap Toolbox for editing tools, vertical scrolling or saving a copy.'],
   edit_text: ['Tap the text you want to change. Use Text list if it is hard to select.', 'Type your change and check the live preview. Tap Apply.', 'Tap Save, then Save to device / share to choose where to keep the copy.'],
   text: ['Tap the page where you want new text.', 'Type, choose the size and check the preview. Tap Add text.', 'Tap Save to create your edited copy.'],
   remove_text: ['Tap the text you want to remove.', 'Tap Delete selected text. Undo brings it back.', 'Save a new copy. Text deletion is not secure redaction.'],

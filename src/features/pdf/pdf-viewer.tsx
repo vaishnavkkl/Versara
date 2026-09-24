@@ -1,24 +1,43 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Platform, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { AppLoader } from '@/components/app-loader';
 import { router } from 'expo-router';
 import { File } from 'expo-file-system';
 import { PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { useReaderFocus } from '@/components/tool-sheet';
+import { showDialog } from '@/components/app-dialog';
+import { toast } from '@/components/toast';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
+import { ToolRail, type RailTool } from '@/components/tool-rail';
 import { PdfPageStrip } from './pdf-page-strip';
-import { PdfViewerOptions } from './pdf-viewer-options';
+import { saveToDevice } from '../files/save-file';
+
 import { createPdfToolForDocument, discardPdfToolSession, implementedPdfTools, type PdfTool } from './pdf-tool-session';
 import { PDF_SECTIONS } from '@/constants/pdf-methods';
 import { formatSize } from '../files/file-storage';
 import { useScreenActive } from '@/hooks/use-screen-active';
 
 type Document = { uri: string; name: string };
-export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initialDocument?: Document; initialPage?: number; onBack?: () => void } = {}) {
+
+const SECTION_ORDER = ['Edit & annotate', 'Organize pages', 'Convert & optimize'];
+const allPdfTools = PDF_SECTIONS.filter(section => section.title !== 'Read & explore')
+  .sort((a, b) => SECTION_ORDER.indexOf(a.title) - SECTION_ORDER.indexOf(b.title))
+  .flatMap(section => [...section.tools]);
+const editTools: RailTool[] = allPdfTools.filter(tool => implementedPdfTools.has(tool.id))
+  .map(tool => ({ id: tool.id, title: tool.title.replace(/ PDFs?$/, ''), ios: tool.ios, android: tool.android }));
+const fileTools: RailTool[] = [
+  { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save-alt' },
+  { id: 'share', title: 'Share', ios: 'square.and.arrow.up', android: 'share' },
+  { id: 'info', title: 'Details', ios: 'info.circle', android: 'info-outline' },
+  { id: 'open', title: 'Open PDF', ios: 'folder', android: 'folder-open' },
+];
+const upcomingTools: RailTool[] = allPdfTools.filter(tool => !implementedPdfTools.has(tool.id))
+  .map(tool => ({ id: tool.id, title: tool.title.replace(/ PDFs?$/, ''), ios: tool.ios, android: tool.android, soon: true }));
+export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void } = {}) {
   const colors = usePalette();
   const screenActive = useScreenActive();
   const mode = useAppearance(state => state.mode);
@@ -26,22 +45,24 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
   const [pageCount, setPageCount] = useState(0);
   const [page, setPage] = useState(initialPage);
   const [pageInput, setPageInput] = useState(String(initialPage + 1));
-  const [vertical, setVertical] = useState(false);
+  const [vertical, setVertical] = useState(true);
+  const [thumbnails, setThumbnails] = useState(true);
+  const [stripReady, setStripReady] = useState(false);
   const [focused, setFocused] = useState(false);
-  const setSheetFocus = useReaderFocus();
   const [pageRequest, setPageRequest] = useState({ value: initialPage, revision: 0 });
   const [zoomRequest, setZoomRequest] = useState({ value: 1, revision: 0 });
   const [loading, setLoading] = useState(!!initialDocument);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('Preparing PDF...');
-  const [optionsVisible, setOptionsVisible] = useState(false);
+  const { width, height } = useWindowDimensions();
+  const landscape = width > height;
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const mounted = useRef(true);
   const ownedFile = useRef<string | null>(null);
   const actionLock = useRef(false);
   useEffect(() => { if (document) void rememberFile(document, 'pdf').catch(() => { /* Temporary tool inputs are not kept in Recents. */ }); }, [document]);
-  useEffect(() => { setSheetFocus(focused); return () => setSheetFocus(false); }, [focused, setSheetFocus]);
+  useEffect(() => { onFocusChange?.(focused); }, [focused, onFocusChange]);
 
   useEffect(() => {
     mounted.current = true;
@@ -50,6 +71,12 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
       queueMicrotask(() => { if (!mounted.current && !actionLock.current && ownedFile.current) removeViewerFile(ownedFile.current); });
     };
   }, []);
+
+  // Thumbnails start once the first pages are on screen so opening stays smooth.
+  useEffect(() => {
+    const timer = setTimeout(() => setStripReady(!loading), loading ? 0 : 350);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     if (loading) return;
@@ -87,10 +114,27 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
     }
   }
 
+  async function saveDocument() {
+    if (!document || actionLock.current) return;
+    actionLock.current = true; setBusyLabel('Saving to your device...'); setBusy(true); setActionError(null);
+    try {
+      const name = /\.pdf$/i.test(document.name) ? document.name : document.name + '.pdf';
+      const saved = await saveToDevice(document.uri, name, 'application/pdf');
+      if (mounted.current) showDialog('PDF saved', `${saved.name}\nSaved to ${saved.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
+    } catch (cause) {
+      if (mounted.current) setActionError((cause as Error).message || 'Could not save this PDF. Please try again.');
+    } finally {
+      actionLock.current = false;
+      if (mounted.current) setBusy(false);
+      else if (ownedFile.current) removeViewerFile(ownedFile.current);
+    }
+  }
+
   async function exportDocument() {
     if (!document || actionLock.current) return;
     actionLock.current = true;
     setBusyLabel('Preparing your copy...');
+    toast('Preparing your copy…');
     setBusy(true);
     setActionError(null);
     try {
@@ -122,16 +166,18 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
 
   function performOption(id: string) {
     if (actionLock.current) return;
-    setOptionsVisible(false); Keyboard.dismiss();
+    Keyboard.dismiss();
     if (id === 'open') { void chooseFile(); return; }
-    if (id === 'save') { void exportDocument(); return; }
+    if (id === 'save') { void saveDocument(); return; }
+    if (id === 'share') { void exportDocument(); return; }
+    if (id === 'thumbnails') { setThumbnails(value => !value); return; }
     if (id === 'fit') { requestZoom(1); return; }
     if (id === 'focus') { setFocused(true); return; }
     if (id === 'scroll') { setVertical(value => !value); setPageRequest(current => ({ value: page, revision: current.revision + 1 })); requestZoom(1); return; }
     if (id === 'info' && document) {
       let size = '';
       try { size = '\n' + formatSize(new File(document.uri).size); } catch { /* Page details remain available. */ }
-      Alert.alert('Document details', `${document.name}\n${pageCount} ${pageCount === 1 ? 'page' : 'pages'}${size}`);
+      showDialog('Document details', `${document.name}\n${pageCount} ${pageCount === 1 ? 'page' : 'pages'}${size}`, undefined, { ios: 'doc.text', android: 'description' });
       return;
     }
     if (implementedPdfTools.has(id)) void openDocumentTool(id as PdfTool);
@@ -144,7 +190,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
     actionLock.current = true; setBusy(true); setBusyLabel(`Opening ${method.title}...`); setActionError(null);
     let session: string | null = null;
     try {
-      session = await createPdfToolForDocument(tool, method.title, document);
+      session = await createPdfToolForDocument(tool, method.title, document, page);
       if (!session) return;
       if (!mounted.current) { discardPdfToolSession(session); return; }
       router.push({ pathname: '/pdf-tool', params: { session } });
@@ -159,6 +205,15 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
   }
 
   const ready = !!document && pageCount > 0 && !error;
+  const tools: RailTool[] = [
+    { id: 'scroll', title: vertical ? 'Single page' : 'Scroll', ios: vertical ? 'doc' : 'arrow.up.arrow.down', android: vertical ? 'crop-portrait' : 'swap-vert', highlighted: true, accessibilityLabel: vertical ? 'Switch to one page at a time' : 'Switch to vertical scrolling' },
+    { id: 'fit', title: 'Fit page', ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' },
+    { id: 'thumbnails', title: thumbnails ? 'Hide pages' : 'Pages', ios: 'square.grid.2x2', android: 'view-carousel', accessibilityLabel: thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails' },
+    { id: 'focus', title: 'Focus', ios: 'arrow.up.left.and.arrow.down.right', android: 'fullscreen' },
+    ...editTools, ...fileTools, ...upcomingTools,
+  ];
+  const strip = ready && !focused && thumbnails && stripReady && screenActive && document ? <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
+  const submitPage = () => goToPage((Number.parseInt(pageInput, 10) || 1) - 1);
   return (
     <View style={styles.screen}>
       {!isPdfEngineAvailable ? (
@@ -169,8 +224,14 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
         </View>
       ) : (
         <>
-          {onBack && !focused && <View style={styles.toolbar}><Pressable accessibilityRole="button" accessibilityLabel="Back to results" disabled={busy} onPress={onBack} style={styles.button}><UniversalIcon ios="chevron.left" android="arrow-back" size={22} color={colors.systemBlue} /><ThemedText style={{ color: colors.systemBlue }}>Back to result</ThemedText></Pressable></View>}
           {actionError && <ThemedText accessibilityRole="alert" style={[styles.message, { color: colors.label, backgroundColor: colors.accentSurface }]}>{actionError}</ThemedText>}
+          {ready && !focused && <View style={[styles.pageBar, { borderColor: colors.separator }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 0 || loading} onPress={() => goToPage(page - 1)} style={[styles.iconButton, (page === 0 || loading) && styles.disabled]}><UniversalIcon ios="chevron.left" android="chevron-left" size={22} color={colors.systemBlue} /></Pressable>
+            <TextInput accessibilityLabel="Page number" value={pageInput} onChangeText={setPageInput} keyboardType="number-pad" returnKeyType="go" selectTextOnFocus onSubmitEditing={submitPage} onEndEditing={submitPage} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+            <ThemedText style={styles.buttonText}>of {pageCount}</ThemedText>
+            <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={page >= pageCount - 1 || loading} onPress={() => goToPage(page + 1)} style={[styles.iconButton, (page >= pageCount - 1 || loading) && styles.disabled]}><UniversalIcon ios="chevron.right" android="chevron-right" size={22} color={colors.systemBlue} /></Pressable>
+          </View>}
+          <View style={[styles.body2, landscape && styles.row]}>
           <View style={[styles.canvas, { backgroundColor: colors.systemBackground }]}>
             {document && !error && screenActive && <PdfEngineView
               key={document.uri}
@@ -187,26 +248,19 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
               onZoomChange={() => {}}
               onError={({ nativeEvent }) => { setError(nativeEvent.message); setLoading(false); }}
             />}
-            {(busy || (loading && !error)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><ActivityIndicator size="large" color={colors.systemBlue} /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
+            {(busy || (loading && !error)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
             {(!document || error) && !busy && <View style={styles.empty}>
               <UniversalIcon ios={error ? 'exclamationmark.triangle' : 'doc.richtext'} android={error ? 'error-outline' : 'picture-as-pdf'} size={40} color={colors.systemBlue} />
               <ThemedText style={styles.heading}>{error ? 'Unable to display PDF' : 'Your documents, on your device'}</ThemedText>
-              <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{error ?? 'Choose a PDF, swipe up to read and pinch to zoom. Open Options for editing and reading controls.'}</ThemedText>
+              <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{error ?? 'Choose a PDF, swipe up to read and pinch to zoom. Editing and reading tools appear below.'}</ThemedText>
             </View>}
           </View>
+          {!landscape && strip}
+          {ready && !focused && <ToolRail tools={tools} disabled={busy || loading} landscape={landscape} onAction={performOption} />}
+          </View>
+          {landscape && strip}
           {focused && <Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" onPress={() => setFocused(false)} style={[styles.restore, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} /><ThemedText style={{ color: colors.systemBlue }}>Show controls</ThemedText></Pressable>}
           {(!document || error) && <Pressable accessibilityRole="button" disabled={busy} onPress={chooseFile} style={[styles.openButton, getGradients(colors).module]}><UniversalIcon ios="folder" android="folder-open" size={22} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText }}>Choose PDF</ThemedText></Pressable>}
-          {ready && !focused && screenActive && document && <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} />}
-          {ready && !focused && <View style={[styles.controls, { borderColor: colors.separator }]}>
-            <View style={styles.pageControls}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 0 || loading} onPress={() => goToPage(page - 1)} style={[styles.iconButton, (page === 0 || loading) && styles.disabled]}><UniversalIcon ios="chevron.left" android="chevron-left" size={22} color={colors.systemBlue} /></Pressable>
-              <TextInput accessibilityLabel="Page number" value={pageInput} onChangeText={setPageInput} keyboardType="number-pad" returnKeyType="go" onSubmitEditing={() => goToPage((Number.parseInt(pageInput, 10) || 1) - 1)} onEndEditing={() => goToPage((Number.parseInt(pageInput, 10) || 1) - 1)} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-              <ThemedText style={styles.buttonText}>of {pageCount}</ThemedText>
-              <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={page >= pageCount - 1 || loading} onPress={() => goToPage(page + 1)} style={[styles.iconButton, (page >= pageCount - 1 || loading) && styles.disabled]}><UniversalIcon ios="chevron.right" android="chevron-right" size={22} color={colors.systemBlue} /></Pressable>
-            </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="PDF options and tools" accessibilityState={{ expanded: optionsVisible, disabled: busy || loading }} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); setOptionsVisible(true); }} style={[styles.optionsButton, getGradients(colors).module]}><UniversalIcon ios="ellipsis" android="more-horiz" size={22} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontSize: 13, fontWeight: '600' }}>Options</ThemedText></Pressable>
-          </View>}
-          {document && <PdfViewerOptions visible={optionsVisible} name={document.name} pageCount={pageCount} vertical={vertical} onClose={() => setOptionsVisible(false)} onAction={performOption} />}
         </>
       )}
     </View>
@@ -214,9 +268,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onBack }: { initia
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  toolbar: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: s.xs, paddingHorizontal: s.sm },
   restore: { position: 'absolute', bottom: 16, alignSelf: 'center', minHeight: 48, paddingHorizontal: 16, borderRadius: 24, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  button: { flexDirection: 'row', gap: s.sm, alignItems: 'center', minHeight: 48, paddingHorizontal: s.lg, borderRadius: radius.sm },
   buttonText: { ...t.caption },
   iconButton: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   message: { ...t.caption, marginHorizontal: s.lg, padding: s.md, borderRadius: radius.sm },
@@ -226,12 +278,12 @@ const styles = StyleSheet.create({
   heading: { ...t.heading, textAlign: 'center' },
   body: { ...t.body, textAlign: 'center' },
   loading: { ...StyleSheet.absoluteFill, justifyContent: 'center', alignItems: 'center' },
-  controls: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: s.sm, paddingVertical: 6, gap: 4, alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  pageControls: { flexDirection: 'row', alignItems: 'center', gap: s.xs },
+  pageBar: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: s.sm, paddingVertical: 4, gap: s.xs, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  body2: { flex: 1 },
+  row: { flexDirection: 'row' },
   pageInput: { ...t.body, minWidth: 48, maxWidth: 80, minHeight: 44, textAlign: 'center', borderRadius: radius.sm },
   loadingCard: { maxWidth: 300, padding: 24, margin: 20, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', gap: 12 },
   rowTitle: { fontSize: 16, fontWeight: '600', textAlign: 'center' },
-  optionsButton: { minHeight: 48, paddingHorizontal: 12, borderRadius: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   openButton: { minHeight: 48, margin: 16, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   disabled: { opacity: 0.35 },
 });

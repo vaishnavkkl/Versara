@@ -25,6 +25,8 @@ final class PdfEngineView: ExpoView {
   private var lastPageRequest = -1
   private var lastZoomRevision = -1
   private var lastSize = CGSize.zero
+  private let badge = UILabel()
+  private var badgeHide: DispatchWorkItem?
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -35,6 +37,16 @@ final class PdfEngineView: ExpoView {
     pdfView.displaysPageBreaks = true
     pdfView.accessibilityLabel = "PDF document. Pinch to zoom and scroll to read."
     addSubview(pdfView)
+    badge.font = .boldSystemFont(ofSize: 13)
+    badge.textColor = .white
+    badge.textAlignment = .center
+    badge.backgroundColor = UIColor(red: 0.105, green: 0.12, blue: 0.165, alpha: 0.8)
+    badge.layer.cornerRadius = 15
+    badge.clipsToBounds = true
+    badge.alpha = 0
+    badge.isAccessibilityElement = false
+    badge.isUserInteractionEnabled = false
+    addSubview(badge)
     observer = NotificationCenter.default.addObserver(
       forName: .PDFViewPageChanged, object: pdfView, queue: .main
     ) { [weak self] _ in self?.reportPage() }
@@ -63,6 +75,7 @@ final class PdfEngineView: ExpoView {
     pdfView.backgroundColor = dark
       ? UIColor.black
       : UIColor(red: 244.0 / 255, green: 245.0 / 255, blue: 253.0 / 255, alpha: 1)
+    configureScrolling()
     if source != loadedSource {
       openDocument()
       return
@@ -100,6 +113,7 @@ final class PdfEngineView: ExpoView {
             return
           }
           self.pdfView.document = document
+          self.configureScrolling()
           self.onLoad(["pageCount": document.pageCount])
           self.applyPageAndZoom()
           self.reportPage()
@@ -149,11 +163,34 @@ final class PdfEngineView: ExpoView {
 
   private func reportPage() {
     guard let document = pdfView.document, let page = pdfView.currentPage else { return }
-    onPageChange(["page": document.index(for: page), "pageCount": document.pageCount])
+    let index = document.index(for: page)
+    onPageChange(["page": index, "pageCount": document.pageCount])
+    showBadge(index: index, count: document.pageCount)
+  }
+
+  /// PDFKit's own scroll view: keep its draggable indicator visible for fast scrolling.
+  private func configureScrolling() {
+    guard let scroll = pdfView.documentView?.superview as? UIScrollView else { return }
+    scroll.showsVerticalScrollIndicator = true
+    scroll.indicatorStyle = dark ? .white : .black
+    scroll.decelerationRate = .normal
+  }
+
+  private func showBadge(index: Int, count: Int) {
+    guard vertical, count > 1, window != nil else { return }
+    badge.text = "  \(index + 1) / \(count)  "
+    badge.sizeToFit()
+    badge.frame = CGRect(x: (bounds.width - badge.bounds.width - 16) / 2, y: 12, width: badge.bounds.width + 16, height: 30)
+    badgeHide?.cancel()
+    UIView.animate(withDuration: 0.12) { self.badge.alpha = 1 }
+    let hide = DispatchWorkItem { [weak self] in UIView.animate(withDuration: 0.25) { self?.badge.alpha = 0 } }
+    badgeHide = hide
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: hide)
   }
 
   deinit {
     zoomNotification?.cancel()
+    badgeHide?.cancel()
     if let observer { NotificationCenter.default.removeObserver(observer) }
     if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
     // PDFKit releases its document and tiles with the view. Pending opens hold only a weak reference.

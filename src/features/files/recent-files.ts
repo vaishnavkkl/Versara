@@ -1,9 +1,15 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
+import { FileEngine, type DeviceRecentFile } from '../../../modules/file-engine';
 import { retainPickerCopy } from '../pdf/pdf-cache';
 
 export type FileKind = 'pdf' | 'image' | 'video' | 'audio';
 export type RecentFile = { id: string; uri: string; name: string; kind: FileKind; mimeType: string; size: number; opened: number };
+export type LibraryItem = RecentFile & { source: 'library' };
+export type DeviceItem = DeviceRecentFile & { kind: FileKind; opened: number };
+export type RecentListItem = LibraryItem | DeviceItem;
+/** Libraries show only the most recent items; older files stay reachable through Open and search. */
+export const RECENT_LIMIT = 30;
 export const FILE_LABELS = { pdf: 'PDF', image: 'Image', video: 'Video', audio: 'Audio' } as const;
 const mimeTypes = { pdf: 'application/pdf', image: 'image/*', video: 'video/*', audio: 'audio/*' };
 const library = () => new Directory(Paths.document, 'Versara Library');
@@ -23,10 +29,30 @@ function db() {
   return database;
 }
 
+export const libraryDatabase = db;
+export { storedUri, documentRoot };
+
 export async function listRecentFiles(kind: FileKind, search = '') {
   const database = await db();
-  return (await database.getAllAsync<RecentFile>('SELECT * FROM recent_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY opened DESC LIMIT 100', kind, search.trim())).map(restored);
+  return (await database.getAllAsync<RecentFile>(`SELECT * FROM recent_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY opened DESC LIMIT ${RECENT_LIMIT}`, kind, search.trim())).map(restored);
 }
+
+/** Library imports plus bounded native device recents (MediaStore / Photos). Metadata only. */
+export async function listCategoryFiles(kind: FileKind, search = ''): Promise<RecentListItem[]> {
+  const libraryFiles = (await listRecentFiles(kind, search)).map(file => ({ ...file, source: 'library' as const }));
+  let device: DeviceItem[] = [];
+  if (FileEngine?.listDeviceRecents && !(kind === 'pdf' && FileEngine.nativePdfLibraryVersion)) {
+    try {
+      const items = await FileEngine.listDeviceRecents(kind, RECENT_LIMIT, search.trim());
+      const libraryNames = new Set(libraryFiles.map(file => file.name.toLowerCase()));
+      device = items
+        .filter(item => !libraryNames.has(item.name.toLowerCase()))
+        .map(item => ({ ...item, kind, opened: item.modified }));
+    } catch { /* Keep library results if device listing is unavailable. */ }
+  }
+  return [...libraryFiles, ...device].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT);
+}
+
 export async function getRecentFile(id: string) { const file = await (await db()).getFirstAsync<RecentFile>('SELECT * FROM recent_files WHERE id = ?', id); return file ? restored(file) : null; }
 export async function touchRecentFile(id: string) { await (await db()).runAsync('UPDATE recent_files SET opened = ? WHERE id = ?', Date.now(), id); }
 export async function forgetRecentUri(uri: string) { await (await db()).runAsync('DELETE FROM recent_files WHERE uri = ?', storedUri(uri)); }
@@ -71,6 +97,29 @@ export async function importRecentFile(kind: FileKind): Promise<RecentFile | nul
     const pickerRoot = new Directory(Paths.cache, 'DocumentPicker').uri.replace(/\/+$/, '') + '/';
     if (asset.uri.startsWith(pickerRoot)) try { const temporary = new File(asset.uri); if (temporary.exists) temporary.delete(); } catch { /* OS cache cleanup. */ }
   }
+}
+
+/** Copy a MediaStore/Photos URI into Versara Library on a native worker, then index it. */
+export async function importDeviceRecent(item: DeviceItem): Promise<RecentFile> {
+  if (!FileEngine?.importDeviceFile) throw new Error('Install a new development build to open device files.');
+  const root = library();
+  const extension = item.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0] ?? (item.kind === 'pdf' ? '.pdf' : item.kind === 'image' ? '.jpg' : item.kind === 'video' ? '.mp4' : '');
+  const copy = new File(root, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
+  try {
+    root.create({ intermediates: true, idempotent: true });
+    const imported = await FileEngine.importDeviceFile(item.uri, item.kind, copy.uri);
+    return await rememberFile({ uri: imported.uri, name: imported.name || item.name, mimeType: imported.mimeType, size: imported.size }, item.kind);
+  } catch (error) {
+    if (copy.exists) copy.delete();
+    throw error;
+  }
+}
+
+/** Same cleanup as removing each item from its list. Returns how many entries were removed. */
+export async function clearRecentFiles() {
+  const rows = (await (await db()).getAllAsync<RecentFile>('SELECT * FROM recent_files')).map(restored);
+  for (const row of rows) await removeRecentFile(row);
+  return rows.length;
 }
 
 export async function removeRecentFile(file: RecentFile) {

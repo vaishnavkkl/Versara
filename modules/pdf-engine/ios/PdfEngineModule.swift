@@ -47,5 +47,20 @@ public class PdfEngineModule: Module {
       Prop("dark") { (view: PdfEngineView, dark: Bool) in view.dark = dark }
       OnViewDidUpdateProps { (view: PdfEngineView) in view.applyProps() }
     }
+    View(PdfEditCanvasView.self) {
+      Events("onSelectObject", "onPlace", "onTextChange", "onSubmitText")
+      Prop("source") { (view: PdfEditCanvasView, value: String) in view.setSource(value) }
+      Prop("pageLayout") { (view: PdfEditCanvasView, value: String) in view.setPageLayout(value) }
+      Prop("objects") { (view: PdfEditCanvasView, value: String) in view.setObjects(value) }
+      Prop("selectedId") { (view: PdfEditCanvasView, value: Int) in view.setSelectedId(value) }
+      Prop("adding") { (view: PdfEditCanvasView, value: Bool) in view.setAdding(value) }
+      Prop("disabled") { (view: PdfEditCanvasView, value: Bool) in view.setDisabled(value) }
+      Prop("placement") { (view: PdfEditCanvasView, value: String) in view.setPlacement(value) }
+      Prop("textBox") { (view: PdfEditCanvasView, value: String) in view.setTextBox(value) }
+      Prop("annotations") { (view: PdfEditCanvasView, value: String) in view.setAnnotations(value) }
+      Prop("focus") { (view: PdfEditCanvasView, value: String) in view.setFocus(value) }
+      OnViewDestroys { (view: PdfEditCanvasView) in view.dispose() }
+    }
+    Constant("nativeEditCanvasVersion") { 2 }
   }
 }
