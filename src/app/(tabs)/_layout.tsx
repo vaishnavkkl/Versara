@@ -1,92 +1,39 @@
-import React, { useState, useCallback } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Tabs } from 'expo-router';
-import { useRouter } from 'expo-router';
 import { CustomTabBar } from '@/components/custom-tab-bar';
+import { usePalette } from '@/theme/colors';
 
-// Tab definitions — SF Symbols for iOS, Material Icons for Android
 const TABS = [
-  {
-    key: 'index',
-    label: 'Home',
-    ios: 'house' as const,
-    iosActive: 'house.fill' as const,
-    android: 'home' as const,
-    androidActive: 'home' as const,
-  },
-  {
-    key: 'documents',
-    label: 'Docs',
-    ios: 'doc.text' as const,
-    iosActive: 'doc.text.fill' as const,
-    android: 'description' as const,
-    androidActive: 'description' as const,
-  },
-  {
-    key: 'media',
-    label: 'Media',
-    ios: 'photo.on.rectangle' as const,
-    iosActive: 'photo.fill.on.rectangle.fill' as const,
-    android: 'perm-media' as const,
-    androidActive: 'perm-media' as const,
-  },
-  {
-    key: 'device',
-    label: 'Device',
-    ios: 'antenna.radiowaves.left.and.right' as const,
-    iosActive: 'antenna.radiowaves.left.and.right.circle.fill' as const,
-    android: 'devices' as const,
-    androidActive: 'devices' as const,
-  },
-  {
-    key: 'settings',
-    label: 'Settings',
-    ios: 'gearshape' as const,
-    iosActive: 'gearshape.fill' as const,
-    android: 'settings' as const,
-    androidActive: 'settings' as const,
-  },
-];
-
-const ROUTES = ['index', 'documents', 'media', 'device', 'settings'] as const;
+  { key: 'index', label: 'Home', ios: 'house', iosActive: 'house.fill', android: 'home', androidActive: 'home' },
+  { key: 'documents/index', label: 'PDF', ios: 'doc.richtext', iosActive: 'doc.richtext.fill', android: 'picture-as-pdf', androidActive: 'picture-as-pdf' },
+  { key: 'image/index', label: 'Image', ios: 'photo.on.rectangle', iosActive: 'photo.fill.on.rectangle.fill', android: 'photo-library', androidActive: 'photo-library' },
+  { key: 'video/index', label: 'Video', ios: 'play.rectangle', iosActive: 'play.rectangle.fill', android: 'smart-display', androidActive: 'smart-display' },
+  { key: 'settings/index', label: 'Settings', ios: 'slider.horizontal.3', iosActive: 'slider.horizontal.3', android: 'tune', androidActive: 'tune' },
+] as const;
 
 export default function TabsLayout() {
-  const [activeIndex, setActiveIndex] = useState(0);
-
-  const router = useRouter();
-
-  const handleTabPress = useCallback((index: number) => {
-    setActiveIndex(index);
-    const route = ROUTES[index];
-    if (route === 'index') {
-      router.replace('/(tabs)/index');
-    } else {
-      router.replace(`/(tabs)/${route}/index` as any);
-    }
-  }, [router]);
-
+  const colors = usePalette();
   return (
-    <View style={styles.container}>
-      <Tabs
-        screenOptions={{ headerShown: false }}
-        tabBar={() => (
-          <CustomTabBar
-            tabs={TABS}
-            activeIndex={activeIndex}
-            onTabPress={handleTabPress}
-          />
-        )}
-      >
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: colors.systemBackground }}>
+      <Tabs screenOptions={{ headerShown: false, animation: 'none', lazy: true, freezeOnBlur: true }} tabBar={({ state, navigation }) => (
+        <CustomTabBar tabs={TABS} activeIndex={TABS.findIndex(tab => tab.key === state.routes[state.index].name)} onTabPress={index => {
+          const route = state.routes.find(item => item.name === TABS[index].key);
+          if (!route) return;
+          const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+          if (!event.defaultPrevented) navigation.navigate(route.name);
+        }} />
+      )}>
         <Tabs.Screen name="index" />
-        <Tabs.Screen name="documents" />
-        <Tabs.Screen name="media" />
-        <Tabs.Screen name="device" />
-        <Tabs.Screen name="settings" />
+        <Tabs.Screen name="documents/index" />
+        <Tabs.Screen name="image/index" />
+        <Tabs.Screen name="video/index" />
+        <Tabs.Screen name="media/index" options={{ href: null, lazy: true }} />
+        <Tabs.Screen name="device/index" options={{ href: null, lazy: true }} />
+        <Tabs.Screen name="settings/index" />
+        <Tabs.Screen name="privacy/index" options={{ href: null, lazy: true }} />
+        <Tabs.Screen name="audio/index" options={{ href: null, lazy: true }} />
       </Tabs>
-    </View>
+    </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-});

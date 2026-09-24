@@ -1,0 +1,13 @@
+# PDF page editing and reading
+
+Extract Pages and Delete Pages now use the native PDF organizer on Android (PDFBox) and iOS (PDFKit). Choose one PDF, tap page numbers to select them, and save a new copy. Eye buttons open the reader at the corresponding page. Optional comma-separated page ranges support longer documents. Selection counts explain which pages will remain; deletion cannot remove every page. Original files are unchanged.
+
+Both native implementations independently validate page selections, preserve original page order, copy PDF content without rasterization, report progress, support cancellation, verify output page counts, and commit staged files only after success. The existing 2,000-page input limit, protected-document checks, cache ownership and output-path restrictions apply. These tools are page organization tools, not redaction; document-level forms, links, bookmarks and signatures may change. Results can be opened and exported through the system save/share menu.
+
+The reader defaults to vertical scrolling with an explicit single-page alternative. Android uses a native recycling ListView and PdfRenderer, rendering visible pages on a serial worker with a two-million-pixel bitmap cap per page. iOS uses PDFKit continuous vertical display. Explicit page navigation uses a command revision so scroll events do not feed back into navigation commands. Pinch zoom remains native.
+
+Compact controls reserve more space for the document. The expand button enters focus view, hiding the sheet header and reader controls; a floating Show controls button restores them. Result previews share this reader without an extra back-button row. Standalone Print PDF and Share PDF cards and the reader's Print action were removed. Export remains available on results and through the reader's save icon.
+
+Tapping PDF Viewer now opens the system file picker before presenting the reader. Cancelling leaves the tool catalog visible. The catalog owns and cleans up the selected cache copy; repeat taps are guarded while the picker is active. The sheet restores top spacing around its rounded edge and uses a fixed-size, high-contrast close button. Focus view keeps a floating close button in the top-right corner.
+
+Validation: run lint, TypeScript, and Android module Kotlin compilation. No web build or automated tests, per project preferences. iOS compilation and device validation remain pending. A new native development build is required. Manual checks should cover mixed-size/rotated pages, quick scrolling, pinch-to-scroll handoff, direct page jumps, focus mode, large text, both themes, non-contiguous extraction/deletion, deleting all pages, cancellation, sheet dismissal during processing, protected PDFs, and output opening/export.

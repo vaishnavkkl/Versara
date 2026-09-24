@@ -23,6 +23,15 @@ npx expo install --fix      # fix incompatible package versions
 
 Run lint and typecheck before declaring any task done.
 
+## Project workflow preferences
+
+- Read `docs/` for the project overview and relevant product, architecture, UI/UX, and development-phase requirements before implementing changes.
+- Do not run web builds or automated tests unless the user explicitly requests them. This applies throughout the project.
+- Continue to run lint and typecheck; these static checks remain required.
+- PDF processing and editing must run natively on Android and iOS, offline, using free and open-source dependencies. Do not introduce commercial SDKs.
+- Keep workflows simple, with optional short guidance and clear labels for unavailable tools. Every enabled control must do what it says.
+- Bound caches and job queues, release listeners/native resources on teardown, and pause unnecessary preview work off-screen. Adapt expensive work to device capacity; do not claim zero leaks or performance guarantees without on-device profiling.
+
 ## Navigation & Routing
 
 - Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.

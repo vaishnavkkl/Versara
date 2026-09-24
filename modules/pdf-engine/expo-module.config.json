@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": "PdfEngine.podspec",
+    "modules": ["PdfEngineModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.pdfengine.PdfEngineModule"]
+  }
+}

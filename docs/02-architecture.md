@@ -12,7 +12,7 @@ Each module should expose a minimal typed API to TypeScript, keeping the JS laye
 - Use system document/photo pickers.
 - Prefer passing file URIs (paths) to native modules. NEVER use Base64 strings for large files.
 - The application must not crash due to OOM (Out Of Memory) when processing large files (e.g., 500MB videos, 200MB PDFs).
-- Heavy operations must be run asynchronously, block the JS thread, have cancellation capability, and clean up temporary files.
+- Heavy operations must run asynchronously, never block the JS thread, support cancellation, and clean up temporary files.
 
 ## Storage & Job System
 Use local **SQLite** for:

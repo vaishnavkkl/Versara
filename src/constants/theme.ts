@@ -4,25 +4,12 @@
  */
 
 import '@/global.css';
+import { palettes, type Palette } from '@/theme/colors';
 
 import { Platform } from 'react-native';
 
-export const Colors = {
-  light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
-  },
-  dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
-  },
-} as const;
+const brandTheme = (colors: Palette) => ({ text: colors.label, background: colors.systemBackground, backgroundElement: colors.secondarySystemBackground, backgroundSelected: colors.accentSurface, textSecondary: colors.secondaryLabel });
+export const Colors = { light: brandTheme(palettes.light), dark: brandTheme(palettes.dark) } as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 

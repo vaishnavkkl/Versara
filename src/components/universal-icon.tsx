@@ -1,7 +1,7 @@
 import React from 'react';
 import { SymbolView } from 'expo-symbols';
 import { MaterialIcons } from '@expo/vector-icons';
-import { colors } from '@/theme/colors';
+import { usePalette } from '@/theme/colors';
 
 type IOSSymbol = import('expo-symbols').SFSymbol;
 type AndroidIcon = React.ComponentProps<typeof MaterialIcons>['name'];
@@ -23,13 +23,16 @@ export function UniversalIcon({
   ios,
   android,
   size = 24,
-  color = colors.label as string,
+  color,
 }: IconProps) {
+  const colors = usePalette();
+  const tint = color ?? colors.label;
   if (process.env.EXPO_OS === 'ios') {
     return (
       <SymbolView
         name={ios}
-        tintColor={color}
+        weight="medium"
+        tintColor={tint}
         resizeMode="scaleAspectFit"
         style={{ width: size, height: size }}
       />
@@ -40,7 +43,7 @@ export function UniversalIcon({
     <MaterialIcons
       name={android}
       size={size}
-      color={color}
+      color={tint}
     />
   );
 }

@@ -7,11 +7,11 @@ import {
   TabTriggerSlotProps,
   TabListProps,
 } from 'expo-router/ui';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
+import { Pressable, View, StyleSheet } from 'react-native';
 
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
 
 export default function AppTabs() {
   return (
@@ -19,19 +19,19 @@ export default function AppTabs() {
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger name="index" href="/(tabs)/index" asChild>
+          <TabTrigger name="index" href="/(tabs)" asChild>
             <TabButton>Home</TabButton>
           </TabTrigger>
-          <TabTrigger name="documents" href="/(tabs)/documents/index" asChild>
-            <TabButton>Docs</TabButton>
+          <TabTrigger name="documents" href="/(tabs)/documents" asChild>
+            <TabButton>PDF</TabButton>
           </TabTrigger>
-          <TabTrigger name="media" href="/(tabs)/media/index" asChild>
-            <TabButton>Media</TabButton>
+          <TabTrigger name="image" href="/(tabs)/image" asChild>
+            <TabButton>Image</TabButton>
           </TabTrigger>
-          <TabTrigger name="device" href="/(tabs)/device/index" asChild>
-            <TabButton>Device</TabButton>
+          <TabTrigger name="video" href="/(tabs)/video" asChild>
+            <TabButton>Video</TabButton>
           </TabTrigger>
-          <TabTrigger name="settings" href="/(tabs)/settings/index" asChild>
+          <TabTrigger name="settings" href="/(tabs)/settings" asChild>
             <TabButton>Settings</TabButton>
           </TabTrigger>
         </CustomTabList>
@@ -55,8 +55,6 @@ export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps
 }
 
 export function CustomTabList(props: TabListProps) {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
 
   return (
     <View {...props} style={styles.tabListContainer}>
