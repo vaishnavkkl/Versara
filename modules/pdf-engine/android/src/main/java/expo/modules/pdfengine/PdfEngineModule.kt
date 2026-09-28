@@ -13,6 +13,12 @@ class PdfEngineModule : Module() {
     Name("PdfEngine")
     Events("onConversionProgress")
     Constant("nativeAdvancedToolsVersion") { 2 }
+    Constant("nativePdfPrivacyVersion") { 1 }
+    Constant("nativeSignatureImageVersion") { 1 }
+    Constant("nativeStrokePatternsVersion") { 1 }
+    Constant("nativeReaderSearchVersion") { 1 }
+    Constant("nativeSearchableOcrVersion") { 1 }
+    Constant("nativeMarkupEditingVersion") { 1 }
     AsyncFunction("processPdf") { id: String, request: String, promise: expo.modules.kotlin.Promise ->
       val context = appContext.reactContext
       if (context == null) promise.reject("PDF_UNAVAILABLE", "The app is not ready.", null)
@@ -67,11 +73,12 @@ class PdfEngineModule : Module() {
       Prop("zoom") { view: PdfEngineView, zoom: Double -> view.requestedZoom = zoom.toFloat() }
       Prop("zoomRevision") { view: PdfEngineView, revision: Int -> view.zoomRevision = revision }
       Prop("dark") { view: PdfEngineView, dark: Boolean -> view.dark = dark }
+      Prop("searchHighlights") { view: PdfEngineView, value: String -> view.setSearchHighlights(value) }
       OnViewDidUpdateProps { view: PdfEngineView -> view.applyProps() }
       OnViewDestroys { view: PdfEngineView -> view.dispose() }
     }
     View(PdfMarkupView::class) {
-      Events("onMark")
+      Events("onMark", "onSelection")
       Prop("source") { view: PdfMarkupView, value: String -> view.setSource(value) }
       Prop("marks") { view: PdfMarkupView, value: String -> view.setMarks(value) }
       Prop("mode") { view: PdfMarkupView, value: String -> view.mode = value }
@@ -79,6 +86,7 @@ class PdfEngineModule : Module() {
       Prop("fillColor") { view: PdfMarkupView, value: String -> view.fillColor = value }
       Prop("shapePath") { view: PdfMarkupView, value: String -> view.shapePath = value }
       Prop("inkWidth") { view: PdfMarkupView, value: Double -> view.inkWidth = value }
+      Prop("inkOpacity") { view: PdfMarkupView, value: Double -> view.inkOpacity = value }
       Prop("brush") { view: PdfMarkupView, value: String -> view.brush = value }
       Prop("pattern") { view: PdfMarkupView, value: String -> view.pattern = value }
       Prop("disabled") { view: PdfMarkupView, value: Boolean -> view.disabled = value }

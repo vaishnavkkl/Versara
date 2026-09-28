@@ -4,6 +4,7 @@ import ImageIO
 
 final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   let onMark = EventDispatcher()
+  let onSelection = EventDispatcher()
   private var image: UIImage?
   private var source = ""
   private var version = 0
@@ -14,18 +15,32 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   private var marks: [[String: Any]] = []
   private var points: [[Double]] = []
   private var pageRect = CGRect.zero
-  var mode = "draw"
+  var mode = "draw" {
+    didSet {
+      guard mode != oldValue else { return }
+      finishErase(commit: false)
+      cancelSelection()
+      points = []; selectionStart = nil
+      if mode != "select" { selected = -1; emitSelection() } else { emitSelection() }
+      lastErase = nil; erasedInGesture.removeAll(); setNeedsDisplay()
+    }
+  }
   var inkColor = "#1D4ED8"
   var fillColor = ""
   var shapePath = "[]"
   var brush = "pen"
   var pattern = "solid"
+  var inkOpacity = -1.0
   private var cachedRect = CGRect.zero
   private var paths: [CGPath] = []
   private var selected = -1
   private var selectionStart: [String: Any]?
   private var selectionPoint = CGPoint.zero
   private var handle = -1
+  private var lastSelection = ""
+  private var lastErase: CGPoint?
+  private var eraseStart: [[String: Any]]?
+  private var erasedInGesture = Set<String>()
   private var zoom: CGFloat = 1
   private var pan = CGPoint.zero
   private var navigating = false
@@ -42,12 +57,13 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
   @objc private func pinchPage(_ g: UIPinchGestureRecognizer) {
     cancelSelection()
+    finishErase(commit: false)
     points = []; let next = min(6, max(1, zoom * g.scale)), ratio = next / zoom, focus = g.location(in: self)
     pan.x = focus.x - bounds.midX - (focus.x - bounds.midX - pan.x) * ratio
     pan.y = focus.y - bounds.midY - (focus.y - bounds.midY - pan.y) * ratio
     zoom = next; g.scale = 1; setNeedsDisplay()
   }
-  @objc private func movePage(_ g: UIPanGestureRecognizer) { cancelSelection(); points = []; let delta = g.translation(in: self); pan.x += delta.x; pan.y += delta.y; g.setTranslation(.zero, in: self); setNeedsDisplay() }
+  @objc private func movePage(_ g: UIPanGestureRecognizer) { cancelSelection(); finishErase(commit: false); points = []; let delta = g.translation(in: self); pan.x += delta.x; pan.y += delta.y; g.setTranslation(.zero, in: self); setNeedsDisplay() }
   func setSource(_ value: String) {
     guard value != source, !closed else { return }
     source = value; version += 1; pendingSource = value; points = []; image = nil; setNeedsDisplay(); decodeNext()
@@ -67,10 +83,51 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
       }
     }
   }
-  func setMarks(_ value: String) { marks = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [[String: Any]] ?? []; cachedRect = .zero; if selected >= marks.count { selected = -1 }; setNeedsDisplay() }
-  func dispose() { closed = true; pendingSource = nil; version += 1; image = nil; points = []; marks = [] }
+  private let stampDecoder = DispatchQueue(label: "com.versara.signature-preview", qos: .userInitiated)
+  private var stampImages: [String: UIImage] = [:]
+  private var stampKey = ""
+  private var stampDecoding = false
+  private func loadStamps() {
+    let uris = Array(Set(marks.filter { $0["kind"] as? String == "image" }.compactMap { $0["imageUri"] as? String })).sorted().prefix(16).map { $0 }
+    let key = uris.joined(separator: "|")
+    guard !closed, !stampDecoding, key != stampKey else { return }
+    stampKey=key; stampDecoding=true
+    stampImages = stampImages.filter { uris.contains($0.key) }
+    let retained = stampImages
+    stampDecoder.async { [weak self] in
+      let loaded: [String: UIImage] = autoreleasepool {
+        var images = retained
+        let roots = [FileManager.default.urls(for: .cachesDirectory,in: .userDomainMask)[0],FileManager.default.urls(for: .documentDirectory,in: .userDomainMask)[0]]
+        for uri in uris where images[uri] == nil {
+          guard let url=URL(string:uri), url.isFileURL, roots.contains(where: { url.resolvingSymlinksInPath().path.hasPrefix($0.resolvingSymlinksInPath().path+"/") }),
+            let source=CGImageSourceCreateWithURL(url as CFURL,nil),
+            let image=CGImageSourceCreateThumbnailAtIndex(source,0,[kCGImageSourceCreateThumbnailFromImageAlways:true,kCGImageSourceThumbnailMaxPixelSize:512,kCGImageSourceShouldCacheImmediately:true] as CFDictionary) else { continue }
+          images[uri]=UIImage(cgImage:image)
+        }
+        return images
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }; self.stampDecoding=false
+        if !self.closed { self.stampImages=loaded; self.setNeedsDisplay(); self.loadStamps() }
+      }
+    }
+  }
+  func setMarks(_ value: String) {
+    eraseStart = nil; lastErase = nil; erasedInGesture.removeAll()
+    let previousIds = Set(marks.compactMap { $0["id"] as? String })
+    let id = marks.indices.contains(selected) ? marks[selected]["id"] as? String : nil
+    marks = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [[String: Any]] ?? []; cachedRect = .zero
+    selected = id.flatMap { id in marks.firstIndex { $0["id"] as? String == id } } ?? -1
+    if let added = marks.indices.reversed().first(where: { marks[$0]["kind"] as? String == "image" && !previousIds.contains(marks[$0]["id"] as? String ?? "") }) { selected=added }
+    if selected < 0 { selectionStart = nil }
+    if mode == "select" { emitSelection() }
+    loadStamps()
+    setNeedsDisplay()
+  }
+  func dispose() { closed = true; stampImages=[:]; pendingSource = nil; version += 1; image = nil; points = []; marks = []; paths = []; cachedRect = .zero; eraseStart = nil; lastErase = nil; erasedInGesture.removeAll(); lastSelection = "" }
   override func draw(_ rect: CGRect) {
     guard let image, let context = UIGraphicsGetCurrentContext() else { return }
+    guard bounds.width > 0, bounds.height > 0, image.size.width > 0, image.size.height > 0 else { return }
     let scale = min(bounds.width / image.size.width, bounds.height / image.size.height)
     let size = CGSize(width: image.size.width * scale * zoom, height: image.size.height * scale * zoom)
     pan.x = min(max(0, (size.width - bounds.width) / 2), max(-max(0, (size.width - bounds.width) / 2), pan.x))
@@ -94,11 +151,18 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
       let template = mode == "highlight" ? [[0.0,0],[1,0],[1,1],[0,1]] : ((try? JSONSerialization.jsonObject(with: Data(shapePath.utf8))) as? [[Double]] ?? [])
       if template.count >= 2 { output = template.filter { $0.count == 2 }.map { [points[0][0] + (points[1][0] - points[0][0]) * $0[0], points[0][1] + (points[1][1] - points[0][1]) * $0[1]] } }
     }
-    return ["kind": mode, "brush": brush, "pattern": pattern, "color": inkColor, "fillColor": mode == "highlight" ? inkColor : fillColor, "width": inkWidth, "points": output]
+    var mark: [String: Any] = ["kind": mode, "brush": brush, "pattern": pattern, "color": inkColor, "fillColor": mode == "highlight" ? inkColor : fillColor, "width": inkWidth, "points": output]
+    if inkOpacity.isFinite && inkOpacity >= 0 { mark["opacity"] = min(1, max(0.01, inkOpacity)) }
+    return mark
   }
   private func markPath(_ mark: [String: Any]) -> CGPath {
     let path = CGMutablePath()
-    for (index,p) in (mark["points"] as? [[Double]] ?? []).enumerated() where p.count == 2 {
+    let raw = (mark["points"] as? [[Double]] ?? []).filter { $0.count == 2 }
+    if mark["pattern"] as? String == "dotted" && !["polygon", "highlight", "redact"].contains(mark["kind"] as? String ?? "") {
+      let vertices = raw.map { CGPoint(x: pageRect.minX + CGFloat($0[0]) * pageRect.width, y: pageRect.minY + CGFloat($0[1]) * pageRect.height) }
+      return StrokeDots.path(vertices, width: CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width)
+    }
+    for (index,p) in raw.enumerated() {
       let point = CGPoint(x: pageRect.minX + CGFloat(p[0])*pageRect.width,y: pageRect.minY + CGFloat(p[1])*pageRect.height)
       if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
     }
@@ -107,22 +171,35 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   }
   private func drawMark(_ mark: [String: Any], _ context: CGContext, _ cached: CGPath? = nil) {
     guard let raw = mark["points"] as? [[Double]], raw.count >= 2, raw.allSatisfy({ $0.count == 2 }) else { return }
+    if mark["kind"] as? String == "image" {
+      if let uri=mark["imageUri"] as? String, let image=stampImages[uri] {
+        let b=boundsOf(mark)
+        image.draw(in: CGRect(x:pageRect.minX+b.minX*pageRect.width,y:pageRect.minY+b.minY*pageRect.height,width:b.width*pageRect.width,height:b.height*pageRect.height))
+      }
+      return
+    }
     let kind = mark["kind"] as? String ?? "draw", hex = (mark["color"] as? String ?? "#1D4ED8").replacingOccurrences(of: "#", with: "")
     let rgb = UInt32(hex, radix: 16) ?? 0x1D4ED8
     let brush = mark["brush"] as? String ?? "pen"
-    let opacity: CGFloat = kind.hasPrefix("highlight") || brush == "highlighter" ? 0.3 : brush == "pencil" ? 170.0/255 : brush == "marker" ? 210.0/255 : 1
+    let defaultOpacity: CGFloat = kind.hasPrefix("highlight") || brush == "highlighter" ? 0.3 : brush == "pencil" ? 170.0/255 : brush == "marker" ? 210.0/255 : 1
+    let explicit = (mark["opacity"] as? NSNumber)?.doubleValue
+    let opacity: CGFloat = kind == "redact" ? 1 : explicit?.isFinite == true ? CGFloat(min(1, max(0.01, explicit!))) : defaultOpacity
     let color = UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255, alpha: opacity)
     context.saveGState(); context.setStrokeColor(color.cgColor); context.setFillColor(color.cgColor); context.setLineWidth(CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width); context.setLineCap(.round); context.setLineJoin(.round)
-    let unit = max(1, CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width)
+    let unit = CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width
     let pattern = mark["pattern"] as? String ?? "solid"
-    context.setLineDash(phase: 0, lengths: pattern == "dotted" ? [unit * 0.1,unit * 2.4] : pattern == "dashed" ? [unit * 4,unit * 2] : [])
+    let openStroke = !["polygon", "highlight", "redact"].contains(kind)
+    if openStroke && pattern == "dotted" {
+      context.addPath(cached ?? markPath(mark)); context.fillPath(); context.restoreGState(); return
+    }
+    context.setLineDash(phase: 0, lengths: openStroke && pattern == "dashed" ? [unit * 4, unit * 2] : [])
     context.addPath(cached ?? markPath(mark))
     let closedShape = ["polygon", "highlight"].contains(kind)
     if closedShape { context.closePath() }
     let fill = mark["fillColor"] as? String ?? ""
     if closedShape && !fill.isEmpty {
       let rgb = UInt32(fill.replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0
-      context.setFillColor(UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255, alpha: kind == "highlight" ? 0.3 : 1).cgColor)
+      context.setFillColor(UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255, alpha: kind == "highlight" || explicit?.isFinite == true ? opacity : 1).cgColor)
       context.drawPath(using: kind == "highlight" ? .fill : .fillStroke)
     } else { context.strokePath() }
     context.restoreGState()
@@ -144,6 +221,7 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     }
     if handle < 0 { selected = marks.indices.reversed().first { boundsOf(marks[$0]).insetBy(dx:-24/pageRect.width,dy:-24/pageRect.height).contains(CGPoint(x:x,y:y)) } ?? -1 }
     selectionStart = marks.indices.contains(selected) ? marks[selected] : nil
+    emitSelection()
     selectionPoint = CGPoint(x:x,y:y); setNeedsDisplay()
   }
   private func moveSelection(_ touch: UITouch) {
@@ -156,6 +234,14 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
       if handle == 0 || handle == 3 { left = min(CGFloat(p[0]),right - 0.005) } else { right = max(CGFloat(p[0]),left + 0.005) }
       if handle < 2 { top = min(CGFloat(p[1]),bottom - 0.005) } else { bottom = max(CGFloat(p[1]),top + 0.005) }
     }
+    if handle >= 0 && original["kind"] as? String == "image" {
+      let isLeft=handle == 0 || handle == 3, isTop=handle < 2
+      let ax=isLeft ? b.maxX : b.minX, ay=isTop ? b.maxY : b.minY
+      let maximum=min((isLeft ? ax : 1-ax)/max(0.0001,b.width),(isTop ? ay : 1-ay)/max(0.0001,b.height))
+      let scale=min(maximum,max(min(0.05,maximum),max(abs(CGFloat(p[0])-ax)/max(0.0001,b.width),abs(CGFloat(p[1])-ay)/max(0.0001,b.height))))
+      let w=b.width*scale,h=b.height*scale
+      left=isLeft ? ax-w : ax; right=isLeft ? ax : ax+w; top=isTop ? ay-h : ay; bottom=isTop ? ay : ay+h
+    }
     var next = original
     next["points"] = (original["points"] as? [[Double]] ?? []).map { p -> [Double] in
       [Double(min(1,max(0,left+(CGFloat(p[0])-b.minX)/max(0.0001,b.width)*(right-left)))),Double(min(1,max(0,top+(CGFloat(p[1])-b.minY)/max(0.0001,b.height)*(bottom-top))))]
@@ -163,31 +249,79 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     marks[selected] = next; cachedRect = .zero; setNeedsDisplay()
   }
   private func emit(_ mark: [String: Any]) {
-    if let data = try? JSONSerialization.data(withJSONObject: mark), let string = String(data: data, encoding: .utf8) { onMark(["mark": string]) }
+    if let data = try? JSONSerialization.data(withJSONObject: mark, options: [.sortedKeys]), let string = String(data: data, encoding: .utf8) { onMark(["mark": string]) }
+  }
+  private func emitSelection() {
+    var value = ""
+    if marks.indices.contains(selected), let data = try? JSONSerialization.data(withJSONObject: marks[selected], options: [.sortedKeys]) { value = String(data: data, encoding: .utf8) ?? "" }
+    if value != lastSelection { lastSelection = value; onSelection(["mark": value]) }
+  }
+  private func segmentDistance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+    let dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy
+    let t = length <= 0.0001 ? 0 : min(1, max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length))
+    let x = p.x - a.x - t * dx, y = p.y - a.y - t * dy
+    return x * x + y * y
+  }
+  private func segmentsHit(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint, _ d: CGPoint, _ tolerance: CGFloat) -> Bool {
+    if max(a.x, b.x) + tolerance < min(c.x, d.x) || min(a.x, b.x) - tolerance > max(c.x, d.x) || max(a.y, b.y) + tolerance < min(c.y, d.y) || min(a.y, b.y) - tolerance > max(c.y, d.y) { return false }
+    let c1 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    let c2 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x)
+    let c3 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x)
+    let c4 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x)
+    if c1 * c2 < 0 && c3 * c4 < 0 { return true }
+    return min(min(segmentDistance(a, c, d), segmentDistance(b, c, d)), min(segmentDistance(c, a, b), segmentDistance(d, a, b))) <= tolerance * tolerance
+  }
+  private func eraseAt(_ end: CGPoint) {
+    let start = lastErase ?? end
+    for index in marks.indices.reversed() {
+      let mark = marks[index]
+      guard ["draw", "sign", "highlight-brush", "line"].contains(mark["kind"] as? String ?? ""),
+            let id = mark["id"] as? String, !erasedInGesture.contains(id), let samples = mark["points"] as? [[Double]], samples.count >= 2 else { continue }
+      let tolerance = max(12, CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width / 2)
+      var hit = false
+      for point in 1..<samples.count {
+        let first = samples[point - 1], second = samples[point]
+        guard first.count == 2 && second.count == 2 else { continue }
+        let a = CGPoint(x: pageRect.minX + first[0] * pageRect.width, y: pageRect.minY + first[1] * pageRect.height)
+        let b = CGPoint(x: pageRect.minX + second[0] * pageRect.width, y: pageRect.minY + second[1] * pageRect.height)
+        if segmentsHit(start, end, a, b, tolerance) { hit = true; break }
+      }
+      if hit { erasedInGesture.insert(id); marks.remove(at: index); cachedRect = .zero; selected = -1 }
+    }
+    lastErase = end; emitSelection(); setNeedsDisplay()
+  }
+  private func finishErase(commit: Bool) {
+    guard let original = eraseStart else { return }
+    if commit { for id in erasedInGesture { emit(["id": id, "deleted": true]) } }
+    else { marks = original }
+    eraseStart = nil; lastErase = nil; erasedInGesture.removeAll(); cachedRect = .zero; setNeedsDisplay()
   }
   private func cancelSelection() {
     if let original = selectionStart, marks.indices.contains(selected) { marks[selected] = original; cachedRect = .zero }
     selectionStart = nil
   }
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-    if (event?.allTouches?.count ?? 0) > 1 { cancelSelection(); points = []; navigating = true; return }; navigating = false
+    if (event?.allTouches?.count ?? 0) > 1 { cancelSelection(); finishErase(commit: false); points = []; navigating = true; return }; navigating = false
     guard !disabled, image != nil, let touch = touches.first, pageRect.contains(touch.location(in: self)) else { return }
     if mode == "select" { beginSelection(touch); return }
+    if mode == "erase" { eraseStart = marks; lastErase = nil; erasedInGesture.removeAll(); eraseAt(touch.location(in: self)); return }
     let p = point(touch); points = [p, p]; setNeedsDisplay()
   }
   override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+    if mode == "erase", !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, lastErase != nil, let touch = touches.first { eraseAt(touch.location(in: self)); return }
     if mode == "select", !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, let touch = touches.first { moveSelection(touch); return }
     guard !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, !points.isEmpty, let touch = touches.first else { return }
     if ["highlight", "polygon", "line"].contains(mode) { points[1] = point(touch) } else if points.count < 4096 { points.append(point(touch)) }
     setNeedsDisplay()
   }
   override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-    if mode == "select" { if selectionStart != nil, marks.indices.contains(selected) { emit(marks[selected]) }; selectionStart = nil; return }
+    if mode == "select" { if selectionStart != nil, marks.indices.contains(selected) { emit(marks[selected]) }; selectionStart = nil; emitSelection(); return }
+    if mode == "erase" { if !navigating, !disabled, lastErase != nil, let touch = touches.first { eraseAt(touch.location(in: self)) }; finishErase(commit: !navigating && !disabled); return }
     guard !points.isEmpty else { return }
     touchesMoved(touches, with: event)
     var mark = currentMark(); mark["id"] = UUID().uuidString; marks.append(mark); cachedRect = .zero
     emit(mark)
     points = []; setNeedsDisplay()
   }
-  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { if let original = selectionStart, marks.indices.contains(selected) { marks[selected] = original; cachedRect = .zero }; selectionStart = nil; points = []; setNeedsDisplay() }
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { if let original = selectionStart, marks.indices.contains(selected) { marks[selected] = original; cachedRect = .zero }; selectionStart = nil; points = []; finishErase(commit: false); emitSelection(); setNeedsDisplay() }
 }

@@ -17,12 +17,15 @@ final class PdfAdvancedTools {
   private var active = Set<String>()
   private var cancelled = Set<String>()
   private var destroyed = false
+  private var recognizers: [String: VNRecognizeTextRequest] = [:]
   func cancel(_ id: String) {
     lock.lock(); defer { lock.unlock() }
     if cancelled.count >= 64, let stale = cancelled.first(where: { !active.contains($0) }) { cancelled.remove(stale) }
     cancelled.insert(id)
+    recognizers[id]?.cancel()
   }
-  func destroy() { lock.lock(); destroyed = true; lock.unlock() }
+  func destroy() { lock.lock(); destroyed = true; recognizers.values.forEach { $0.cancel() }; lock.unlock() }
+  private func isCancelled(_ id: String) -> Bool { lock.lock(); defer { lock.unlock() }; return destroyed || cancelled.contains(id) }
   private func check(_ id: String) throws {
     lock.lock(); let stopped = destroyed || cancelled.contains(id); lock.unlock()
     if stopped { throw AdvancedFailure(message: "PDF_CANCELLED") }
@@ -37,13 +40,33 @@ final class PdfAdvancedTools {
     try require(canonical.path.hasPrefix(root) && FileManager.default.fileExists(atPath: canonical.path), "Choose the PDF again.")
     return canonical
   }
+  private func hasSelectableText(_ page: PDFPage, id: String) throws -> Bool {
+    try check(id)
+    let count = page.numberOfCharacters
+    guard count > 0 else { return false }
+    // Avoid a slow/full-page string allocation for an exceptionally large text
+    // layer. Above this cap, conservatively keep that existing layer unchanged.
+    if count > 100_000 { try check(id); return true }
+    for start in stride(from: 0, to: count, by: 256) {
+      try check(id)
+      let found = autoreleasepool {
+        // PDFPage.selection(for: NSRange) requires a nonempty, in-bounds range.
+        let range = NSRange(location: start, length: min(256, count - start))
+        let text = page.selection(for: range)?.string ?? ""
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }
+      if found { return true }
+    }
+    try check(id)
+    return false
+  }
   private func bitmap(_ page: PDFPage, dpi: CGFloat) throws -> CGImage {
     let box = page.bounds(for: .cropBox)
     let rotated = page.rotation % 180 != 0
     let width = rotated ? box.height : box.width, height = rotated ? box.width : box.height
     try require(width.isFinite && height.isFinite && width > 0 && height > 0, "This PDF has invalid page dimensions.")
     let budget: CGFloat = ProcessInfo.processInfo.physicalMemory < 3_000_000_000 ? 1_500_000 : 3_000_000
-    let scale = min(dpi / 72, sqrt(budget / (width * height)))
+    let scale = min(min(dpi / 72, sqrt(budget / (width * height))), 4096 / max(width, height))
     let w = max(1, Int(width * scale)), h = max(1, Int(height * scale))
     guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw AdvancedFailure(message: "Not enough memory to render this page.") }
     context.setFillColor(UIColor.white.cgColor); context.fill(CGRect(x: 0, y: 0, width: w, height: h))
@@ -54,6 +77,18 @@ final class PdfAdvancedTools {
     for annotation in page.annotations where annotation.shouldDisplay { annotation.draw(with: .cropBox, in: context) }
     guard let image = context.makeImage() else { throw AdvancedFailure(message: "Could not render this page.") }
     return image
+  }
+  private func recognize(_ page: PDFPage, id: String) throws -> [VNRecognizedTextObservation] {
+    try check(id)
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate; request.usesLanguageCorrection = true; request.recognitionLanguages = ["en-US"]
+    let image = try bitmap(page, dpi: 160)
+    lock.lock(); recognizers[id] = request; lock.unlock()
+    defer { lock.lock(); recognizers.removeValue(forKey: id); lock.unlock() }
+    try check(id)
+    try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+    try check(id)
+    return request.results ?? []
   }
   private func imageData(_ image: CGImage, png: Bool, quality: Double) throws -> Data {
     let data = NSMutableData()
@@ -79,7 +114,7 @@ final class PdfAdvancedTools {
           try self.check(id)
           try self.require(request.utf8.count <= 2_000_000, "Too many annotations. Save your changes first.")
           guard let data = request.data(using: .utf8), let r = try JSONSerialization.jsonObject(with: data) as? [String: Any], let op = r["operation"] as? String else { throw AdvancedFailure(message: "Invalid PDF request.") }
-          try self.require(["info", "preview", "estimate", "duplicate", "insert", "compress", "to_image", "highlight", "draw", "shapes", "sign", "watermark", "numbers", "protect", "metadata", "flatten", "ocr", "extract_text", "repair"].contains(op), "Unknown PDF tool.")
+          try self.require(["info", "preview", "estimate", "duplicate", "insert", "compress", "to_image", "highlight", "draw", "shapes", "sign", "watermark", "numbers", "protect", "metadata", "redact", "flatten", "ocr", "extract_text", "repair"].contains(op), "Unknown PDF tool.")
           let source = try self.input(r["uri"] as? String ?? "")
           guard let pdf = PDFDocument(url: source) else { throw AdvancedFailure(message: "This PDF cannot be read. Its damage may not be repairable.") }
           if pdf.isLocked { try self.require(pdf.unlock(withPassword: r["inputPassword"] as? String ?? ""), "This PDF requires the correct password.") }
@@ -90,8 +125,13 @@ final class PdfAdvancedTools {
           try self.require(pages.count <= 2000 && Set(pages).count == pages.count && pages.allSatisfy { (0..<count).contains($0) }, "Choose valid, unique page numbers.")
           if !["info", "preview"].contains(op) {
             try self.require(pdf.allowsDocumentChanges && pdf.allowsCopying && pdf.allowsDocumentAssembly, "This PDF restricts editing or extraction. Use an unrestricted copy.")
-            for i in 0..<count { try self.check(id); if let page = pdf.page(at: i) { try self.require(!page.annotations.contains { $0.widgetFieldType == .signature }, "This PDF contains signature fields. Use an unsigned copy.") } }
+            try self.check(id)
+            try PdfIntegrity.requireUnsigned(source, password: r["inputPassword"] as? String ?? "")
+            try self.check(id)
           }
+          // PDFKit does not expose the original owner/user credentials for a
+          // rewritten document. Fail before changing protection implicitly.
+          try self.require(!pdf.isEncrypted || ["info", "preview", "estimate", "compress", "to_image", "ocr", "extract_text", "protect"].contains(op), "This tool cannot preserve this PDF's existing encryption. Use an explicitly unlocked copy; the protected original is unchanged.")
           let size = (try manager.attributesOfItem(atPath: source.path)[.size] as? NSNumber)?.int64Value ?? 0
           if op == "info" {
             let bounds = pdf.page(at: 0)!.bounds(for: .cropBox), attrs = pdf.documentAttributes ?? [:]
@@ -115,6 +155,7 @@ final class PdfAdvancedTools {
           let dpi: CGFloat = quality == "max" ? 160 : quality == "small" ? 85 : 120
           let jpegQuality = quality == "max" ? 0.92 : quality == "small" ? 0.48 : 0.72
           var outputCount = count
+          var ocrSummary: [String: Any]?
           switch op {
           case "preview", "to_image":
             let selected = op == "preview" ? [pages[0]] : pages
@@ -125,30 +166,116 @@ final class PdfAdvancedTools {
               try autoreleasepool { try self.check(id); let image = try self.bitmap(pdf.page(at: number)!, dpi: op == "preview" ? 110 : dpi); try self.imageData(image, png: format == "png", quality: jpegQuality).write(to: output(index, preview: op == "preview")); progress(index + 1, selected.count) }
             }
           case "estimate":
-            let samples = Array(Set([0, count / 2, count - 1]))
-            var bytes = 0
-            for number in samples { try autoreleasepool { try self.check(id); bytes += try self.imageData(self.bitmap(pdf.page(at: number)!, dpi: dpi), png: false, quality: jpegQuality).count } }
-            return ["estimatedSize": quality == "max" ? size : Int64(bytes / samples.count * count + count * 1200)]
+            return ["estimatedSize": size, "estimateKind": "upperBound"]
           case "extract_text", "ocr":
-            let target = try output(0)
-            try Data().write(to: target)
-            let file = try FileHandle(forWritingTo: target); defer { try? file.close() }
-            for (index, number) in pages.enumerated() {
-              try autoreleasepool {
-                try self.check(id); let page = pdf.page(at: number)!
-                var text = page.string ?? ""
-                if op == "ocr" {
-                  let recognition = VNRecognizeTextRequest(); recognition.recognitionLevel = .accurate; recognition.usesLanguageCorrection = true; recognition.recognitionLanguages = ["en-US"]
-                  let image = try self.bitmap(page, dpi: 160)
-                  try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
-                  text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            let ocrFormat = r["ocrFormat"] as? String ?? "text"
+            try self.require(["text", "pdf"].contains(ocrFormat), "Choose text or searchable PDF output.")
+            if op == "ocr" && ocrFormat == "pdf" {
+              try self.require(pages.count <= 100, "Recognize up to 100 selected pages at a time.")
+              let tokenPattern = try NSRegularExpression(pattern: "\\S+")
+              var recognized: [[String: Any]] = []
+              var totalWords = 0
+              for (index, number) in pages.enumerated() {
+                try autoreleasepool {
+                  try self.check(id)
+                  let page = pdf.page(at: number)!
+                  let skipped = try (r["skipExistingText"] as? Bool ?? true) && self.hasSelectableText(page, id: id)
+                  var words: [[String: Any]] = []
+                  if !skipped {
+                    for observation in try self.recognize(page, id: id) {
+                      try self.check(id)
+                      guard let candidate = observation.topCandidates(1).first else { continue }
+                      let text = candidate.string
+                      for match in tokenPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                        try self.check(id)
+                        guard let range = Range(match.range, in: text) else { continue }
+                        let word = String(text[range])
+                        try self.require(word.utf16.count <= 256, "An OCR word cannot be placed safely. Export text instead.")
+                        guard let location = try candidate.boundingBox(for: range) else { throw AdvancedFailure(message: "OCR could not locate a word. Export text instead.") }
+                        let box = location.boundingBox.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+                        guard !box.isNull && box.width > 0 && box.height > 0 else { continue }
+                        try self.require(words.count < 2000 && totalWords < 20000, "Too much OCR text. Choose fewer pages.")
+                        words.append(["text": word, "x": box.minX, "y": 1 - box.maxY, "width": box.width, "height": box.height])
+                        totalWords += 1
+                      }
+                    }
+                  }
+                  recognized.append(["page": number, "words": words, "skipped": skipped])
+                  progress(index + 1, pages.count + 1)
                 }
-                try file.write(contentsOf: Data("--- Page \(number + 1) ---\n\(text)\n\n".utf8)); try self.check(id); progress(index + 1, pages.count)
+              }
+              try self.check(id)
+              let target = try output(0)
+              let request: [String: Any] = ["action": "ocr_save", "path": source.path, "outputPath": target.path, "inputPassword": r["inputPassword"] as? String ?? "", "ocrPages": recognized]
+              let requestData = try JSONSerialization.data(withJSONObject: request)
+              let encoded = PdfTextEditor.applyOCR(String(decoding: requestData, as: UTF8.self), cancelled: { self.isCancelled(id) })
+              guard let data = encoded.data(using: .utf8), let response = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw AdvancedFailure(message: "Could not create the searchable PDF.") }
+              if let error = response["error"] as? String { throw AdvancedFailure(message: error) }
+              ocrSummary = response
+              try self.check(id); progress(pages.count + 1, pages.count + 1)
+            } else {
+              let target = try output(0)
+              try Data().write(to: target)
+              let file = try FileHandle(forWritingTo: target); defer { try? file.close() }
+              for (index, number) in pages.enumerated() {
+                try autoreleasepool {
+                  try self.check(id); let page = pdf.page(at: number)!
+                  let text = op == "ocr" ? try self.recognize(page, id: id).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n") : page.string ?? ""
+                  try file.write(contentsOf: Data("--- Page \(number + 1) ---\n\(text)\n\n".utf8)); try self.check(id); progress(index + 1, pages.count)
+                }
               }
             }
-          case "compress", "flatten", "metadata":
-            if op == "compress" && quality == "max" { try self.require(pdf.write(to: output(0)), "Could not save this PDF.") }
-            else {
+          case "compress":
+            // PDFKit has no public image-resource recompressor. A native rewrite
+            // preserves text, links, annotations and forms; never rasterize here.
+            if pdf.isEncrypted { try manager.copyItem(at: source, to: output(0)) }
+            else { try self.require(pdf.write(to: output(0)), "Could not save this PDF.") }
+          case "metadata":
+            // Clear document properties on the original object graph. Drawing
+            // pages into a new CGContext would flatten annotations/forms/links.
+            pdf.documentAttributes = [:]
+            try self.require(pdf.write(to: output(0)), "Could not save this PDF.")
+          case "redact":
+            do {
+              guard let rects = r["rects"] as? [[String: Any]], (1...3000).contains(rects.count) else { throw AdvancedFailure(message: "Choose between 1 and 3,000 covers.") }
+              var covers: [Int: [CGRect]] = [:]
+              for rect in rects {
+                guard let number = rect["page"] as? Int, (1...count).contains(number),
+                  let x = rect["x"] as? Double, let y = rect["y"] as? Double, let w = rect["width"] as? Double, let h = rect["height"] as? Double,
+                  [x,y,w,h].allSatisfy({ $0.isFinite }), x >= 0, y >= 0, w > 0, h > 0, x+w <= 1.000001, y+h <= 1.000001 else { throw AdvancedFailure(message: "Invalid redaction region.") }
+                covers[number, default: []].append(CGRect(x: x, y: y, width: w, height: h))
+              }
+              let target = try output(0, preview: true)
+              let properties: [CFString: Any] = [kCGPDFContextCreator: "", kCGPDFContextAuthor: "", kCGPDFContextTitle: "", kCGPDFContextSubject: "", kCGPDFContextKeywords: []]
+              guard let context = CGContext(target as CFURL, mediaBox: nil, properties as CFDictionary) else { throw AdvancedFailure(message: "Could not create PDF.") }
+              defer { context.closePDF() }
+              for number in 0..<count {
+                try autoreleasepool {
+                  try self.check(id)
+                  let page = pdf.page(at: number)!, box = page.bounds(for: .cropBox), rotated = page.rotation % 180 != 0
+                  var bounds = CGRect(x: 0, y: 0, width: rotated ? box.height : box.width, height: rotated ? box.width : box.height)
+                  let raw = try self.bitmap(page, dpi: 160)
+                  let width = raw.width, height = raw.height
+                  guard let pixels = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw AdvancedFailure(message: "Not enough memory to redact this page.") }
+                  pixels.draw(raw, in: CGRect(x: 0, y: 0, width: width, height: height))
+                  pixels.setShouldAntialias(false); pixels.setBlendMode(.copy); pixels.setFillColor(UIColor.black.cgColor)
+                  for rect in covers[number + 1] ?? [] {
+                    try self.check(id)
+                    let left = floor(rect.minX * CGFloat(width)), right = min(CGFloat(width), ceil(rect.maxX * CGFloat(width)))
+                    let top = floor(rect.minY * CGFloat(height)), bottom = min(CGFloat(height), ceil(rect.maxY * CGFloat(height)))
+                    pixels.fill(CGRect(x: left, y: CGFloat(height)-bottom, width: right-left, height: bottom-top))
+                  }
+                  guard let redacted = pixels.makeImage() else { throw AdvancedFailure(message: "Could not redact this page.") }
+                  // Only the overwritten raster enters a fresh PDF; original objects never do.
+                  let media = Data(bytes: &bounds, count: MemoryLayout<CGRect>.size)
+                  context.beginPDFPage([kCGPDFContextMediaBox: media] as CFDictionary)
+                  context.draw(redacted, in: bounds); context.endPDFPage()
+                  progress(number + 1, count)
+                }
+              }
+            }
+          case "flatten":
+            do {
               let target = try output(0)
               let properties: [CFString: Any] = [kCGPDFContextCreator: "", kCGPDFContextAuthor: "", kCGPDFContextTitle: "", kCGPDFContextSubject: "", kCGPDFContextKeywords: []]
               guard let context = CGContext(target as CFURL, mediaBox: nil, properties as CFDictionary) else { throw AdvancedFailure(message: "Could not create PDF.") }
@@ -159,14 +286,10 @@ final class PdfAdvancedTools {
                   var bounds = CGRect(x: 0, y: 0, width: rotated ? box.height : box.width, height: rotated ? box.width : box.height)
                   let media = Data(bytes: &bounds, count: MemoryLayout<CGRect>.size)
                   context.beginPDFPage([kCGPDFContextMediaBox: media] as CFDictionary)
-                  if op == "metadata", let ref = page.pageRef {
-                    context.saveGState(); context.concatenate(ref.getDrawingTransform(.cropBox, rect: bounds, rotate: 0, preserveAspectRatio: true)); context.drawPDFPage(ref); for annotation in page.annotations where annotation.shouldDisplay { annotation.draw(with: .cropBox, in: context) }; context.restoreGState()
-                  } else {
-                    let raw = try self.bitmap(page, dpi: op == "flatten" ? 160 : dpi)
-                    let data = try self.imageData(raw, png: false, quality: op == "flatten" ? 0.95 : jpegQuality)
-                    guard let provider = CGDataProvider(data: data as CFData), let image = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { throw AdvancedFailure(message: "Could not compress page.") }
-                    context.draw(image, in: bounds)
-                  }
+                  let raw = try self.bitmap(page, dpi: 160)
+                  let data = try self.imageData(raw, png: false, quality: 0.95)
+                  guard let provider = CGDataProvider(data: data as CFData), let image = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { throw AdvancedFailure(message: "Could not flatten page.") }
+                  context.draw(image, in: bounds)
                   context.endPDFPage(); progress(number + 1, count)
                 }
               }
@@ -189,6 +312,7 @@ final class PdfAdvancedTools {
                 inserted = PDFDocument(url: try self.input(uri))
                 guard let other = inserted else { throw AdvancedFailure(message: "Could not read the inserted PDF.") }
                 try self.require(!other.isEncrypted && other.allowsDocumentAssembly && count + other.pageCount <= 2000, "Choose an unrestricted PDF; keep the result below 2,001 pages.")
+                try PdfIntegrity.requireUnsigned(try self.input(uri))
                 for index in 0..<other.pageCount { try self.check(id); guard let copy = other.page(at: index)?.copy() as? PDFPage else { throw AdvancedFailure(message: "Could not insert page.") }; pdf.insert(copy, at: position + index) }
               }
             case "repair", "protect": break
@@ -237,6 +361,10 @@ final class PdfAdvancedTools {
             if destination.pathExtension.lowercased() == "pdf" {
               guard let verified = PDFDocument(url: partial) else { throw AdvancedFailure(message: "The saved PDF could not be verified.") }
               if op == "protect" { try self.require(verified.isEncrypted && verified.unlock(withPassword: r["password"] as? String ?? ""), "Password protection could not be verified.") }
+              else {
+                if verified.isLocked { try self.require(verified.unlock(withPassword: r["inputPassword"] as? String ?? ""), "The saved PDF could not be unlocked with its original password.") }
+                try self.require(verified.isEncrypted == pdf.isEncrypted, "The saved PDF did not preserve its encryption. No output was kept.")
+              }
               try self.require(!verified.isLocked && verified.pageCount == outputCount, "The saved PDF could not be verified.")
               if op == "repair" { for index in 0..<outputCount { try autoreleasepool { try self.check(id); guard let page = verified.page(at: index) else { throw AdvancedFailure(message: "A repaired page cannot be read.") }; _ = try self.bitmap(page, dpi: 15) } } }
             }
@@ -251,7 +379,8 @@ final class PdfAdvancedTools {
           }
           for (partial, destination) in staged { try self.check(id); try manager.moveItem(at: partial, to: destination); committed.append(destination); let bytes = (try manager.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0; outputs.append(["uri": destination.absoluteString, "size": bytes, "pageCount": outputCount]) }
           var response: [String: Any] = ["outputs": outputs]
-          if op == "ocr" || op == "extract_text", let first = committed.first {
+          if let ocrSummary { response["ocrSummary"] = ocrSummary }
+          if (op == "ocr" && (r["ocrFormat"] as? String ?? "text") == "text") || op == "extract_text", let first = committed.first {
             let file = try FileHandle(forReadingFrom: first); defer { try? file.close() }
             response["textPreview"] = String(decoding: try file.read(upToCount: 16_000) ?? Data(), as: UTF8.self)
           }
@@ -261,7 +390,7 @@ final class PdfAdvancedTools {
         promise.resolve(String(data: encoded, encoding: .utf8)!)
       } catch {
         committed.forEach { try? manager.removeItem(at: $0) }
-        let cancelled = error.localizedDescription == "PDF_CANCELLED"
+        let cancelled = self.isCancelled(id) || error.localizedDescription == "PDF_CANCELLED"
         promise.reject(cancelled ? "PDF_CANCELLED" : "PDF_TOOL_FAILED", cancelled ? "Operation cancelled." : error.localizedDescription)
       }
     }

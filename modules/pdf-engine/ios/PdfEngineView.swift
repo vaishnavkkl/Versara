@@ -13,6 +13,26 @@ final class PdfEngineView: ExpoView {
   var requestedZoom = 1.0
   var zoomRevision = 0
   var dark = true
+  var searchHighlights = ""
+  private var appliedSearch = ""
+  private func applySearchHighlights() {
+    guard let document = pdfView.document, appliedSearch != searchHighlights else { return }
+    appliedSearch = searchHighlights
+    pdfView.highlightedSelections = []
+    guard let data = searchHighlights.data(using: .utf8),
+      let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let number = value["page"] as? Int, let page = document.page(at: number),
+      let rectangles = value["pdfRects"] as? [[Double]] else { return }
+    let selections = rectangles.prefix(32).compactMap { values -> PDFSelection? in
+      guard values.count == 4, values.allSatisfy({ $0.isFinite }) else { return nil }
+      let box = CGRect(x: values[0], y: values[1], width: values[2] - values[0], height: values[3] - values[1])
+      guard box.width > 0, box.height > 0, let selection = page.selection(for: box) else { return nil }
+      selection.color = UIColor(red: 0.35, green: 0.44, blue: 1, alpha: 0.4)
+      return selection
+    }
+    pdfView.highlightedSelections = selections
+    if let first = selections.first { pdfView.go(to: first) }
+  }
 
   private let pdfView = PDFView()
   private let worker = DispatchQueue(label: "com.versara.pdf.open", qos: .userInitiated)
@@ -103,6 +123,7 @@ final class PdfEngineView: ExpoView {
       return
     }
     applyPageAndZoom()
+    applySearchHighlights()
   }
 
   private func openDocument() {
@@ -110,6 +131,7 @@ final class PdfEngineView: ExpoView {
     let ticket = UUID()
     generation = ticket
     pdfView.document = nil
+    appliedSearch = ""
     lastPageRequest = -1
     lastZoomRevision = -1
     guard let url = URL(string: source), url.isFileURL else {
@@ -138,6 +160,7 @@ final class PdfEngineView: ExpoView {
           self.configureScrolling()
           self.onLoad(["pageCount": document.pageCount])
           self.applyPageAndZoom()
+          self.applySearchHighlights()
           self.reportPage()
         }
       }

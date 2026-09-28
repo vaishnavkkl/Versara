@@ -5,7 +5,8 @@ PDF tool previews share the Edit PDF page toolbar, full-height canvas, gesture h
 - Edit PDF, Add Text and Remove Text use the shared preview layout. Existing-text drafts are rendered by the same native PDF engine commands used for Apply and Save, including font, size, color, indentation and deletion.
 - Highlight, Draw, Shapes and Signature use the same layout and canvas background. Their native drawing surface retains two-finger zoom/pan, live marks, Fit, Undo and Redo. Style controls expand in a bounded panel.
 - Page Numbering uses the Edit PDF native zoom canvas instead of a static image. Its preview contains the actual numbering commands. Fit, pinch, pan and double tap are available.
-- Extract, Delete, Reorder and Rotate open source-page previews inside the tool using the same native zoom canvas. Merge and Split source thumbnails open this preview too.
+- Rotate opens directly into the shared full-height page preview. Left/Right updates the displayed page immediately, with This page/All pages scope and a separate Save action. Quarter turns swap the canvas bounds before rotating so the page fits without clipping. The existing decoded page stays mounted; taps do not generate temporary PDFs. Export adds the same rotation delta to each source page in the native engine. Landscape puts rotation controls beside the preview.
+- Extract, Delete and Reorder open source-page previews inside the tool using the same native zoom canvas. Reorder has larger page thumbnails. Merge and Split source thumbnails open this preview too.
 - Single-document PDF operations keep the source preview above a collapsible settings dock and fixed export action. Watermark and page numbering show native output previews in that same layout, updating after settings settle. Multi-document selection/organization retains its source chooser and opens the shared page preview. The document information screen remains a metadata view with Preview PDF.
 
 ## Live rendering and lifetime
@@ -35,3 +36,14 @@ Manual acceptance: type continuously in an existing text fragment; confirm inter
 - The main iOS image editor uses the device encoder list, exposing HEIC and TIFF where available, alongside JPEG/PNG. Android continues to offer JPEG/PNG/WebP. File types and MIME types match the encoded data.
 
 Validation: lint and typecheck are required, with Android Kotlin and arm64 C++ compilation for native changes. No automated tests or web builds are run. iOS compilation, touch interactions and measured frame times still require device validation; do not infer an FPS guarantee from compilation.
+
+
+## Stroke patterns and compact controls
+
+- Dotted strokes use filled circles sampled along the entire stroke, including across segment bends. Dot centres are three stroke widths apart; unusually long strokes increase spacing to stay within 2,048 dots. The native PDF/image canvases and PDF/image exporters use the same geometry, width and brush opacity. Completed paths are cached and released on teardown. Dashes retain native dash patterns; closed shape fills and outlines remain solid.
+- Android also records the final finger-up point, so quick strokes retain their endpoint even without an intervening move event. A tap creates a single dot. Marks retain their pattern through selection, resizing, undo/redo and save.
+- Native modules expose `nativeStrokePatternsVersion`. Dotted/dashed controls require the updated drawing canvas and the corresponding exporter; older installed binaries show a build-update hint instead of silently offering unsupported patterns. These changes require a new native Android/iOS build, not just a JavaScript refresh.
+- PDF tool routes own orientation. Landscape replaces Demo in the header and remains selected when opening settings or another preview within that tool. Style, Select and the Area/Brush switch sit beside page navigation. General tool settings use the same top controls; groups wrap when needed for narrow screens or larger text.
+- Buttons and selected controls use the primary theme. Option icons distinguish blue selection/pen, green area/pencil, teal dash/highlighter, pink brush/marker and purple style/dots. Gold has been removed from the shared tool palette; document ink colours remain freely selectable.
+
+Verification for this change is restricted to source review and build checks at the user's request. No phone interaction, installation, automated tests or web build. Lint, TypeScript and Android native Kotlin/arm64 C++ compilation are the checks; iOS compilation and touch/export appearance remain unverified here.

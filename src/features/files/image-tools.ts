@@ -1,1 +1,1 @@
-export const ADVANCED_IMAGE_TOOLS = new Set(['compress', 'batch_compress', 'resize', 'social', 'perspective', 'canvas', 'exposure', 'sharpen', 'blur', 'draw', 'watermark', 'redact', 'metadata', 'info', 'convert', 'rename', 'batch']);
+export const ADVANCED_IMAGE_TOOLS = new Set(['compress', 'batch_compress', 'resize', 'social', 'perspective', 'canvas', 'exposure', 'curves', 'levels', 'hsl', 'sharpen', 'blur', 'draw', 'watermark', 'redact', 'metadata', 'info', 'convert', 'rename', 'batch']);

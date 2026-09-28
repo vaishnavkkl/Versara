@@ -11,6 +11,7 @@ export type PdfEngineViewProps = ViewProps & {
   zoom: number;
   zoomRevision: number;
   dark: boolean;
+  searchHighlights?: string;
   onLoad: (event: { nativeEvent: PdfLoadEvent }) => void;
   onPageChange: (event: { nativeEvent: PdfPageEvent }) => void;
   onZoomChange: (event: { nativeEvent: { zoom: number } }) => void;

@@ -3,19 +3,20 @@ package expo.modules.fileengine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
-import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.googlecode.tesseract.android.TessBaseAPI
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.atan
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -27,29 +28,119 @@ internal object ImageText {
 
   private class Sample(val background: Int, val left: Int, val right: Int, val text: Int)
 
-  fun recognize(context: Context, uri: String): Map<String, Any> {
+  private val ocrSetupLock = Any()
+  private val recognitionLock = Any()
+  private val recognitions = HashMap<String, Recognition>()
+  class Recognition internal constructor(val uri: String, internal val key: String) {
+    internal val cancelled = AtomicBoolean(false)
+    internal var engine: TessBaseAPI? = null
+  }
+
+  fun prepareRecognition(uri: String, key: String = uri): Recognition = synchronized(recognitionLock) {
+    recognitions[key]?.let { it.cancelled.set(true); it.engine?.stop() }
+    require(recognitions.containsKey(key) || recognitions.size < 4) { "Wait for the current text recognition to finish." }
+    Recognition(uri, key).also { recognitions[key] = it }
+  }
+
+  fun cancelRecognition(request: Recognition) = synchronized(recognitionLock) {
+    request.cancelled.set(true); request.engine?.stop()
+  }
+
+  fun cancelRecognition(uri: String) = synchronized(recognitionLock) {
+    recognitions[uri]?.let { it.cancelled.set(true); it.engine?.stop() }
+  }
+
+  fun cancelAllRecognition() = synchronized(recognitionLock) {
+    recognitions.values.forEach { it.cancelled.set(true); it.engine?.stop() }
+  }
+
+  fun finishRecognition(request: Recognition) = synchronized(recognitionLock) {
+    if (recognitions[request.key] === request) recognitions.remove(request.key)
+    Unit
+  }
+
+  private fun checkRecognition(request: Recognition) {
+    if (request.cancelled.get() || Thread.currentThread().isInterrupted) throw InterruptedException("Text recognition was cancelled.")
+  }
+  private val lineTag = Regex("<span\\b([^>]+)>", RegexOption.IGNORE_CASE)
+  private val lineClass = Regex("\\bclass\\s*=\\s*['\"][^'\"]*\\bocr(?:x)?_line\\b[^'\"]*['\"]", RegexOption.IGNORE_CASE)
+  private val lineBounds = Regex("\\bbbox\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)")
+  private val lineSlope = Regex("\\bbaseline\\s+([-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))")
+
+  /** The asset is bundled once by pdf-engine; never fall back to a download. */
+  private fun modelDirectory(context: Context): File = synchronized(ocrSetupLock) {
+    val root = File(context.noBackupFilesDir, "versara-image-ocr")
+    val data = File(root, "tessdata/eng.traineddata")
+    if (!data.isFile || data.length() == 0L) {
+      require(data.parentFile!!.isDirectory || data.parentFile!!.mkdirs()) { "Could not prepare offline text recognition." }
+      val partial = File.createTempFile("eng-", ".partial", data.parentFile)
+      try {
+        context.assets.open("tessdata/eng.traineddata").use { source -> partial.outputStream().use { source.copyTo(it) } }
+        require(partial.length() > 0 && partial.renameTo(data)) { "Could not prepare offline text recognition." }
+      } finally { partial.delete() }
+    }
+    root
+  }
+
+  /** Tesseract's Java iterator exposes line bounds; its hOCR supplies baseline slope. */
+  private fun lineAngles(hocr: String): Map<String, Double> {
+    val angles = HashMap<String, Double>()
+    for (tag in lineTag.findAll(hocr)) {
+      val attributes = tag.groupValues[1]
+      if (!lineClass.containsMatchIn(attributes)) continue
+      val box = lineBounds.find(attributes) ?: continue
+      val slope = lineSlope.find(attributes)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+      if (slope.isFinite()) angles[box.groupValues.drop(1).joinToString(",")] = Math.toDegrees(atan(slope))
+      if (angles.size >= MAX_LINES) break
+    }
+    return angles
+  }
+
+  fun recognize(context: Context, uri: String, request: Recognition): Map<String, Any> {
+    checkRecognition(request)
     val bitmap = ImageProcessing.decode(context, Uri.parse(uri), ANALYSIS_SIZE)
-    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    var recognizer: TessBaseAPI? = null
     try {
-      val result = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)))
+      val engine = TessBaseAPI { _ ->
+        if (request.cancelled.get() || Thread.currentThread().isInterrupted) synchronized(recognitionLock) { request.engine?.stop() }
+      }
+      recognizer = engine
+      require(engine.init(modelDirectory(context).path, "eng", TessBaseAPI.OEM_LSTM_ONLY)) {
+        "Offline text recognition is unavailable. Reinstall the app with its bundled English model."
+      }
+      synchronized(recognitionLock) { checkRecognition(request); request.engine = engine }
+      engine.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+      engine.setImage(bitmap)
+      checkRecognition(request)
+      val angles = lineAngles(engine.getHOCRText(0) ?: "")
+      checkRecognition(request)
       val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
       val lines = ArrayList<Map<String, Any>>()
-      for (block in result.textBlocks) for (line in block.lines) {
-        if (lines.size >= MAX_LINES) break
-        val box = line.boundingBox ?: continue
-        if (box.width() < 2 || box.height() < 2 || line.text.isBlank()) continue
-        val sample = sample(bitmap, box.left, box.top, box.right, box.bottom)
-        lines += mapOf(
-          "id" to lines.size, "text" to line.text,
-          "x" to box.left / w.toDouble(), "y" to box.top / h.toDouble(), "width" to box.width() / w.toDouble(), "height" to box.height() / h.toDouble(),
-          "angle" to line.angle.toDouble(),
-          "color" to (sample.text and 0xFFFFFF), "background" to (sample.background and 0xFFFFFF),
-          "backgroundLeft" to (sample.left and 0xFFFFFF), "backgroundRight" to (sample.right and 0xFFFFFF),
-        )
-      }
+      val iterator = engine.resultIterator
+      if (iterator != null) try {
+        val level = TessBaseAPI.PageIteratorLevel.RIL_TEXTLINE
+        iterator.begin()
+        do {
+          checkRecognition(request)
+          val text = iterator.getUTF8Text(level)?.trim().orEmpty()
+          val raw = iterator.getBoundingBox(level) ?: continue
+          if (raw.size < 4 || text.isBlank()) continue
+          val box = Rect(raw[0].coerceIn(0, bitmap.width), raw[1].coerceIn(0, bitmap.height), raw[2].coerceIn(0, bitmap.width), raw[3].coerceIn(0, bitmap.height))
+          if (box.width() < 2 || box.height() < 2) continue
+          val sample = sample(bitmap, box.left, box.top, box.right, box.bottom)
+          lines += mapOf(
+            "id" to lines.size, "text" to text,
+            "x" to box.left / w.toDouble(), "y" to box.top / h.toDouble(), "width" to box.width() / w.toDouble(), "height" to box.height() / h.toDouble(),
+            "angle" to (angles[raw.take(4).joinToString(",")] ?: 0.0),
+            "color" to (sample.text and 0xFFFFFF), "background" to (sample.background and 0xFFFFFF),
+            "backgroundLeft" to (sample.left and 0xFFFFFF), "backgroundRight" to (sample.right and 0xFFFFFF),
+          )
+        } while (lines.size < MAX_LINES && iterator.next(level))
+      } finally { iterator.delete() }
       return mapOf("width" to bitmap.width, "height" to bitmap.height, "lines" to lines)
     } finally {
-      recognizer.close()
+      synchronized(recognitionLock) { request.engine = null }
+      recognizer?.recycle()
       bitmap.recycle()
     }
   }
@@ -122,9 +213,10 @@ internal object ImageText {
     require(!target.exists()) { "Destination already exists." }
     val preview = options.optBoolean("preview", false)
     val limit = options.optInt("maxSize", if (ImageProcessing.lowMemory(context)) 3072 else 4096).coerceIn(256, 4096)
-    val decoded = ImageProcessing.decode(context, Uri.parse(options.getString("uri")), limit)
+    val source = Uri.parse(options.getString("uri"))
+    val decoded = if (preview) ImageProcessing.decode(context, source, limit) else ImageProcessing.decodeExport(context, source)
     val bitmap = if (decoded.isMutable && decoded.config == Bitmap.Config.ARGB_8888) decoded
-    else decoded.copy(Bitmap.Config.ARGB_8888, true).also { decoded.recycle() }
+    else try { requireNotNull(decoded.copy(Bitmap.Config.ARGB_8888, true)) { "Could not prepare the image for editing." } } finally { decoded.recycle() }
     try {
       val canvas = Canvas(bitmap)
       val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
@@ -165,8 +257,15 @@ internal object ImageText {
         else -> Bitmap.CompressFormat.JPEG to "image/jpeg"
       }
       target.parentFile?.mkdirs()
-      try { target.outputStream().use { require(bitmap.compress(compress, quality, it)) { "Could not encode the image." } } }
+      val encoded = if (compress == Bitmap.CompressFormat.JPEG && bitmap.hasAlpha()) {
+        Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also { opaque ->
+          Canvas(opaque).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }
+          opaque.setHasAlpha(false)
+        }
+      } else bitmap
+      try { target.outputStream().use { require(encoded.compress(compress, quality, it)) { "Could not encode the image." } } }
       catch (error: Throwable) { target.delete(); throw error }
+      finally { if (encoded !== bitmap) encoded.recycle() }
       return mapOf("uri" to destination.toString(), "width" to bitmap.width, "height" to bitmap.height, "size" to target.length(), "mimeType" to mime)
     } finally {
       bitmap.recycle()

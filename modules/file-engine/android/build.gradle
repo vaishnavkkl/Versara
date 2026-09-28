@@ -18,6 +18,7 @@ android {
 }
 
 dependencies {
-  // Bundled Latin model: runs offline without Google Play services or downloads.
-  implementation 'com.google.mlkit:text-recognition:16.0.1'
+  // Reuse the PDF engine's FOSS recognizer and packaged tessdata/eng.traineddata.
+  // Recognition never downloads models or initializes Google SDK telemetry.
+  implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
 }

@@ -7,6 +7,15 @@ export type RecognizedTextLine = {
 };
 export type RecognizedImageText = { width: number; height: number; lines: RecognizedTextLine[] };
 
+export type ImagePrivacyCategory = 'personal' | 'financial' | 'identity' | 'authentication' | 'location' | 'other';
+/** Heuristic suggestions, not a guarantee that all private information was detected. */
+export type ImagePrivacyFinding = {
+  id: string; category: ImagePrivacyCategory; kind: string; text: string; confidence: number;
+  /** Expanded full-line rectangle, normalized to the upright source image. */
+  x: number; y: number; width: number; height: number;
+};
+export type ImagePrivacyScan = { width: number; height: number; findings: ImagePrivacyFinding[]; truncated: boolean };
+
 export type FileAccessResult = {
   status: 'granted' | 'denied' | 'undetermined';
   granted: boolean;
@@ -45,7 +54,15 @@ export type DirectoryListing = { path: string; parent: string | null; items: Exp
 
 declare class FileEngine extends NativeModule {
   readonly nativeImageToolsVersion?: number;
+  readonly nativeImageColorVersion?: number;
+  readonly nativeStrokePatternsVersion?: number;
+  readonly nativeMarkupEditingVersion?: number;
   readonly nativeImageResizeVersion?: number;
+  readonly nativeImageHistoryVersion?: number;
+  readonly nativeImagePrivacyVersion?: number;
+  readonly nativeSignatureImageVersion?: number;
+  scanImagePrivacy(id: string, uri: string): Promise<ImagePrivacyScan>;
+  cancelPrivacyScan(id: string): void;
   processImage(id: string, request: string): Promise<Record<string, unknown>>;
   cancelImageJob(id: string): void;
   readonly nativeExplorerVersion?: number;
@@ -59,6 +76,7 @@ declare class FileEngine extends NativeModule {
   readonly nativeImageEditorVersion?: number;
   readonly nativeImageTextVersion?: number;
   recognizeImageText(uri: string): Promise<RecognizedImageText>;
+  cancelImageTextRecognition?(uri: string): void;
   renderImageText(options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }>;
   editImage(options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }>;
   readonly nativeDeviceSaveVersion?: number;

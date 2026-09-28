@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -18,6 +19,10 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** Colour and geometry settings shared by the live editor preview and the export. */
 internal data class ImageEdits(
@@ -31,6 +36,8 @@ internal data class ImageEdits(
   val filter: String = "none",
 ) {
   val identityColor get() = brightness == 0f && contrast == 1f && saturation == 1f && warmth == 0f && filter == "none"
+  fun sameColorAs(other: ImageEdits) = brightness == other.brightness && contrast == other.contrast &&
+    saturation == other.saturation && warmth == other.warmth && filter == other.filter
 
   companion object {
     fun from(json: JSONObject) = ImageEdits(
@@ -48,6 +55,41 @@ internal data class ImageEdits(
 
 internal object ImageProcessing {
   fun lowMemory(context: Context) = (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).isLowRamDevice
+
+  /** Header-only source dimensions, in the same oriented coordinates used by the canvas. */
+  fun sourceSize(context: Context, uri: Uri): Pair<Int, Int> {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    open(context, uri).use { BitmapFactory.decodeStream(it, null, bounds) }
+    require(bounds.outWidth > 0 && bounds.outHeight > 0) { "This image format cannot be read on your device." }
+    val orientation = try { open(context, uri).use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1) } } catch (_: Exception) { 1 }
+    return if (orientation in 5..8) bounds.outHeight to bounds.outWidth else bounds.outWidth to bounds.outHeight
+  }
+
+  /** Reserve for the decoded source, destination, filter scratch buffers and encoder work. */
+  fun exportPixelBudget(context: Context): Long {
+    val runtime = Runtime.getRuntime()
+    val heapAvailable = (runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())).coerceAtLeast(0)
+    val memory = ActivityManager.MemoryInfo()
+    (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memory)
+    val workingBytes = minOf(heapAvailable * 7 / 10, memory.availMem / 6, (if (lowMemory(context)) 96L else 256L) * 1024 * 1024)
+    return (workingBytes / 20).coerceAtMost(32_000_000L)
+  }
+
+  fun requireExportSize(width: Int, height: Int, budget: Long) {
+    require(width in 1..32768 && height in 1..32768 && width.toLong() * height <= budget) {
+      "This image is too large to process at full resolution with the memory currently available. Use Resize to choose smaller dimensions, or close other editors and try again. The original has not been changed."
+    }
+  }
+
+  /** No implicit size cap: a smaller decode is allowed only for an explicit resize request. */
+  fun decodeExport(context: Context, uri: Uri, target: Int? = null, budget: Long = exportPixelBudget(context)): Bitmap {
+    val (width, height) = sourceSize(context, uri)
+    val longest = max(width, height)
+    val side = target?.coerceIn(1, longest) ?: longest
+    val ratio = side.toDouble() / longest
+    requireExportSize(max(1, ceil(width * ratio).toInt()), max(1, ceil(height * ratio).toInt()), budget)
+    return decode(context, uri, side)
+  }
 
   /** Decodes with EXIF orientation applied, never larger than [target] on the longest side. */
   fun decode(context: Context, uri: Uri, target: Int): Bitmap {
@@ -67,18 +109,23 @@ internal object ImageProcessing {
     val decoded = open(context, uri).use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
       ?: throw IllegalArgumentException("Unsupported image")
     val orientation = try { open(context, uri).use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
-    val degrees = when (orientation) {
-      ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-      ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-      ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-      else -> 0f
+    val orientationMatrix = Matrix().apply {
+      when (orientation) {
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
+        ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+        ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(270f); postScale(-1f, 1f) }
+        ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
+      }
     }
     val scaled = if (max(decoded.width, decoded.height) > target) {
       val ratio = target.toFloat() / max(decoded.width, decoded.height)
       Bitmap.createScaledBitmap(decoded, max(1, (decoded.width * ratio).toInt()), max(1, (decoded.height * ratio).toInt()), true).also { if (it != decoded) decoded.recycle() }
     } else decoded
-    if (degrees == 0f) return scaled
-    val rotated = Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, Matrix().apply { postRotate(degrees) }, true)
+    if (orientationMatrix.isIdentity) return scaled
+    val rotated = Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, orientationMatrix, true)
     if (rotated != scaled) scaled.recycle()
     return rotated
   }
@@ -135,15 +182,29 @@ internal object ImageProcessing {
     val destination = Uri.parse(options.getString("outputUri"))
     require(destination.scheme == "file") { "Destination must be an app file URI." }
     val target = File(requireNotNull(destination.path)).canonicalFile
-    require(target.path.startsWith(context.filesDir.canonicalPath + "/")) { "Destination must stay inside app documents." }
+    val roots = listOf(context.filesDir.canonicalPath, context.cacheDir.canonicalPath)
+    require(roots.any { target.path.startsWith(it + "/") }) { "Destination must stay inside the app." }
     require(!target.exists()) { "Destination already exists." }
     val edits = ImageEdits.from(options.optJSONObject("edits") ?: JSONObject())
     val scale = options.optDouble("scale", 1.0).toFloat().coerceIn(0.05f, 1f)
     val format = options.optString("format", "jpeg")
     val quality = options.optInt("quality", 90).coerceIn(10, 100)
-    val limit = if (lowMemory(context)) 3072 else 4096
-
-    var bitmap = decode(context, source, limit)
+    require(format in listOf("jpeg", "png", "webp")) { "Choose JPG, PNG or WebP on this device." }
+    val budget = exportPixelBudget(context)
+    val (sourceWidth, sourceHeight) = sourceSize(context, source)
+    val angle = Math.toRadians(edits.rotation.toDouble())
+    val rotatedWidth = sourceWidth * abs(cos(angle)) + sourceHeight * abs(sin(angle))
+    val rotatedHeight = sourceWidth * abs(sin(angle)) + sourceHeight * abs(cos(angle))
+    val crop = options.optJSONObject("crop")
+    val cropWidth = (crop?.optDouble("width", 1.0) ?: 1.0).coerceIn(0.000001, 1.0)
+    val cropHeight = (crop?.optDouble("height", 1.0) ?: 1.0).coerceIn(0.000001, 1.0)
+    val explicitSize = options.has("width") || options.has("height") || scale < 0.999f
+    val desiredWidth = options.optInt("width", max(1, (rotatedWidth * cropWidth * scale).roundToInt()))
+    val desiredHeight = options.optInt("height", max(1, (rotatedHeight * cropHeight * scale).roundToInt()))
+    requireExportSize(desiredWidth, desiredHeight, budget)
+    val decodeScale = if (explicitSize) min(1.0, max(desiredWidth / (rotatedWidth * cropWidth), desiredHeight / (rotatedHeight * cropHeight))) else 1.0
+    requireExportSize(max(1, ceil(rotatedWidth * decodeScale).toInt()), max(1, ceil(rotatedHeight * decodeScale).toInt()), budget)
+    var bitmap = decodeExport(context, source, if (explicitSize) max(1, ceil(max(sourceWidth, sourceHeight) * decodeScale).toInt()) else null, budget)
     try {
       if (edits.rotation != 0 || edits.flipH || edits.flipV) {
         val turned = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, geometry(bitmap.width, bitmap.height, edits), true)
@@ -159,12 +220,9 @@ internal object ImageProcessing {
           if (cropped != bitmap) { bitmap.recycle(); bitmap = cropped }
         }
       }
-      val outputWidth = options.optInt("width", max(1, (bitmap.width * scale).roundToInt()))
-      val outputHeight = options.optInt("height", max(1, (bitmap.height * scale).roundToInt()))
-      if (options.has("width") || options.has("height")) {
-        val budget = if (lowMemory(context)) 3_000_000 else 6_000_000
-        require(outputWidth in 1..8192 && outputHeight in 1..8192 && outputWidth.toLong() * outputHeight <= budget) { "Choose smaller output dimensions for this device." }
-      }
+      val outputWidth = if (explicitSize) desiredWidth else bitmap.width
+      val outputHeight = if (explicitSize) desiredHeight else bitmap.height
+      requireExportSize(outputWidth, outputHeight, budget)
       if (outputWidth != bitmap.width || outputHeight != bitmap.height) {
         val resized = Bitmap.createScaledBitmap(bitmap, outputWidth, outputHeight, true)
         if (resized != bitmap) { bitmap.recycle(); bitmap = resized }
@@ -174,15 +232,22 @@ internal object ImageProcessing {
         Canvas(output).drawBitmap(bitmap, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(colorMatrix(edits)) })
         bitmap.recycle(); bitmap = output
       }
+      if (format == "jpeg" && bitmap.hasAlpha()) {
+        val opaque = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+        Canvas(opaque).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }
+        bitmap.recycle(); bitmap = opaque
+      }
       val (compress, mime) = when (format) {
         "png" -> Bitmap.CompressFormat.PNG to "image/png"
         "webp" -> (if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP) to "image/webp"
         else -> Bitmap.CompressFormat.JPEG to "image/jpeg"
       }
       target.parentFile?.mkdirs()
+      val temporary = File.createTempFile("versara-image-", ".partial", target.parentFile)
       try {
-        target.outputStream().use { require(bitmap.compress(compress, quality, it)) { "Could not encode the image." } }
-      } catch (error: Throwable) { target.delete(); throw error }
+        temporary.outputStream().use { require(bitmap.compress(compress, quality, it)) { "Could not encode the image." } }
+        require(!target.exists() && temporary.renameTo(target)) { "Could not save the image. Choose a new output name." }
+      } finally { temporary.delete() }
       return mapOf("uri" to destination.toString(), "width" to bitmap.width, "height" to bitmap.height, "size" to target.length(), "mimeType" to mime)
     } finally {
       bitmap.recycle()

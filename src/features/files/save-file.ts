@@ -7,6 +7,7 @@ import { FileEngine, type SavedDeviceFile } from '../../../modules/file-engine';
 import { findEditedFile, recordEditedFile, type EditedFile } from './edited-files';
 import { invalidateThumbnails } from './thumbnail-cache';
 import { documentRoot, rememberFile, type FileKind, type RecentFile } from './recent-files';
+import { prepareAppReplacement, recoverAppSaves, serializeSave } from './save-recovery';
 
 export type SaveMode = 'replace' | 'new';
 type Origin = { uri: string; name: string };
@@ -70,6 +71,7 @@ export async function askSaveOptions(originName: string, mimeType: string, sugge
 /** Writes to the shared device folder (Downloads/Pictures on Android, Files on iOS). */
 export async function saveToDevice(uri: string, name: string, mimeType: string, replaceUri = ''): Promise<SavedDeviceFile> {
   if (!FileEngine?.nativeDeviceSaveVersion) throw new Error('Install a new development build to save files to your device.');
+  if (replaceUri && FileEngine.nativeDeviceSaveVersion < 2) throw new Error('Update the app build before replacing a saved device file, or choose Save as new.');
   return FileEngine.saveToDevice(uri, name, mimeType, replaceUri);
 }
 
@@ -90,25 +92,44 @@ export async function savePdfResult(result: { uri: string; name: string }, origi
  * and the device copy saved from it before; `new` keeps both and adds a new file.
  */
 export async function saveEditedOutput(options: { output: string; mimeType: string; kind: FileKind; mode: SaveMode; origin?: Origin | null; name: string }): Promise<{ file: EditedFile; device: SavedDeviceFile; recent: RecentFile | null }> {
+  return serializeSave(() => saveEditedOutputSerial(options));
+}
+
+async function saveEditedOutputSerial(options: { output: string; mimeType: string; kind: FileKind; mode: SaveMode; origin?: Origin | null; name: string }): Promise<{ file: EditedFile; device: SavedDeviceFile; recent: RecentFile | null }> {
+  await recoverAppSaves();
   const { output, mimeType, kind, mode, origin } = options;
   let uri = output;
   let name = options.name;
   let previous: EditedFile | null = null;
+  let replaceDeviceUri = '';
+  let replacement: Awaited<ReturnType<typeof prepareAppReplacement>> | undefined;
   if (mode === 'replace' && origin) {
     const outputExtension = extensionOf(output);
     const sameFormat = sameExtension(extensionOf(origin.uri), outputExtension);
     name = sameFormat ? origin.name : origin.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '') + outputExtension;
     previous = await findEditedFile(origin.uri).catch(() => null);
+    replaceDeviceUri = sameFormat ? previous?.deviceUri ?? '' : '';
     if (sameFormat && origin.uri.startsWith(documentRoot()) && origin.uri !== output) {
-      const target = new File(origin.uri);
-      await new File(output).move(target, { overwrite: true });
+      replacement = await prepareAppReplacement(origin.uri, output);
       uri = origin.uri;
-      invalidateThumbnails(uri);
     }
   }
-  const device = await saveToDevice(uri, name, mimeType, previous?.deviceUri ?? '');
-  const size = new File(uri).size;
-  const recent = uri.startsWith(documentRoot()) ? await rememberFile({ uri, name, mimeType, size }, kind).catch(() => null) : null;
-  const file = await recordEditedFile({ id: previous?.id, uri, name, kind, mimeType, size, deviceUri: device.uri, location: device.location });
-  return { file, device, recent };
+  let device: SavedDeviceFile | undefined;
+  try {
+    // Publishing may fail (permission, full storage, removed provider). Keep the
+    // app original untouched until the native saver has verified its device copy.
+    device = await saveToDevice(output, name, mimeType, replaceDeviceUri);
+    const size = new File(output).size;
+    const record = { id: previous?.id, uri, name, kind, mimeType, size, deviceUri: device.uri, location: device.location };
+    if (replacement) { await replacement.replace(record); invalidateThumbnails(uri); }
+    const file = await recordEditedFile(record);
+    const recent = uri.startsWith(documentRoot()) ? await rememberFile({ uri, name, mimeType, size }, kind) : null;
+    await replacement?.complete();
+    if (replacement) try { const generated = new File(output); if (generated.exists) generated.delete(); } catch { /* The successful saved copies remain authoritative. */ }
+    return { file, device, recent };
+  } catch (cause) {
+    await replacement?.abandon();
+    if (device) throw new Error(`${cause instanceof Error ? cause.message : 'Could not finish the save.'} The device copy was saved to ${device.location}. Your generated output and any recovery copy have been kept; try saving again to finish the library update.`);
+    throw cause;
+  }
 }

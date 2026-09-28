@@ -60,6 +60,41 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   var requestedZoom = 1f
   var zoomRevision = 0
   var dark = true
+  private var searchPage = -1
+  private var searchRects = emptyList<RectF>()
+  private var searchValue = ""
+  private var searchRevealPending = false
+  fun setSearchHighlights(value: String) {
+    if (value == searchValue) return
+    searchValue = value
+    val data = runCatching { JSONObject(value) }.getOrNull()
+    searchPage = data?.optInt("page", -1) ?: -1
+    val rects = data?.optJSONArray("rects")
+    searchRects = (0 until min(32, rects?.length() ?: 0)).mapNotNull { index ->
+      val r = rects?.optJSONArray(index) ?: return@mapNotNull null
+      if (r.length() != 4) return@mapNotNull null
+      val values = (0..3).map { r.optDouble(it, Double.NaN).toFloat() }
+      if (values.any { !it.isFinite() }) null else RectF(values[0], values[1], values[2], values[3])
+    }
+    searchRevealPending = searchPage >= 0 && searchRects.isNotEmpty()
+    updateSearchHighlights()
+  }
+  private fun updateSearchHighlights() {
+    image.searchRects = if (image.pageIndex == searchPage) searchRects else emptyList()
+    image.invalidate()
+    for (i in 0 until list.childCount) (list.getChildAt(i) as? ZoomImageView)?.let { row ->
+      row.searchRects = if (row.pageIndex == searchPage) searchRects else emptyList(); row.invalidate()
+    }
+  }
+  private fun revealSearch() {
+    if (disposed || !searchRevealPending || searchPage !in 0 until pageCount) return
+    if (vertical) {
+      val ratio = ratios[searchPage] ?: return
+      val offset = (height / 3f - searchRects.first().centerY() * width * ratio).toInt().coerceAtMost(0)
+      list.setSelectionFromTop(searchPage, offset)
+    }
+    searchRevealPending = false
+  }
 
   private val worker = Executors.newSingleThreadExecutor()
   private val main = Handler(Looper.getMainLooper())
@@ -127,6 +162,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     override fun getItemId(position: Int) = position.toLong()
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
       val row = (convertView as? ZoomImageView) ?: ZoomImageView(context)
+      row.pageIndex = position
+      row.searchRects = if (position == searchPage) searchRects else emptyList()
       val binding = "${documentVersion.get()}:$position:$width"
       if (row.binding == binding) return row
       row.clearSelection()
@@ -265,6 +302,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       image.setZoom(requestedZoom)
       if (vertical) (list.getChildAt(0) as? ZoomImageView)?.setZoom(requestedZoom)
     }
+    revealSearch()
   }
 
   private fun openDocument(uriString: String) {
@@ -361,6 +399,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
             result.recycle()
           } else {
             image.setImageBitmap(result)
+            image.pageIndex = index
+            updateSearchHighlights()
             image.setZoom(requestedZoom)
             image.contentDescription = "PDF page ${index + 1} of $count. Pinch to zoom, drag to pan."
             displayedBitmap = result
@@ -416,6 +456,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
               row.setZoom(1f)
             }
             if (index == list.firstVisiblePosition) onPageChange(mapOf("page" to index, "pageCount" to pageCount))
+            if (index == searchPage) revealSearch()
           }
         }
       } catch (_: OutOfMemoryError) {
@@ -497,6 +538,9 @@ private data class PdfGlyph(val text: String, val rect: RectF)
 
 // Zoom and pan stay entirely in Android's UI toolkit; no per-frame JS events.
 private class ZoomImageView(context: Context) : ImageView(context) {
+  var pageIndex = -1
+  var searchRects = emptyList<RectF>()
+  private val searchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x665B6FFF }
   var glyphs = emptyList<PdfGlyph>()
   var onRequestText: ((Float, Float) -> Unit)? = null
   private var selectionStart = -1; private var selectionEnd = -1
@@ -537,6 +581,7 @@ private class ZoomImageView(context: Context) : ImageView(context) {
   }
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
+    for (rect in searchRects) canvas.drawRect(displayRect(rect), searchPaint)
     if (selectionStart < 0 || selectionEnd < 0) return
     for (i in min(selectionStart, selectionEnd)..max(selectionStart, selectionEnd)) canvas.drawRect(displayRect(glyphs[i].rect), selectionPaint)
     val a = displayRect(glyphs[selectionStart].rect); val b = displayRect(glyphs[selectionEnd].rect); val radius = 7 * resources.displayMetrics.density

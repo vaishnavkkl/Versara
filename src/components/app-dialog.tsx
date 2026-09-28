@@ -85,11 +85,12 @@ function DialogContent({ dialog }: { dialog: Dialog }) {
           <UniversalIcon ios={dialog.icon.ios} android={dialog.icon.android} size={26} color={colors.label} />
         </View>}
         <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>{dialog.title}</ThemedText>
-        {!!dialog.message && <ThemedText selectable style={[styles.body, { color: colors.secondaryLabel }]}>{dialog.message}</ThemedText>}
+        {!!dialog.message && <ThemedText selectable selectionColor={`${colors.filesInk}44`} style={[styles.body, { color: colors.secondaryLabel }]}>{dialog.message}</ThemedText>}
         {dialog.input && <TextInput accessibilityLabel="File name" value={value} onChangeText={text => { setValue(text); setError(''); }}
           autoFocus selectTextOnFocus autoCorrect={false} autoCapitalize="none" maxLength={100} returnKeyType="done"
+          selectionColor={`${colors.filesInk}44`} cursorColor={colors.label} selectionHandleColor={colors.filesInk} underlineColorAndroid="transparent"
           onSubmitEditing={() => choose(dialog.actions[dialog.actions.length - 1])}
-          style={[styles.input, { color: colors.label, borderColor: colors.separator }]} />}
+          style={[styles.input, { color: colors.label, borderColor: colors.separator, backgroundColor: colors.fieldSurface }]} />}
         {!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}
         <View style={[styles.actions, stacked && styles.stacked]}>
           {dialog.actions.map((action, index) => {

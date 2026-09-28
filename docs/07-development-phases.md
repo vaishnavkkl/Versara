@@ -14,7 +14,7 @@ The remaining image catalog now has native Android/iOS implementations, includin
 Reader with native selection/copy; edit/add/remove text; OCR; page organization; compression/export; highlight, brush, shapes, signatures and watermark; configurable page numbering with preview; protection, metadata, flatten and repair. Free open-source native processing on Android and iOS, offline.
 
 ## Phase 4: Screenshot privacy
-On-device OCR, reviewable entity detection and permanent image redaction. Keep incomplete controls visibly unavailable.
+On-device OCR, reviewable rule-based text suggestions, manual opaque covers and metadata-free PNG export are implemented. See [Privacy scope and limitations](05-privacy-network-device.md). Face/QR recognition and arbitrary semantic entity recognition remain outside the current detector; manual covers are available. Android/iOS runtime verification and device profiling remain release work.
 
 ## Release quality work
 - Keep input and Done/Apply actions visible with the keyboard; preserve preview space.

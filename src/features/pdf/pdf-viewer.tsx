@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Keyboard, Platform, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { AppLoader } from '@/components/app-loader';
 import { router, Stack, usePathname } from 'expo-router';
-import { PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';
+import { PdfEngine, PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { showDialog } from '@/components/app-dialog';
@@ -18,6 +18,8 @@ import { saveToDevice } from '../files/save-file';
 import { createPdfToolForDocument, discardPdfToolSession, implementedPdfTools, type PdfTool } from './pdf-tool-session';
 import { PDF_SECTIONS } from '@/constants/pdf-methods';
 import { usePdfScreenActive } from './use-pdf-screen-active';
+import { usePdfToolLayout } from './pdf-tool-layout';
+import { usePdfSearch } from './use-pdf-search';
 
 type Document = { uri: string; name: string };
 
@@ -53,10 +55,19 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   const [loading, setLoading] = useState(!!initialDocument);
   const [busy, setBusy] = useState(false);
   const [openingEditor, setOpeningEditor] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchIndex, setSearchIndex] = useState(0);
+  const searchAvailable = !!PdfEngine?.nativeReaderSearchVersion;
+  const search = usePdfSearch(document?.uri, searchQuery, screenActive && searchOpen && !openingEditor && !loading);
+  const searchMatch = search.query === searchQuery.trim() ? search.matches[searchIndex] : undefined;
   const [busyLabel, setBusyLabel] = useState('Preparing PDF...');
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
-  const [landscapeRequested, setLandscapeRequested] = useState(false);
+  const toolLayout = usePdfToolLayout();
+  const [localLandscape, setLocalLandscape] = useState(false);
+  const landscapeRequested = toolLayout?.landscape ?? localLandscape;
+  const setLandscapeRequested = toolLayout?.setLandscape ?? setLocalLandscape;
   const [previousLandscape, setPreviousLandscape] = useState(landscape);
   if (previousLandscape !== landscape) {
     setPreviousLandscape(landscape);
@@ -75,6 +86,17 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   }
   useEffect(() => { if (document) void rememberFile(document, 'pdf').catch(() => { /* Temporary tool inputs are not kept in Recents. */ }); }, [document]);
   useEffect(() => { onFocusChange?.(focused); }, [focused, onFocusChange]);
+  const [previousSearchMatches, setPreviousSearchMatches] = useState(search.matches);
+  if (previousSearchMatches !== search.matches) {
+    setPreviousSearchMatches(search.matches);
+    setSearchIndex(0);
+    const first = search.matches[0];
+    if (first) {
+      setPage(first.page); setPageInput(String(first.page + 1));
+      setPageRequest(current => ({ value: first.page, revision: current.revision + 1 }));
+      setZoomRequest(current => ({ value: 1, revision: current.revision + 1 }));
+    }
+  }
 
   useEffect(() => {
     mounted.current = true;
@@ -171,6 +193,14 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
     if (target !== page) { setPage(target); setPageRequest(current => ({ value: target, revision: current.revision + 1 })); requestZoom(1); }
     setPageInput(String(target + 1));
   }
+  function goToSearchResult(direction: number) {
+    if (!search.matches.length) return;
+    const index = (searchIndex + direction + search.matches.length) % search.matches.length;
+    const match = search.matches[index];
+    setSearchIndex(index); setPage(match.page); setPageInput(String(match.page + 1));
+    setPageRequest(current => ({ value: match.page, revision: current.revision + 1 }));
+    requestZoom(1); Keyboard.dismiss();
+  }
 
   function requestZoom(value: number) {
     const next = Math.max(1, Math.min(5, value));
@@ -180,6 +210,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   function performOption(id: string) {
     if (actionLock.current) return;
     Keyboard.dismiss();
+    if (id === 'search') { if (searchAvailable) { setSearchOpen(true); setFocused(false); } return; }
     if (id === 'previous') { goToPage(page - 1); return; }
     if (id === 'next') { goToPage(page + 1); return; }
     if (id === 'orientation') { setLandscapeRequested(value => !value); return; }
@@ -218,6 +249,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
 
   const ready = !!document && pageCount > 0 && !error;
   const tools: RailTool[] = [
+    ...(searchAvailable ? [{ id: 'search', title: 'Search PDF', ios: 'doc.text.magnifyingglass' as const, android: 'search' as const }] : []),
     ...(landscape ? [
       { id: 'previous', title: 'Previous', ios: 'chevron.up' as const, android: 'keyboard-arrow-up' as const },
       { id: 'next', title: 'Next', ios: 'chevron.down' as const, android: 'keyboard-arrow-down' as const },
@@ -235,7 +267,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   const submitPage = () => goToPage((Number.parseInt(pageInput, 10) || 1) - 1);
   return (
     <View style={styles.screen}>
-      <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />
+      {!toolLayout && <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />}
       {!isPdfEngineAvailable ? (
         <View style={styles.empty}>
           <UniversalIcon ios="doc.richtext" android="picture-as-pdf" size={40} color={colors.systemBlue} />
@@ -245,12 +277,25 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
       ) : (
         <>
           {actionError && <ThemedText accessibilityRole="alert" style={[styles.message, { color: colors.label, backgroundColor: colors.accentSurface }]}>{actionError}</ThemedText>}
+          {ready && searchOpen && !focused && <View style={[styles.searchPanel, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]}>
+            <View style={styles.searchRow}>
+              <UniversalIcon ios="magnifyingglass" android="search" size={20} color={colors.systemBlue} />
+              <TextInput accessibilityLabel="Search text in PDF" autoFocus value={searchQuery} onChangeText={setSearchQuery} maxLength={128} returnKeyType="search" autoCapitalize="none" autoCorrect={false} onSubmitEditing={Keyboard.dismiss} placeholder="Find in this PDF" placeholderTextColor={colors.secondaryLabel} style={[styles.searchInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+              <Pressable accessibilityRole="button" accessibilityLabel="Close PDF search" onPress={() => { setSearchOpen(false); setSearchQuery(''); Keyboard.dismiss(); }} style={styles.iconButton}><UniversalIcon ios="xmark" android="close" size={22} color={colors.systemBlue} /></Pressable>
+            </View>
+            <View style={styles.searchRow}>
+              <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: search.error ? colors.destructive : colors.secondaryLabel }]}>{search.busy ? 'Searching on your device...' : search.error || (!searchQuery.trim() ? 'Search selectable PDF text' : search.matches.length ? `${searchIndex + 1} of ${search.matches.length}${search.truncated ? '+ · narrow your search' : ''}` : 'No matches. Scanned pages may need OCR.')}</ThemedText>
+              <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(-1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><UniversalIcon ios="chevron.up" android="keyboard-arrow-up" size={24} color={colors.systemBlue} /></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><UniversalIcon ios="chevron.down" android="keyboard-arrow-down" size={24} color={colors.systemBlue} /></Pressable>
+            </View>
+          </View>}
           {ready && !focused && !landscape && <View style={[styles.pageBar, { borderColor: colors.separator }]}>
             <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 0 || loading} onPress={() => goToPage(page - 1)} style={[styles.iconButton, (page === 0 || loading) && styles.disabled]}><UniversalIcon ios="chevron.left" android="chevron-left" size={22} color={colors.systemBlue} /></Pressable>
             <TextInput accessibilityLabel="Page number" value={pageInput} onChangeText={setPageInput} keyboardType="number-pad" returnKeyType="go" selectTextOnFocus onSubmitEditing={submitPage} onEndEditing={submitPage} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
             <ThemedText style={styles.buttonText}>of {pageCount}</ThemedText>
             <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={page >= pageCount - 1 || loading} onPress={() => goToPage(page + 1)} style={[styles.iconButton, (page >= pageCount - 1 || loading) && styles.disabled]}><UniversalIcon ios="chevron.right" android="chevron-right" size={22} color={colors.systemBlue} /></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Switch to landscape" disabled={busy || loading} onPress={() => performOption('orientation')} style={styles.iconButton}><UniversalIcon ios="rectangle" android="screen-rotation" size={22} color={colors.systemBlue} /></Pressable>
+            {searchAvailable && <Pressable accessibilityRole="button" accessibilityLabel="Search PDF" disabled={busy || loading} onPress={() => performOption('search')} style={styles.iconButton}><UniversalIcon ios="magnifyingglass" android="search" size={22} color={colors.systemBlue} /></Pressable>}
           </View>}
           {ready && !focused && landscape && <Pressable accessibilityRole="button" accessibilityLabel="Switch to portrait" onPress={() => performOption('orientation')} style={[styles.landscapeExit, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="rectangle.portrait" android="screen-rotation" size={20} color={colors.systemBlue} /></Pressable>}
           <View style={[styles.body2, landscape && styles.row]}>
@@ -266,6 +311,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
               zoom={zoomRequest.value}
               zoomRevision={zoomRequest.revision}
               dark={mode === 'dark'}
+              {...(searchAvailable ? { searchHighlights: searchOpen && searchMatch ? JSON.stringify({ ...searchMatch, result: searchIndex, query: searchQuery.trim() }) : '' } : {})}
               style={styles.nativeView}
               onLoad={({ nativeEvent }) => { setPageCount(nativeEvent.pageCount); setLoading(false); }}
               onPageChange={({ nativeEvent }) => { setPage(nativeEvent.page); setPageInput(String(nativeEvent.page + 1)); setLoading(false); }}
@@ -292,6 +338,10 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  searchPanel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 4 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  searchInput: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, fontSize: 15 },
+  searchStatus: { flex: 1, fontSize: 12 },
   landscapeExit: { position: 'absolute', top: 4, right: 80, zIndex: 2, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   restore: { position: 'absolute', bottom: 16, alignSelf: 'center', minHeight: 48, paddingHorizontal: 16, borderRadius: 24, flexDirection: 'row', alignItems: 'center', gap: 8 },
   buttonText: { ...t.caption },

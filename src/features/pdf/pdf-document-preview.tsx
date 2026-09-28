@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { BackHandler, StyleSheet, View } from 'react-native';
 import { File, FileMode } from 'expo-file-system';
 import { PdfEngine } from '../../../modules/pdf-engine';
@@ -24,12 +24,14 @@ function previewDimensions(image: File) {
 }
 
 /** Borrows the tool's source while it is mounted; owns only preview files and jobs. */
-export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword = '', onClose, embedded = false }: {
-  uri: string; count: number; initialPage?: number; inputPassword?: string; onClose: () => void; embedded?: boolean;
+export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword = '', onClose, embedded = false, toolbarActions, page: controlledPage, onPageChange, rotation = 0, disabled = false }: {
+  uri: string; count: number; initialPage?: number; inputPassword?: string; onClose: () => void; embedded?: boolean; toolbarActions?: ReactNode; page?: number; onPageChange?: (page: number) => void; rotation?: number; disabled?: boolean;
 }) {
   const active = usePdfScreenActive();
   const [directory] = useState(createImportDirectory);
-  const [page, setPage] = useState(Math.max(1, Math.min(count, initialPage)));
+  const [localPage, setLocalPage] = useState(Math.max(1, Math.min(count, initialPage)));
+  const page = Math.max(1, Math.min(count, controlledPage ?? localPage));
+  const changePage = (next: number) => { setLoading(true); setPreview(undefined); setLocalPage(next); onPageChange?.(next); };
   const [preview, setPreview] = useState<PdfPreviewImage>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -78,8 +80,8 @@ export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword 
     return () => { current = false; PdfEngine?.cancelTextEdit(id); };
   }, [uri, page, inputPassword, active, retry, directory]);
   return <View style={styles.screen}>
-    <PdfPreviewToolbar page={page} count={count} disabled={loading} onPageChange={setPage} />
-    {preview ? <PdfPagePreview image={preview} active={active} /> : <PdfPreviewStage hint="Original PDF">
+    <PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>
+    {preview ? <PdfPagePreview image={preview} active={active} rotation={rotation} /> : <PdfPreviewStage hint="Original PDF">
       <View style={styles.empty}>{loading ? <><AppLoader /><ThemedText>Preparing page...</ThemedText></> : <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Retry preview" onPress={() => setRetry(value => value + 1)} /></>}</View>
     </PdfPreviewStage>}
     {!embedded && <PdfPreviewFooter><ThemedText>Original PDF - changes appear in the saved result.</ThemedText><ToolButton title="Back to tool" secondary onPress={onClose} /></PdfPreviewFooter>}

@@ -24,10 +24,22 @@ class FileEngineModule : Module() {
   private val library = DeviceLibrary()
   private val pdfs = PdfDeviceLibrary()
   private val imageTools = ImageTools()
+  private val privacy = ImagePrivacy()
 
   override fun definition() = ModuleDefinition {
     Name("FileEngine")
+    Constant("nativeImagePrivacyVersion") { 1 }
+    Constant("nativeSignatureImageVersion") { 1 }
+    AsyncFunction("scanImagePrivacy") { id: String, uri: String, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) promise.reject("PRIVACY_UNAVAILABLE", "The app is not ready.", null)
+      else privacy.scan(context, id, uri, promise)
+    }
+    Function("cancelPrivacyScan") { id: String -> privacy.cancel(id) }
     Constant("nativeImageToolsVersion") { 1 }
+    Constant("nativeImageColorVersion") { 2 }
+    Constant("nativeStrokePatternsVersion") { 1 }
+    Constant("nativeMarkupEditingVersion") { 1 }
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { id: String, request: String, promise: Promise ->
       val context = appContext.reactContext
@@ -40,14 +52,24 @@ class FileEngineModule : Module() {
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
     Constant("nativeImageEditorVersion") { 1 }
+    Constant("nativeImageHistoryVersion") { 1 }
     Constant("nativeImageTextVersion") { 1 }
+    Function("cancelImageTextRecognition") { uri: String -> ImageText.cancelRecognition(uri); Unit }
     AsyncFunction("recognizeImageText") { uri: String, promise: Promise ->
       val context = appContext.reactContext
       if (context == null) { promise.reject("IMAGE_TEXT_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
-      worker.execute {
-        try { promise.resolve(ImageText.recognize(context, uri)) }
-        catch (_: OutOfMemoryError) { promise.reject("IMAGE_TEXT_MEMORY", "This image is too large to read on this device.", null) }
-        catch (error: Throwable) { promise.reject("IMAGE_TEXT_FAILED", error.message ?: "Could not read text in this image.", error) }
+      val request = try { ImageText.prepareRecognition(uri) } catch (error: Throwable) { promise.reject("IMAGE_TEXT_BUSY", error.message, error); return@AsyncFunction }
+      try {
+        worker.execute {
+          try { promise.resolve(ImageText.recognize(context, uri, request)) }
+          catch (_: InterruptedException) { promise.reject("IMAGE_TEXT_CANCELLED", "Text recognition was cancelled.", null) }
+          catch (_: OutOfMemoryError) { promise.reject("IMAGE_TEXT_MEMORY", "This image is too large to read on this device.", null) }
+          catch (error: Throwable) { promise.reject("IMAGE_TEXT_FAILED", error.message ?: "Could not read text in this image.", error) }
+          finally { ImageText.finishRecognition(request) }
+        }
+      } catch (error: java.util.concurrent.RejectedExecutionException) {
+        ImageText.finishRecognition(request)
+        promise.reject("IMAGE_TEXT_CANCELLED", "Text recognition was cancelled.", error)
       }
     }
     AsyncFunction("renderImageText") { options: String, promise: Promise ->
@@ -59,7 +81,7 @@ class FileEngineModule : Module() {
         catch (error: Throwable) { promise.reject("IMAGE_TEXT_FAILED", error.message ?: "Could not update the image text.", error) }
       }
     }
-    Constant("nativeDeviceSaveVersion") { 1 }
+    Constant("nativeDeviceSaveVersion") { 2 }
     AsyncFunction("saveToDevice") { sourceUri: String, name: String, mimeType: String, replaceUri: String, promise: Promise ->
       val context = appContext.reactContext
       if (context == null) { promise.reject("SAVE_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
@@ -89,6 +111,7 @@ class FileEngineModule : Module() {
       Prop("source") { view: ImageEditorView, value: String -> view.setSource(value) }
       Prop("edits") { view: ImageEditorView, value: String -> view.setEdits(value) }
       Prop("aspect") { view: ImageEditorView, value: String -> view.setAspect(value) }
+      Prop("cropRequest") { view: ImageEditorView, value: String -> view.setCropRequest(value) }
       OnViewDestroys { view: ImageEditorView -> view.dispose() }
     }
     AsyncFunction("editImage") { options: String, promise: Promise ->
@@ -209,8 +232,8 @@ class FileEngineModule : Module() {
       }
     }
 
-    OnDestroy { imageTools.destroy(); worker.shutdown(); explorer.shutdown(); pdfs.destroy() }
-    OnActivityEntersBackground { pdfs.cancelAll() }
+    OnDestroy { privacy.destroy(); ImageText.cancelAllRecognition(); imageTools.destroy(); worker.shutdown(); explorer.shutdown(); pdfs.destroy() }
+    OnActivityEntersBackground { privacy.cancelAll(); pdfs.cancelAll() }
   }
 }
 

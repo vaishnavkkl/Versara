@@ -41,8 +41,14 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
   private var source = ""
   private var bitmap: Bitmap? = null
   private var edits = ImageEdits()
+  private var drawnColorEdits = ImageEdits()
+  private var loadingSource = ""
+  private var loadingTarget = 0
   private var aspect = "none"
   private var crop = RectF(0f, 0f, 1f, 1f)
+  private var storedCrop: RectF? = null
+  private var restoringCrop = false
+  private var cropRequest = ""
   @Volatile private var disposed = false
 
   init {
@@ -51,24 +57,48 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
   }
 
   fun setSource(value: String) {
-    if (value == source) return
+    if (disposed || value == source) return
+    if (source.isNotEmpty()) { storedCrop = null; restoringCrop = false; cropRequest = "" }
     source = value
+    version.incrementAndGet()
+    loadingSource = ""; loadingTarget = 0
+    bitmap = null
+    canvasView.postInvalidateOnAnimation()
     load()
   }
 
   fun setEdits(json: String) {
+    if (disposed) return
     val next = try { ImageEdits.from(JSONObject(json)) } catch (_: Exception) { ImageEdits() }
+    if (next == edits) return
     val geometryChanged = next.rotation != edits.rotation || next.flipH != edits.flipH || next.flipV != edits.flipV
     edits = next
-    canvasView.paint.colorFilter = if (next.identityColor) null else ColorMatrixColorFilter(ImageProcessing.colorMatrix(next))
-    if (geometryChanged) resetCrop()
-    canvasView.invalidate()
+    if (geometryChanged) { storedCrop = null; restoringCrop = false; resetCrop() }
+    // Keep the latest parameters immediately, but build one color matrix per
+    // displayed frame instead of for every native slider event in that frame.
+    canvasView.postInvalidateOnAnimation()
   }
 
   fun setAspect(value: String) {
     if (value == aspect) return
     aspect = value
+    storedCrop = null; restoringCrop = false
     resetCrop()
+    canvasView.invalidate()
+  }
+
+  /** Restore a history/draft rectangle once; gesture frames remain native-owned. */
+  fun setCropRequest(value: String) {
+    if (value == cropRequest) return
+    val request = runCatching { JSONObject(value) }.getOrNull() ?: return
+    val restored = if (request.optBoolean("reset", false)) null else {
+      val x = request.optDouble("x", Double.NaN); val y = request.optDouble("y", Double.NaN)
+      val w = request.optDouble("width", Double.NaN); val h = request.optDouble("height", Double.NaN)
+      if (listOf(x, y, w, h).any { !it.isFinite() } || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.000001 || y + h > 1.000001) return
+      RectF(x.toFloat(), y.toFloat(), min(1f, (x + w).toFloat()), min(1f, (y + h).toFloat()))
+    }
+    cropRequest = value; storedCrop = restored; restoringCrop = true
+    resetCrop(emit = false, preserve = true)
     canvasView.invalidate()
   }
 
@@ -81,9 +111,11 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
 
   private fun load() {
     if (disposed || source.isEmpty() || width <= 0 || height <= 0) return
-    val ticket = version.incrementAndGet()
     val uri = source
     val target = (max(width, height) * 1.25f).toInt().coerceIn(720, if (ImageProcessing.lowMemory(context)) 1440 else 2048)
+    if (loadingSource == uri && loadingTarget >= target) return
+    val ticket = version.incrementAndGet()
+    loadingSource = uri; loadingTarget = target
     worker.execute {
       if (disposed || ticket != version.get()) return@execute
       try {
@@ -91,15 +123,16 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
         val (fullWidth, fullHeight) = originalSize(Uri.parse(uri)) ?: (decoded.width to decoded.height)
         main.post {
           if (disposed || ticket != version.get()) { decoded.recycle(); return@post }
+          loadingSource = ""; loadingTarget = 0
           bitmap = decoded
-          resetCrop()
+          resetCrop(emit = !restoringCrop, preserve = true)
           canvasView.invalidate()
           onLoad(mapOf("width" to fullWidth, "height" to fullHeight))
         }
       } catch (_: OutOfMemoryError) {
-        main.post { if (!disposed) onError(mapOf("message" to "This image is too large to edit on this device.")) }
+        main.post { if (!disposed && ticket == version.get()) { loadingSource = ""; loadingTarget = 0; onError(mapOf("message" to "This image is too large to edit on this device.")) } }
       } catch (_: Exception) {
-        main.post { if (!disposed) onError(mapOf("message" to "This image format cannot be edited on your device.")) }
+        main.post { if (!disposed && ticket == version.get()) { loadingSource = ""; loadingTarget = 0; onError(mapOf("message" to "This image format cannot be edited on your device.")) } }
       }
     }
   }
@@ -134,7 +167,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     return pixels * h / w
   }
 
-  private fun resetCrop() {
+  private fun resetCrop(emit: Boolean = true, preserve: Boolean = false) {
     val ratio = normalizedRatio()
     crop = if (ratio == null) RectF(0f, 0f, 1f, 1f) else {
       var w = 1f
@@ -142,11 +175,14 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
       if (h > 1f) { h = 1f; w = h * ratio }
       RectF((1f - w) / 2f, (1f - h) / 2f, (1f + w) / 2f, (1f + h) / 2f)
     }
-    emitCrop()
+    if (preserve) storedCrop?.let { crop = RectF(it) }
+    if (emit) emitCrop()
   }
 
   private fun emitCrop() {
     if (bitmap == null) return
+    storedCrop = RectF(crop)
+    restoringCrop = false
     onCropChange(if (aspect == "none") emptyMap() else mapOf("x" to crop.left.toDouble(), "y" to crop.top.toDouble(), "width" to crop.width().toDouble(), "height" to crop.height().toDouble()))
   }
 
@@ -157,6 +193,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     canvasView.setOnTouchListener(null)
     // RenderThread may still hold the last frame; release our reference safely.
     bitmap = null
+    loadingSource = ""; loadingTarget = 0
     worker.shutdownNow()
   }
 
@@ -186,6 +223,10 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     override fun onDraw(canvas: Canvas) {
       val image = bitmap ?: return
       if (image.isRecycled || !layoutImage()) return
+      if (!edits.sameColorAs(drawnColorEdits)) {
+        paint.colorFilter = if (edits.identityColor) null else ColorMatrixColorFilter(ImageProcessing.colorMatrix(edits))
+        drawnColorEdits = edits
+      }
       val scale = imageRect.width() / transformedSize(image).first
       canvas.save()
       canvas.translate(imageRect.centerX(), imageRect.centerY())
@@ -268,8 +309,10 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
       val top = dragging == DRAG_TOP_LEFT || dragging == DRAG_TOP_RIGHT
       val anchorX = if (left) crop.right else crop.left
       val anchorY = if (top) crop.bottom else crop.top
-      var w = (crop.width() + if (left) -dx else dx).coerceIn(minimum, if (left) anchorX else 1f - anchorX)
-      var h = (crop.height() + if (top) -dy else dy).coerceIn(minimum, if (top) anchorY else 1f - anchorY)
+      val availableWidth = if (left) anchorX else 1f - anchorX
+      val availableHeight = if (top) anchorY else 1f - anchorY
+      var w = (crop.width() + if (left) -dx else dx).coerceIn(min(minimum, availableWidth), availableWidth)
+      var h = (crop.height() + if (top) -dy else dy).coerceIn(min(minimum, availableHeight), availableHeight)
       if (ratio != null) {
         val maxH = if (top) anchorY else 1f - anchorY
         val maxW = if (left) anchorX else 1f - anchorX

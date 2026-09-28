@@ -7,6 +7,51 @@ import UniformTypeIdentifiers
 enum ImageText {
   private static let analysisSize: CGFloat = 2048
   private static let maxLines = 400
+  private static let recognitionLock = NSLock()
+  private static var recognitions: [String: Recognition] = [:]
+
+  final class Recognition {
+    let uri: String
+    let key: String
+    let request = VNRecognizeTextRequest()
+    fileprivate var cancelled = false
+    init(uri: String, key: String) { self.uri = uri; self.key = key }
+  }
+
+  static func prepareRecognition(uri: String, key: String? = nil) throws -> Recognition {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    let identity = key ?? uri
+    if let previous = recognitions[identity] { previous.cancelled = true; previous.request.cancel() }
+    guard recognitions[identity] != nil || recognitions.count < 4 else { throw ImageEditing.EditError.invalid("Wait for the current text recognition to finish.") }
+    let operation = Recognition(uri: uri, key: identity)
+    recognitions[identity] = operation
+    return operation
+  }
+
+  static func cancelRecognition(_ operation: Recognition) {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    operation.cancelled = true; operation.request.cancel()
+  }
+
+  static func cancelRecognition(uri: String) {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    if let operation = recognitions[uri] { operation.cancelled = true; operation.request.cancel() }
+  }
+
+  static func cancelAllRecognition() {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    for operation in recognitions.values { operation.cancelled = true; operation.request.cancel() }
+  }
+
+  static func finishRecognition(_ operation: Recognition) {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    if recognitions[operation.key] === operation { recognitions.removeValue(forKey: operation.key) }
+  }
+
+  private static func checkRecognition(_ operation: Recognition) throws {
+    recognitionLock.lock(); defer { recognitionLock.unlock() }
+    if operation.cancelled { throw CancellationError() }
+  }
 
   private struct Pixels {
     let data: [UInt8]; let width: Int; let height: Int
@@ -24,15 +69,20 @@ enum ImageText {
     }
   }
 
-  static func recognize(uri: String) throws -> [String: Any] {
+  static func recognize(uri: String, operation: Recognition) throws -> [String: Any] {
+    try checkRecognition(operation)
     guard let image = ImageEditing.load(uri: uri, maxPixels: analysisSize) else { throw ImageEditing.EditError.invalid("This image format cannot be read on your device.") }
-    let request = VNRecognizeTextRequest()
+    let request = operation.request
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
-    try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+    try checkRecognition(operation)
+    do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) }
+    catch { try checkRecognition(operation); throw error }
+    try checkRecognition(operation)
     let pixels = Pixels(image)
     var lines: [[String: Any]] = []
     for observation in request.results ?? [] {
+      try checkRecognition(operation)
       guard lines.count < maxLines, let candidate = observation.topCandidates(1).first, !candidate.string.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
       let box = observation.boundingBox
       let rect = CGRect(x: box.minX, y: 1 - box.maxY, width: box.width, height: box.height)
@@ -123,17 +173,24 @@ enum ImageText {
       throw ImageEditing.EditError.invalid("Could not save inside Versara.")
     }
     let preview = options["preview"] as? Bool ?? false
-    let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
-    let limit = CGFloat(min(max(options["maxSize"] as? Int ?? (lowMemory ? 3072 : 4096), 256), 4096))
-    guard let source = ImageEditing.load(uri: uri, maxPixels: limit) else { throw ImageEditing.EditError.invalid("This image format cannot be edited on your device.") }
+    let source: CGImage
+    if preview {
+      let limit = CGFloat(min(max(options["maxSize"] as? Int ?? 1600, 256), 4096))
+      guard let image = ImageEditing.load(uri: uri, maxPixels: limit) else { throw ImageEditing.EditError.invalid("This image format cannot be edited on your device.") }
+      source = image
+    } else {
+      source = try ImageEditing.loadExport(uri: uri)
+    }
     let edits = options["edits"] as? [[String: Any]] ?? []
     guard edits.count <= 500 else { throw ImageEditing.EditError.invalid("Save these changes before adding more.") }
     let size = CGSize(width: source.width, height: source.height)
     let ratio = size.width / max(1, CGFloat((options["refWidth"] as? NSNumber)?.doubleValue ?? Double(size.width)))
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
-    format.opaque = true
+    let png = !preview && (options["format"] as? String) == "png"
+    format.opaque = !png
     let rendered = UIGraphicsImageRenderer(size: size, format: format).image { context in
+      if !png { UIColor.white.setFill(); context.cgContext.fill(CGRect(origin: .zero, size: size)) }
       UIImage(cgImage: source).draw(in: CGRect(origin: .zero, size: size))
       let cg = context.cgContext
       for edit in edits {
@@ -167,15 +224,17 @@ enum ImageText {
       }
     }
     guard let image = rendered.cgImage else { throw ImageEditing.EditError.invalid("Could not render the image.") }
-    let type: UTType = !preview && (options["format"] as? String) == "png" ? .png : .jpeg
+    let type: UTType = png ? .png : .jpeg
     let quality = preview ? 0.85 : Double(min(max(options["quality"] as? Int ?? 92, 10), 100)) / 100
     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-    guard let writer = CGImageDestinationCreateWithURL(destination as CFURL, type.identifier as CFString, 1, nil) else { throw ImageEditing.EditError.invalid("Could not create the image file.") }
+    let temporary = destination.deletingLastPathComponent().appendingPathComponent("versara-text-\(UUID().uuidString).partial")
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    guard let writer = CGImageDestinationCreateWithURL(temporary as CFURL, type.identifier as CFString, 1, nil) else { throw ImageEditing.EditError.invalid("Could not create the image file.") }
     CGImageDestinationAddImage(writer, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
     guard CGImageDestinationFinalize(writer) else {
-      try? FileManager.default.removeItem(at: destination)
       throw ImageEditing.EditError.invalid("Could not encode the image.")
     }
+    try FileManager.default.moveItem(at: temporary, to: destination)
     let bytes = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
     return ["uri": output, "width": image.width, "height": image.height, "size": bytes, "mimeType": type == .png ? "image/png" : "image/jpeg"]
   }

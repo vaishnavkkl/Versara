@@ -9,6 +9,8 @@ export type ImageEditorProps = ViewProps & {
   edits: string;
   /** 'none' hides the crop box; 'free' or a ratio such as '4:3' shows it. */
   aspect: string;
+  /** Applied only for history/draft restoration, not continuous gesture updates. */
+  cropRequest?: string;
   onLoad?: (event: { nativeEvent: { width: number; height: number } }) => void;
   onError?: (event: { nativeEvent: { message: string } }) => void;
   onCropChange?: (event: { nativeEvent: Partial<ImageCrop> }) => void;

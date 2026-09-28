@@ -7,6 +7,15 @@
   NSMutableSet<NSString *> *_active;
   BOOL _destroyed;
 }
++ (NSString *)inspect:(NSString *)path password:(NSString *)password {
+  NSDictionary *options = @{ @"action": @"inspect", @"path": path, @"inputPassword": password };
+  NSData *input = [NSJSONSerialization dataWithJSONObject:options options:0 error:nil];
+  NSString *cache = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject.path;
+  NSString *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject.path;
+  auto result = versara::runEditor(std::string((const char *)input.bytes, input.length), cache.UTF8String, documents.UTF8String,
+    [] { return false; }, [](int, int) {});
+  return [[NSString alloc] initWithBytes:result.data() length:result.size() encoding:NSUTF8StringEncoding];
+}
 - (instancetype)init {
   if ((self = [super init])) {
     _worker = dispatch_queue_create("com.versara.pdf.text", DISPATCH_QUEUE_SERIAL);
@@ -14,6 +23,13 @@
     _active = [NSMutableSet new];
   }
   return self;
+}
++ (NSString *)applyOCR:(NSString *)request cancelled:(BOOL (^)(void))cancelled {
+  NSString *cache = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject.path;
+  NSString *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject.path;
+  auto result = versara::runEditor(request.UTF8String, cache.UTF8String, documents.UTF8String,
+    [cancelled] { return bool(cancelled()); }, [](int, int) {});
+  return [[NSString alloc] initWithBytes:result.data() length:result.size() encoding:NSUTF8StringEncoding];
 }
 - (void)cancel:(NSString *)identifier { @synchronized(self) {
   if (_destroyed) return;
@@ -46,13 +62,14 @@
       }
       NSURL *source = [options[@"uri"] isKindOfClass:NSString.class] ? [NSURL URLWithString:options[@"uri"]] : nil;
       BOOL preview = [options[@"action"] isEqual:@"preview"];
+      BOOL searching = [options[@"action"] isEqual:@"search"];
       NSString *outputKey = preview ? @"imageUri" : @"outputUri";
       NSURL *output = [options[outputKey] isKindOfClass:NSString.class] ? [NSURL URLWithString:options[outputKey]] : nil;
-      if (![options isKindOfClass:NSMutableDictionary.class] || !source.isFileURL || !output.isFileURL) {
+      if (![options isKindOfClass:NSMutableDictionary.class] || !source.isFileURL || (!searching && !output.isFileURL)) {
         completion(nil, @"PDF_INVALID_PATH", @"Choose a local PDF and try again.");
       } else {
         options[@"path"] = source.path;
-        options[preview ? @"imagePath" : @"outputPath"] = output.path;
+        if (!searching) options[preview ? @"imagePath" : @"outputPath"] = output.path;
         NSString *input = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:options options:0 error:nil] encoding:NSUTF8StringEncoding];
         NSString *cache = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject.path;
         NSString *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject.path;
@@ -63,7 +80,7 @@
         NSMutableDictionary *response = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];
         if (response[@"error"]) completion(nil, response[@"code"], response[@"error"]);
         else {
-          response[preview ? @"imageUri" : @"uri"] = options[outputKey];
+          if (!searching) response[preview ? @"imageUri" : @"uri"] = options[outputKey];
           NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:response options:0 error:nil] encoding:NSUTF8StringEncoding];
           completion(json, nil, nil);
         }

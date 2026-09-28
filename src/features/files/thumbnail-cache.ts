@@ -4,6 +4,8 @@ import type { FileKind } from './recent-files';
 
 type Entry = { key: string; source: string; kind: FileKind; page: number; id: string; uri: string | null; users: number; done: boolean; started: boolean; cancelled: boolean; promise: Promise<string | null>; resolve: (uri: string | null) => void };
 const entries = new Map<string, Entry>();
+// Replaced cache entries can still be displayed until their last viewer leaves.
+const retired = new Set<Entry>();
 const waiting: Entry[] = [];
 let running = false;
 let prepared = false;
@@ -20,7 +22,7 @@ function evict() {
 function unusedThumbnailFiles() {
   const root = directory();
   if (!root.exists) return [];
-  const protectedUris = new Set([...entries.values()].filter(entry => entry.users > 0 || !entry.done)
+  const protectedUris = new Set([...entries.values(), ...retired].filter(entry => entry.users > 0 || !entry.done)
     .map(entry => entry.uri ?? new File(root, `${entry.id}.jpg`).uri));
   return root.list().filter((file): file is File => file instanceof File && !protectedUris.has(file.uri));
 }
@@ -71,6 +73,7 @@ export function invalidateThumbnails(source: string) {
     if (entry.source !== source || !entry.done) continue;
     entries.delete(key);
     if (!entry.users) remove(entry.uri);
+    else retired.add(entry);
   }
 }
 export function requestThumbnail(source: string, kind: FileKind, page = 0) {
@@ -93,6 +96,12 @@ export function requestThumbnail(source: string, kind: FileKind, page = 0) {
   return { promise: value.promise, release() {
     if (released) return;
     released = true; value.users--;
+    // Invalidation can detach an entry while a mounted thumbnail still owns it.
+    // Dispose that old file when its last owner releases it, too.
+    if (!value.users && value.done && entries.get(key) !== value) {
+      retired.delete(value);
+      remove(value.uri);
+    }
     if (!value.users && !value.done) {
       value.cancelled = true;
       if (value.started) PdfEngine?.cancelThumbnail?.(value.id);

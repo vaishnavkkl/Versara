@@ -19,6 +19,7 @@
       }
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/app-icon-foreground.png"
@@ -39,6 +40,7 @@
     },
     "plugins": [
       "./plugins/with-pdf-storage",
+      "./plugins/with-local-storage",
       "expo-router",
       [
         "expo-splash-screen",

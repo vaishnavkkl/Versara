@@ -19,7 +19,9 @@ import android.widget.ImageView
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.max
@@ -31,12 +33,24 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
   private val onLoad by EventDispatcher<Map<String, Any>>()
   private val onError by EventDispatcher<Map<String, Any>>()
   private val onDismiss by EventDispatcher<Map<String, Any>>()
-  private val worker = Executors.newSingleThreadExecutor()
+  // At most one decoder and one replacement request; relayouts never accumulate work.
+  private val worker = ThreadPoolExecutor(1, 1, 10, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(1)).apply {
+    allowCoreThreadTimeOut(true)
+    setThreadFactory { work -> Thread {
+      android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+      work.run()
+    } }
+    rejectedExecutionHandler = ThreadPoolExecutor.DiscardOldestPolicy()
+  }
   private val main = Handler(Looper.getMainLooper())
   private val version = AtomicInteger(0)
   private val image = ImageView(context)
   private val density = resources.displayMetrics.density
   private var source = ""
+  private val lowMemory = ImageProcessing.lowMemory(context)
+  private var requestedTarget = 0
+  private var loadedTarget = 0
+  private var attached = false
   @Volatile private var disposed = false
 
   private var zoom = 1f
@@ -70,6 +84,7 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
       zoomAround(zoom * detector.scaleFactor, detector.focusX, detector.focusY)
       return true
     }
+    override fun onScaleEnd(detector: ScaleGestureDetector) { load(detail = true) }
   })
   private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
     override fun onDown(event: MotionEvent) = true
@@ -90,34 +105,64 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
   fun setSource(value: String) {
     if (value == source) return
     source = value
+    version.incrementAndGet()
+    worker.queue.clear()
+    requestedTarget = 0; loadedTarget = 0
+    image.setImageDrawable(null)
+    zoom = 1f; offsetX = 0f; offsetY = 0f; dismissY = 0f
     load()
+  }
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    attached = true
+    load()
+  }
+
+  override fun onDetachedFromWindow() {
+    attached = false
+    version.incrementAndGet()
+    worker.queue.clear()
+    animator?.cancel()
+    velocity?.recycle(); velocity = null
+    image.setImageDrawable(null)
+    requestedTarget = 0; loadedTarget = 0
+    super.onDetachedFromWindow()
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
     super.onLayout(changed, left, top, right, bottom)
     image.layout(0, 0, right - left, bottom - top)
     if (changed) {
-      if (image.drawable == null && source.isNotEmpty()) load() else updateTransform()
+      updateTransform()
+      load()
     }
   }
 
-  private fun load() {
-    if (disposed || source.isEmpty() || width <= 0 || height <= 0) return
+  private fun load(detail: Boolean = false) {
+    if (disposed || !attached || source.isEmpty() || width <= 0 || height <= 0) return
+    // Fit-to-screen first. Extra zoom detail is decoded only after the user's zoom settles.
+    val cap = if (detail) { if (lowMemory) 2048 else 4096 } else { if (lowMemory) 1536 else 2048 }
+    val target = (max(width, height) * if (detail) zoom.coerceIn(1f, 2f) else 1f).toInt().coerceIn(512, cap)
+    if (target <= requestedTarget) return
+    requestedTarget = target
     val ticket = version.incrementAndGet()
     val uri = source
-    // Twice the screen's longest side keeps zoomed detail sharp without full-resolution decodes.
-    val longest = max(width, height)
-    val target = (longest * 2).coerceIn(1024, if (ImageProcessing.lowMemory(context)) 2048 else 4096)
+    worker.queue.clear()
     worker.execute {
       if (disposed || ticket != version.get()) return@execute
       try {
         val bitmap = ImageProcessing.decode(context, Uri.parse(uri), target)
         main.post {
-          if (disposed || ticket != version.get()) return@post
+          if (disposed || ticket != version.get() || !attached) {
+            bitmap.recycle() // Never submitted to the rendering thread.
+            return@post
+          }
+          loadedTarget = target
+          val firstImage = image.drawable == null
           image.setImageBitmap(bitmap)
-          zoom = 1f; offsetX = 0f; offsetY = 0f; dismissY = 0f
           updateTransform()
-          onLoad(mapOf("width" to bitmap.width, "height" to bitmap.height))
+          if (firstImage) onLoad(mapOf("width" to bitmap.width, "height" to bitmap.height))
         }
       } catch (_: OutOfMemoryError) {
         report(ticket, "This image is too large to preview on this device.")
@@ -128,7 +173,13 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
   }
 
   private fun report(ticket: Int, message: String) {
-    main.post { if (!disposed && ticket == version.get()) onError(mapOf("message" to message)) }
+    main.post {
+      if (!disposed && ticket == version.get()) {
+        requestedTarget = loadedTarget
+        // A failed optional detail upgrade must not replace a working preview with an error.
+        if (image.drawable == null) onError(mapOf("message" to message))
+      }
+    }
   }
 
   private fun zoomAround(value: Float, focusX: Float, focusY: Float) {
@@ -148,6 +199,9 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
       duration = 220
       interpolator = DecelerateInterpolator()
       addUpdateListener { zoomAround(it.animatedValue as Float, focusX, focusY) }
+      addListener(object : AnimatorListenerAdapter() {
+        override fun onAnimationEnd(animation: Animator) { load(detail = true) }
+      })
       start()
     }
   }

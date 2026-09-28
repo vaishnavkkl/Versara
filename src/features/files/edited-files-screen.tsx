@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useVisibleListItems } from '@/hooks/use-visible-list-items';
+import { useStableCallback } from '@/hooks/use-stable-callback';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
@@ -27,6 +29,7 @@ const dateLabel = (value: number) => new Date(value).toLocaleDateString(undefine
 export function EditedFilesScreen() {
   const colors = usePalette();
   const active = useScreenActive();
+  const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const [items, setItems] = useState<EditedFile[] | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -113,6 +116,10 @@ export function EditedFilesScreen() {
     } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not complete this action.'); }
     finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
+  const openRow = useStableCallback(open);
+  const showMenu = useCallback((file: EditedFile) => { setMenu(file); setMenuOpen(true); }, []);
+  const renderItem = useCallback(({ item }: { item: EditedFile }) => <EditedFileRow item={item} active={active && visibleKeys.has(item.id)} busy={busy} onOpen={openRow} onMenu={showMenu} />, [active, visibleKeys, busy, openRow, showMenu]);
+
   const actions = [{ title: 'File actions', data: [
     { id: 'open', title: 'Open', subtitle: '', ios: 'doc', android: 'open-in-new' },
     { id: 'edit', title: 'Edit', subtitle: '', ios: 'square.and.pencil', android: 'edit' },
@@ -137,14 +144,23 @@ export function EditedFilesScreen() {
       </View>
     </View>
     {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
-    {!items ? <View style={styles.center}><AppLoader size="large" /></View> : <FlatList data={items} keyExtractor={item => item.id} contentContainerStyle={styles.list}
-      initialNumToRender={10} maxToRenderPerBatch={8} windowSize={7}
+    {!items ? <View style={styles.center}><AppLoader size="large" /></View> : <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={items} keyExtractor={item => item.id} contentContainerStyle={styles.list}
+      initialNumToRender={10} maxToRenderPerBatch={4} windowSize={5}
       ListEmptyComponent={<View style={styles.center}>
         <UniversalIcon ios="square.and.pencil" android="edit-note" size={40} color={colors.systemBlue} />
         <ThemedText style={styles.heading}>{search ? 'No matching files' : 'No edited files yet'}</ThemedText>
         <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Files you save from the PDF and image editors appear here.</ThemedText>
       </View>}
-      renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void open(item); }}
+      renderItem={renderItem} />}
+    <ToolboxSheet visible={menuOpen && active} title="File actions" subtitle={menu?.name ?? 'Edited file'} sections={actions} footer={<View />} onClose={() => setMenuOpen(false)} onAction={id => void action(id)} />
+  </View>;
+}
+
+const EditedFileRow = memo(function EditedFileRow({ item, active, busy, onOpen, onMenu }: {
+  item: EditedFile; active: boolean; busy: boolean; onOpen: (file: EditedFile) => Promise<void>; onMenu: (file: EditedFile) => void;
+}) {
+  const colors = usePalette();
+  return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void onOpen(item); }}
         style={({ pressed }) => [styles.row, { backgroundColor: colors.catalogSurface, borderColor: colors.separator, opacity: pressed ? 0.7 : 1 }]}>
         <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} active={active} /></View>
         <View style={styles.meta}>
@@ -152,11 +168,9 @@ export function EditedFilesScreen() {
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{dateLabel(item.modified)} · {formatSize(item.size)}</ThemedText>
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{item.location}</ThemedText>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Actions for ${item.name}`} disabled={busy} onPress={() => { setMenu(item); setMenuOpen(true); }} style={styles.icon}><UniversalIcon ios="ellipsis" android="more-horiz" size={24} color={colors.label} /></Pressable>
-      </Pressable>} />}
-    <ToolboxSheet visible={menuOpen && active} title="File actions" subtitle={menu?.name ?? 'Edited file'} sections={actions} footer={<View />} onClose={() => setMenuOpen(false)} onAction={id => void action(id)} />
-  </View>;
-}
+        <Pressable accessibilityRole="button" accessibilityLabel={`Actions for ${item.name}`} disabled={busy} onPress={() => { onMenu(item); }} style={styles.icon}><UniversalIcon ios="ellipsis" android="more-horiz" size={24} color={colors.label} /></Pressable>
+      </Pressable>;
+});
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },

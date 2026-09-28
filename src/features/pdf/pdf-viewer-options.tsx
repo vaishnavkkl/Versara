@@ -7,6 +7,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
 import { typography as t } from '@/theme/dashboard';
 import { implementedPdfTools } from './pdf-tool-session';
+import { PdfEngine } from '../../../modules/pdf-engine';
 
 type Action = Method & { unavailable?: boolean };
 type Props = {
@@ -19,6 +20,7 @@ export function PdfViewerOptions({ visible, name, pageCount, vertical, onClose, 
   const [showUpcoming, setShowUpcoming] = useState(false);
   const sections = useMemo(() => {
     const reading: Action[] = [
+      ...(PdfEngine?.nativeReaderSearchVersion ? [{ id: 'search', title: 'Search PDF', subtitle: 'Find text and navigate matches', ios: 'doc.text.magnifyingglass' as const, android: 'search' as const }] : []),
       { id: 'scroll', title: vertical ? 'Vertical scrolling' : 'Single page', subtitle: vertical ? 'Tap to switch to one page at a time' : 'Tap to scroll through every page', ios: 'arrow.up.arrow.down', android: 'swap-vert' },
       { id: 'fit', title: 'Fit page', subtitle: 'Reset the zoom', ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' },
       { id: 'focus', title: 'Focus view', subtitle: 'Hide controls for more reading space', ios: 'arrow.up.left.and.arrow.down.right', android: 'fullscreen' },

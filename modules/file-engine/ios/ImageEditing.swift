@@ -5,7 +5,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// Colour and geometry settings shared by the live editor preview and the export.
-struct ImageEdits {
+struct ImageEdits: Equatable {
   var rotation = 0
   var flipH = false
   var flipV = false
@@ -53,6 +53,30 @@ enum ImageEditing {
     return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
   }
 
+  /// A bounded working set for decoded pixels, compositing/filter buffers and encoding.
+  /// Export never silently changes dimensions to satisfy this budget.
+  static func exportPixelBudget() -> Double {
+    min(Double(ProcessInfo.processInfo.physicalMemory) / 12, 256 * 1024 * 1024) / 20
+  }
+
+  static func requireExportSize(_ size: CGSize, budget: Double) throws {
+    guard size.width.isFinite, size.height.isFinite, size.width >= 1, size.height >= 1,
+          size.width <= 32768, size.height <= 32768, Double(size.width * size.height) <= budget else {
+      throw EditError.invalid("This image is too large to process at full resolution on this device. Use Resize to choose smaller dimensions. The original has not been changed.")
+    }
+  }
+
+  /// `maxPixels` is supplied only for an explicit resize or target-byte compression.
+  static func loadExport(uri: String, maxPixels: CGFloat? = nil, budget: Double? = nil) throws -> CGImage {
+    guard let size = originalSize(uri: uri) else { throw EditError.invalid("This image format cannot be read on your device.") }
+    let longest = max(size.width, size.height)
+    let target = min(longest, max(1, maxPixels ?? longest))
+    let ratio = target / longest
+    try requireExportSize(CGSize(width: ceil(size.width * ratio), height: ceil(size.height * ratio)), budget: budget ?? exportPixelBudget())
+    guard let image = load(uri: uri, maxPixels: target) else { throw EditError.invalid("Could not decode this image. The original has not been changed.") }
+    return image
+  }
+
   /// Flip, then rotate clockwise, then colour, matching the Android pipeline.
   static func apply(_ edits: ImageEdits, to input: CIImage) -> CIImage {
     var image = input
@@ -84,13 +108,27 @@ enum ImageEditing {
     guard let uri = options["uri"] as? String, let output = options["outputUri"] as? String, let destination = URL(string: output), destination.isFileURL else {
       throw EditError.invalid("Choose an image to edit.")
     }
-    let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].resolvingSymlinksInPath().path
-    guard destination.resolvingSymlinksInPath().path.hasPrefix(documents + "/"), !FileManager.default.fileExists(atPath: destination.path) else {
+    let roots = [FileManager.SearchPathDirectory.documentDirectory, .cachesDirectory].map { FileManager.default.urls(for: $0, in: .userDomainMask)[0].resolvingSymlinksInPath().standardizedFileURL.path }
+    let destinationPath = destination.resolvingSymlinksInPath().standardizedFileURL.path
+    guard roots.contains(where: { destinationPath.hasPrefix($0 + "/") }), !FileManager.default.fileExists(atPath: destination.path) else {
       throw EditError.invalid("Could not save inside Versara.")
     }
-    let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
-    guard let source = load(uri: uri, maxPixels: lowMemory ? 3072 : 4096) else { throw EditError.invalid("This image format cannot be edited on your device.") }
     let edits = ImageEdits(options["edits"] as? [String: Any] ?? [:])
+    let scale = min(max(options["scale"] as? Double ?? 1, 0.05), 1)
+    let budget = exportPixelBudget()
+    guard let sourceSize = originalSize(uri: uri) else { throw EditError.invalid("This image format cannot be read on your device.") }
+    let angle = CGFloat(edits.rotation) * .pi / 180
+    let rotatedSize = CGSize(width: sourceSize.width * abs(cos(angle)) + sourceSize.height * abs(sin(angle)), height: sourceSize.width * abs(sin(angle)) + sourceSize.height * abs(cos(angle)))
+    let crop = options["crop"] as? [String: Any]
+    let cropWidth = min(max(crop?["width"] as? Double ?? 1, 0.000001), 1)
+    let cropHeight = min(max(crop?["height"] as? Double ?? 1, 0.000001), 1)
+    let explicitSize = options["width"] != nil || options["height"] != nil || scale < 0.999
+    let desiredWidth = (options["width"] as? NSNumber)?.doubleValue ?? max(1, (Double(rotatedSize.width) * cropWidth * scale).rounded())
+    let desiredHeight = (options["height"] as? NSNumber)?.doubleValue ?? max(1, (Double(rotatedSize.height) * cropHeight * scale).rounded())
+    try requireExportSize(CGSize(width: desiredWidth, height: desiredHeight), budget: budget)
+    let decodeScale = explicitSize ? min(1, max(desiredWidth / (Double(rotatedSize.width) * cropWidth), desiredHeight / (Double(rotatedSize.height) * cropHeight))) : 1
+    try requireExportSize(CGSize(width: ceil(rotatedSize.width * decodeScale), height: ceil(rotatedSize.height * decodeScale)), budget: budget)
+    let source = try loadExport(uri: uri, maxPixels: explicitSize ? ceil(max(sourceSize.width, sourceSize.height) * decodeScale) : nil, budget: budget)
     var image = apply(edits, to: CIImage(cgImage: source))
     let extent = image.extent
     if let crop = options["crop"] as? [String: Any], let x = crop["x"] as? Double, let y = crop["y"] as? Double,
@@ -98,32 +136,30 @@ enum ImageEditing {
       let rect = CGRect(x: x * extent.width, y: (1 - y - h) * extent.height, width: w * extent.width, height: h * extent.height).integral.intersection(extent)
       if !rect.isEmpty { image = image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY)) }
     }
-    let scale = min(max(options["scale"] as? Double ?? 1, 0.05), 1)
     var exactBounds: CGRect?
-    if options["width"] != nil || options["height"] != nil {
-      let width = (options["width"] as? NSNumber)?.doubleValue ?? (image.extent.width * scale).rounded()
-      let height = (options["height"] as? NSNumber)?.doubleValue ?? (image.extent.height * scale).rounded()
-      let budget = lowMemory ? 3_000_000.0 : 6_000_000.0
-      guard width.isFinite, height.isFinite, width >= 1, height >= 1, width <= 8192, height <= 8192, width * height <= budget else { throw EditError.invalid("Choose smaller output dimensions for this device.") }
+    if explicitSize {
+      let width = desiredWidth, height = desiredHeight
       image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
       image = image.transformed(by: CGAffineTransform(scaleX: width / image.extent.width, y: height / image.extent.height))
       exactBounds = CGRect(x: 0, y: 0, width: width, height: height)
-    } else if scale < 0.999 {
-      image = image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1])
-      image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
     }
-    guard let rendered = context.createCGImage(image, from: exactBounds ?? image.extent.integral) else { throw EditError.invalid("Could not render the edited image.") }
     let format = options["format"] as? String ?? "jpeg"
+    let renderBounds = exactBounds ?? image.extent.integral
+    try requireExportSize(renderBounds.size, budget: budget)
+    if format == "jpeg" { image = image.composited(over: CIImage(color: .white).cropped(to: renderBounds)).cropped(to: renderBounds) }
+    guard let rendered = context.createCGImage(image, from: renderBounds) else { throw EditError.invalid("Could not render the edited image.") }
     let types: [String: UTType] = ["jpeg": .jpeg, "png": .png, "heic": .heic, "tiff": .tiff, "webp": .webP]
     guard let type = types[format], (CGImageDestinationCopyTypeIdentifiers() as! [String]).contains(type.identifier) else { throw EditError.invalid("This export format is unavailable on this device.") }
     let quality = Double(min(max(options["quality"] as? Int ?? 90, 10), 100)) / 100
     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-    guard let writer = CGImageDestinationCreateWithURL(destination as CFURL, type.identifier as CFString, 1, nil) else { throw EditError.invalid("Could not create the image file.") }
+    let temporary = destination.deletingLastPathComponent().appendingPathComponent("versara-image-\(UUID().uuidString).partial")
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    guard let writer = CGImageDestinationCreateWithURL(temporary as CFURL, type.identifier as CFString, 1, nil) else { throw EditError.invalid("Could not create the image file.") }
     CGImageDestinationAddImage(writer, rendered, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
     guard CGImageDestinationFinalize(writer) else {
-      try? FileManager.default.removeItem(at: destination)
       throw EditError.invalid("Could not encode the image.")
     }
+    try FileManager.default.moveItem(at: temporary, to: destination)
     let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
     return ["uri": output, "width": rendered.width, "height": rendered.height, "size": size, "mimeType": type.preferredMIMEType ?? "image/\(format)"]
   }
@@ -142,14 +178,20 @@ final class ImageEditorView: ExpoView {
   private let imageView = UIImageView()
   private let overlay = CropOverlay()
   private let queue = DispatchQueue(label: "com.versara.image-editor", qos: .userInitiated)
+  // Keep preview resources independent of a previous editor's teardown/export cache.
+  private let previewContext = CIContext(options: [.cacheIntermediates: false])
   private var source = ""
   private var base: CIImage?
   private var edits = ImageEdits()
   private var aspect = "none"
   private var renderTicket = 0
+  private var sourceGeneration = 0
   private var disposed = false
   private var rendering = false
   private var pendingRender = false
+  private var storedCrop: CGRect?
+  private var restoringCrop = false
+  private var cropRequest = ""
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -164,7 +206,11 @@ final class ImageEditorView: ExpoView {
 
   func setSource(_ value: String) {
     guard !disposed, value != source else { return }
+    if !source.isEmpty { storedCrop = nil; restoringCrop = false; cropRequest = "" }
     source = value
+    sourceGeneration += 1
+    base = nil; imageView.image = nil; pendingRender = false
+    let generation = sourceGeneration
     let uri = value
     let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
     let screen = UIScreen.main.bounds.size
@@ -173,9 +219,10 @@ final class ImageEditorView: ExpoView {
       let image = ImageEditing.load(uri: uri, maxPixels: target)
       let size = ImageEditing.originalSize(uri: uri)
       DispatchQueue.main.async {
-        guard let self, !self.disposed, uri == self.source else { return }
+        guard let self, !self.disposed, generation == self.sourceGeneration else { return }
         guard let image else { self.onError(["message": "This image format cannot be edited on your device."]); return }
         self.base = CIImage(cgImage: image)
+        self.resetCrop(emit: !self.restoringCrop, preserve: true)
         self.render()
         self.onLoad(["width": size?.width ?? CGFloat(image.width), "height": size?.height ?? CGFloat(image.height)])
       }
@@ -183,18 +230,37 @@ final class ImageEditorView: ExpoView {
   }
 
   func setEdits(_ json: String) {
+    guard !disposed else { return }
     let values = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
     let next = ImageEdits(values)
+    guard next != edits else { return }
     let geometry = next.rotation != edits.rotation || next.flipH != edits.flipH || next.flipV != edits.flipV
     edits = next
     render()
-    if geometry { setNeedsLayout(); resetCrop() }
+    if geometry { storedCrop = nil; restoringCrop = false; setNeedsLayout(); resetCrop() }
   }
 
   func setAspect(_ value: String) {
     guard value != aspect else { return }
     aspect = value
+    storedCrop = nil; restoringCrop = false
     resetCrop()
+  }
+
+  /// Apply undo/redo or a restored draft without reflecting it back as a user gesture.
+  func setCropRequest(_ value: String) {
+    guard value != cropRequest,
+          let request = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any] else { return }
+    let restored: CGRect?
+    if request["reset"] as? Bool == true { restored = nil }
+    else {
+      guard let x = (request["x"] as? NSNumber)?.doubleValue, let y = (request["y"] as? NSNumber)?.doubleValue,
+            let w = (request["width"] as? NSNumber)?.doubleValue, let h = (request["height"] as? NSNumber)?.doubleValue,
+            [x, y, w, h].allSatisfy({ $0.isFinite }), x >= 0, y >= 0, w > 0, h > 0, x + w <= 1.000001, y + h <= 1.000001 else { return }
+      restored = CGRect(x: x, y: y, width: min(w, 1 - x), height: min(h, 1 - y))
+    }
+    cropRequest = value; storedCrop = restored; restoringCrop = true
+    resetCrop(emit: false, preserve: true)
   }
 
   private func render() {
@@ -204,26 +270,36 @@ final class ImageEditorView: ExpoView {
   private func renderLatest() {
     guard !disposed, !rendering, pendingRender, let base else { return }
     rendering = true; pendingRender = false
-    let ticket = renderTicket, edits = self.edits
+    let ticket = renderTicket, generation = sourceGeneration, edits = self.edits
+    let context = previewContext
     queue.async { [weak self] in
       let cg: CGImage? = autoreleasepool {
         let output = ImageEditing.apply(edits, to: base)
-        return ImageEditing.context.createCGImage(output, from: output.extent)
+        return context.createCGImage(output, from: output.extent)
       }
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }; self.rendering = false
-        if !self.disposed && ticket == self.renderTicket, let cg {
-          self.imageView.image = UIImage(cgImage: cg); self.setNeedsLayout()
+        // Publish completed frames while a newer setting is pending. Requiring the
+        // newest ticket here starves the preview throughout a continuous drag.
+        // The serial worker has one render in flight and one latest pending value.
+        if !self.disposed && generation == self.sourceGeneration, let cg {
+          let image = UIImage(cgImage: cg)
+          let geometryChanged = self.imageView.image?.size != image.size
+          self.imageView.image = image
+          if geometryChanged { self.setNeedsLayout() }
+        } else if !self.disposed && generation == self.sourceGeneration && ticket == self.renderTicket {
+          self.onError(["message": "Could not update the image preview. Try a smaller image."])
         }
         self.renderLatest()
       }
     }
   }
   func dispose() {
-    disposed = true; renderTicket += 1; pendingRender = false
+    disposed = true; renderTicket += 1; sourceGeneration += 1; pendingRender = false
     base = nil; imageView.image = nil; overlay.onChange = nil
     layer.removeAllAnimations()
-    queue.async { ImageEditing.context.clearCaches() }
+    let context = previewContext
+    queue.async { context.clearCaches() }
   }
 
   private func pixelSize() -> CGSize? {
@@ -247,7 +323,7 @@ final class ImageEditorView: ExpoView {
     return pixels * size.height / size.width
   }
 
-  private func resetCrop() {
+  private func resetCrop(emit: Bool = true, preserve: Bool = false) {
     overlay.isHidden = aspect == "none"
     overlay.ratio = ratio()
     var rect = CGRect(x: 0, y: 0, width: 1, height: 1)
@@ -256,20 +332,24 @@ final class ImageEditorView: ExpoView {
       if h > 1 { h = 1; w = ratio }
       rect = CGRect(x: (1 - w) / 2, y: (1 - h) / 2, width: w, height: h)
     }
+    if preserve, let storedCrop { rect = storedCrop }
     overlay.crop = rect
     overlay.setNeedsDisplay()
-    emitCrop(rect)
+    if emit { emitCrop(rect) }
   }
 
   private func emitCrop(_ rect: CGRect) {
     guard base != nil else { return }
+    storedCrop = rect; restoringCrop = false
     onCropChange(aspect == "none" ? [:] : ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height])
   }
 
   override func layoutSubviews() {
     super.layoutSubviews()
     let inset = bounds.insetBy(dx: 20, dy: 20)
-    guard let size = pixelSize(), size.width > 0, size.height > 0, inset.width > 0, inset.height > 0 else { imageView.frame = inset; return }
+    // A completed rotation frame may precede the latest slider sample. Lay it out
+    // using its own dimensions so continuous straighten never stretches a frame.
+    guard let size = imageView.image?.size ?? pixelSize(), size.width > 0, size.height > 0, inset.width > 0, inset.height > 0 else { imageView.frame = inset; return }
     let scale = min(inset.width / size.width, inset.height / size.height)
     let frame = CGRect(x: bounds.midX - size.width * scale / 2, y: bounds.midY - size.height * scale / 2, width: size.width * scale, height: size.height * scale)
     imageView.frame = frame

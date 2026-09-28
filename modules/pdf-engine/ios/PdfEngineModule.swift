@@ -11,6 +11,12 @@ public class PdfEngineModule: Module {
     Name("PdfEngine")
     Events("onConversionProgress")
     Constant("nativeAdvancedToolsVersion") { 2 }
+    Constant("nativePdfPrivacyVersion") { 1 }
+    Constant("nativeSignatureImageVersion") { 1 }
+    Constant("nativeStrokePatternsVersion") { 1 }
+    Constant("nativeReaderSearchVersion") { 1 }
+    Constant("nativeSearchableOcrVersion") { 1 }
+    Constant("nativeMarkupEditingVersion") { 1 }
     AsyncFunction("processPdf") { (id: String, request: String, promise: Promise) in
       self.advanced.run(id, request: request, promise: promise) { [weak self] completed, total in
         self?.sendEvent("onConversionProgress", ["jobId": id, "completed": completed, "total": total])
@@ -54,10 +60,11 @@ public class PdfEngineModule: Module {
       Prop("zoom") { (view: PdfEngineView, zoom: Double) in view.requestedZoom = zoom }
       Prop("zoomRevision") { (view: PdfEngineView, revision: Int) in view.zoomRevision = revision }
       Prop("dark") { (view: PdfEngineView, dark: Bool) in view.dark = dark }
+      Prop("searchHighlights") { (view: PdfEngineView, value: String) in view.searchHighlights = value }
       OnViewDidUpdateProps { (view: PdfEngineView) in view.applyProps() }
     }
     View(PdfMarkupView.self) {
-      Events("onMark")
+      Events("onMark", "onSelection")
       Prop("source") { (view: PdfMarkupView, value: String) in view.setSource(value) }
       Prop("marks") { (view: PdfMarkupView, value: String) in view.setMarks(value) }
       Prop("mode") { (view: PdfMarkupView, value: String) in view.mode = value }
@@ -65,6 +72,7 @@ public class PdfEngineModule: Module {
       Prop("fillColor") { (view: PdfMarkupView, value: String) in view.fillColor = value }
       Prop("shapePath") { (view: PdfMarkupView, value: String) in view.shapePath = value }
       Prop("inkWidth") { (view: PdfMarkupView, value: Double) in view.inkWidth = value }
+      Prop("inkOpacity") { (view: PdfMarkupView, value: Double) in view.inkOpacity = value }
       Prop("brush") { (view: PdfMarkupView, value: String) in view.brush = value }
       Prop("pattern") { (view: PdfMarkupView, value: String) in view.pattern = value }
       Prop("disabled") { (view: PdfMarkupView, value: Bool) in view.disabled = value }

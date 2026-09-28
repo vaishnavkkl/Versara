@@ -57,6 +57,8 @@ final class ImageTools {
   }
   private func zeroOrigin(_ image: CIImage) -> CIImage { image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)) }
   private func process(_ r: [String: Any], id: String) throws -> [String: Any] {
+    if r["tool"] as? String == "signature" { return try SignatureImage.process(r, check: { try self.check(id) }) }
+    if r["tool"] as? String == "privacy" { return try ImagePrivacyExport.process(r, check: { try self.check(id) }) }
     try check(id)
     let input = try local(r["uri"] as? String ?? "")
     let original = try info(input)
@@ -66,11 +68,33 @@ final class ImageTools {
     let temporary = destination.appendingPathExtension("partial")
     defer { try? FileManager.default.removeItem(at: temporary) }
     let preview = r["action"] as? String == "preview"
-    let low = ProcessInfo.processInfo.physicalMemory <= 3_000_000_000
-    let budget = low ? 3_000_000.0 : 6_000_000.0
-    guard let decoded = ImageEditing.load(uri: input.absoluteString, maxPixels: preview ? 1440 : low ? 2048 : 3072) else { throw Failure(message: "Could not decode the image.") }
+    let budget = ImageEditing.exportPixelBudget()
+    let sourceWidth = Double(original["width"] as? Int ?? 1), sourceHeight = Double(original["height"] as? Int ?? 1)
+    var requestedWidth = number(r, "width", 0, 0...32768), requestedHeight = number(r, "height", 0, 0...32768)
+    if let percent = (r["percent"] as? NSNumber)?.doubleValue {
+      guard percent.isFinite, (0.1...400).contains(percent) else { throw Failure(message: "Enter a percentage from 0.1 to 400.") }
+      requestedWidth = max(1, (sourceWidth * percent / 100).rounded())
+      requestedHeight = max(1, (sourceHeight * percent / 100).rounded())
+    }
+    let resizing = requestedWidth > 0 || requestedHeight > 0
+    let outputWidth = requestedWidth > 0 ? requestedWidth : requestedHeight > 0 ? max(1, (requestedHeight * sourceWidth / sourceHeight).rounded()) : sourceWidth
+    let outputHeight = requestedHeight > 0 ? requestedHeight : requestedWidth > 0 ? max(1, (requestedWidth * sourceHeight / sourceWidth).rounded()) : sourceHeight
+    let target = (r["targetBytes"] as? NSNumber)?.intValue ?? 0
+    guard target == 0 || target >= 10240 else { throw Failure(message: "Choose a target of at least 10 KB.") }
+    if !preview && resizing { try ImageEditing.requireExportSize(CGSize(width: outputWidth, height: outputHeight), budget: budget) }
+    // Source reduction belongs to explicit resizing/target-byte compression, never normal export.
+    let decodeScale: Double
+    if resizing { decodeScale = min(1, max(outputWidth / sourceWidth, outputHeight / sourceHeight)) }
+    else if target > 0 && sourceWidth * sourceHeight > budget { decodeScale = sqrt(budget / (sourceWidth * sourceHeight)) * 0.999 }
+    else { decodeScale = 1 }
+    let decoded: CGImage
+    if preview {
+      guard let image = ImageEditing.load(uri: input.absoluteString, maxPixels: 1440) else { throw Failure(message: "Could not decode the image.") }
+      decoded = image
+    } else {
+      decoded = try ImageEditing.loadExport(uri: input.absoluteString, maxPixels: resizing || target > 0 ? ceil(max(sourceWidth, sourceHeight) * decodeScale) : nil, budget: budget)
+    }
     var image = CIImage(cgImage: decoded)
-    if image.extent.width * image.extent.height > budget { let scale = sqrt(budget / (image.extent.width * image.extent.height)); image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
     if let points = r["perspective"] as? [[Double]], points.count == 4, points.allSatisfy({ $0.count == 2 }) {
       guard points.allSatisfy({ $0.allSatisfy({ $0.isFinite && (0...1).contains($0) }) }), (0..<4).allSatisfy({ i in
         let a = points[i], b = points[(i+1)%4], c = points[(i+2)%4]
@@ -95,46 +119,41 @@ final class ImageTools {
       } else { image = filtered }
     }
     if sharpen > 0 { image = image.applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: sharpen]) }
+    if r["curves"] != nil || r["hsl"] != nil || r["levels"] != nil { image = try adjustColor(image, r, id: id) }
     try check(id)
-    var requestedWidth = number(r, "width", 0, 0...8192), requestedHeight = number(r, "height", 0, 0...8192)
-    if let percent = (r["percent"] as? NSNumber)?.doubleValue {
-      guard percent.isFinite, (0.1...400).contains(percent) else { throw Failure(message: "Enter a percentage from 0.1 to 400.") }
-      requestedWidth = max(1, (Double(original["width"] as? Int ?? 1) * percent / 100).rounded())
-      requestedHeight = max(1, (Double(original["height"] as? Int ?? 1) * percent / 100).rounded())
-      guard requestedWidth <= 8192, requestedHeight <= 8192, requestedWidth * requestedHeight <= budget else { throw Failure(message: "Choose a smaller percentage for this image.") }
-    }
-    if requestedWidth > 0 || requestedHeight > 0 {
-      var width = requestedWidth > 0 ? requestedWidth : requestedHeight * image.extent.width / image.extent.height
-      var height = requestedHeight > 0 ? requestedHeight : requestedWidth * image.extent.height / image.extent.width
+    if resizing {
+      var width = outputWidth
+      var height = outputHeight
       let ratio = preview ? min(1, 1440 / max(width, height)) : 1
       width = max(1, (width * ratio).rounded()); height = max(1, (height * ratio).rounded())
-      guard width * height <= budget else { throw Failure(message: "Reduce output dimensions to fit this device's image limit.") }
+      try ImageEditing.requireExportSize(CGSize(width: width, height: height), budget: budget)
       let mode = r["resizeMode"] as? String ?? "fit"
       let scale = mode == "fill" ? max(width / image.extent.width, height / image.extent.height) : min(width / image.extent.width, height / image.extent.height)
       image = image.transformed(by: CGAffineTransform(scaleX: mode == "stretch" ? width / image.extent.width : scale, y: mode == "stretch" ? height / image.extent.height : scale))
       image = zeroOrigin(image).transformed(by: CGAffineTransform(translationX: (width - image.extent.width) / 2, y: (height - image.extent.height) / 2))
       let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-      image = image.composited(over: CIImage(color: CIColor(color: color(r["background"] as? String ?? "#FFFFFF")))).cropped(to: bounds)
+      // Fit intentionally adds a background; fill/stretch retain transparent source pixels.
+      if mode == "fit" { image = image.composited(over: CIImage(color: CIColor(color: color(r["background"] as? String ?? "#FFFFFF")))) }
+      image = image.cropped(to: bounds)
     }
     let paddingFraction = number(r, "padding", 0, 0...0.3)
     var padding = (paddingFraction * min(image.extent.width, image.extent.height)).rounded()
     let paddedPixels = (image.extent.width + padding * 2) * (image.extent.height + padding * 2)
-    if padding > 0 && paddedPixels > budget {
+    if preview && padding > 0 && paddedPixels > budget {
       let scale = sqrt(budget / paddedPixels) * 0.999
       image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
       padding = (paddingFraction * min(image.extent.width, image.extent.height)).rounded()
     }
     if padding > 0 {
       let bounds = CGRect(x: 0, y: 0, width: image.extent.width + padding * 2, height: image.extent.height + padding * 2)
-      guard bounds.width * bounds.height <= budget else { throw Failure(message: "Reduce the image or border size on this device.") }
+      try ImageEditing.requireExportSize(bounds.size, budget: budget)
       image = image.transformed(by: CGAffineTransform(translationX: padding, y: padding)).composited(over: CIImage(color: CIColor(color: color(r["background"] as? String ?? "#FFFFFF")))).cropped(to: bounds)
     }
+    try ImageEditing.requireExportSize(image.extent.integral.size, budget: budget)
     guard let raster = context.createCGImage(image, from: image.extent.integral) else { throw Failure(message: "Could not render this image.") }
     let format = r["format"] as? String ?? "jpeg"
     guard supportedFormats().contains(format), let type = types[format] else { throw Failure(message: "Choose a format supported on this device.") }
     var rendered = try annotate(raster, r, opaque: format == "jpeg", id: id)
-    let target = (r["targetBytes"] as? NSNumber)?.intValue ?? 0
-    guard target == 0 || target >= 10240 else { throw Failure(message: "Choose a target of at least 10 KB.") }
     guard target == 0 || !["png", "tiff"].contains(format) else { throw Failure(message: "Choose a lossy format for target-size compression.") }
     var quality = number(r, "quality", 90, 10...100)
     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -157,6 +176,99 @@ final class ImageTools {
     guard achieved else { throw Failure(message: "Could not reach that size. Try a larger target.") }
     try check(id); try FileManager.default.moveItem(at: temporary, to: destination)
     return ["uri": destination.absoluteString, "width": rendered.width, "height": rendered.height, "size": (try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0, "mimeType": UTType(type)?.preferredMIMEType ?? "image/jpeg", "sourceWidth": original["width"]!, "sourceHeight": original["height"]!]
+  }
+  /// Same sRGB, straight-alpha equations as ImageTools.kt; bounded native raster and row cancellation.
+  private func adjustColor(_ image: CIImage, _ request: [String: Any], id: String) throws -> CIImage {
+    let levels = request["levels"] as? [String: Any]
+    guard request["levels"] == nil || levels != nil else { throw Failure(message: "Choose valid input levels.") }
+    let black = (levels?["black"] as? NSNumber)?.doubleValue ?? (levels == nil ? 0 : .nan)
+    let white = (levels?["white"] as? NSNumber)?.doubleValue ?? (levels == nil ? 1 : .nan)
+    let gamma = (levels?["gamma"] as? NSNumber)?.doubleValue ?? (levels == nil ? 1 : .nan)
+    guard black.isFinite, white.isFinite, gamma.isFinite, (0...1).contains(black), (0...1).contains(white), white - black >= 1.0 / 255 - 1e-12, (0.1...3).contains(gamma) else { throw Failure(message: "Keep the black point below white and choose gamma from 0.1 to 3.") }
+    let curveNames = ["rgb", "red", "green", "blue"]
+    let curves = request["curves"] as? [String: Any]
+    guard request["curves"] == nil || curves != nil else { throw Failure(message: "Choose valid tone curves.") }
+    let anchors: [[Double]] = try curveNames.map { name in
+      guard let curves else { return [0, 0.25, 0.5, 0.75, 1] }
+      guard let values = curves[name] as? [Double], values.count == 5, values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { throw Failure(message: "Each tone curve needs five anchors from 0 to 100%.") }
+      return values
+    }
+    func curve(_ values: [Double], _ input: Double) -> Double {
+      let x = min(1, max(0, input)) * 4, segment = min(3, Int(min(1, max(0, input)) * 4))
+      return values[segment] + (values[segment + 1] - values[segment]) * (x - Double(segment))
+    }
+    let tables = (0..<3).map { channel in (0..<256).map { value in
+      let leveled = pow(min(1, max(0, (Double(value) / 255 - black) / (white - black))), 1 / gamma)
+      return Int((curve(anchors[channel + 1], curve(anchors[0], leveled)) * 255).rounded())
+    } }
+    let names = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"]
+    let centers: [Double] = [0, 30, 60, 120, 180, 240, 270, 300, 360]
+    let hsl = request["hsl"] as? [String: Any]
+    guard request["hsl"] == nil || hsl != nil else { throw Failure(message: "Choose valid HSL adjustments.") }
+    let adjustments: [[Double]] = try names.map { name in
+      guard let hsl else { return [0, 0, 0] }
+      guard let values = hsl[name] as? [String: Any] else { throw Failure(message: "Choose valid color ranges.") }
+      return try ["hue", "saturation", "lightness"].enumerated().map { component, key in
+        let limit = component == 0 ? 180.0 : 100.0
+        guard let value = (values[key] as? NSNumber)?.doubleValue, value.isFinite, (-limit...limit).contains(value) else { throw Failure(message: "Choose a valid color adjustment.") }
+        return value
+      }
+    }
+    let usesHsl = adjustments.contains { $0.contains { $0 != 0 } }
+    let usesCurves = tables.contains { values in values.enumerated().contains { $0.offset != $0.element } }
+    if !usesCurves && !usesHsl { return image }
+    try check(id)
+    try ImageEditing.requireExportSize(image.extent.integral.size, budget: ImageEditing.exportPixelBudget())
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let raster = context.createCGImage(image, from: image.extent.integral, format: .RGBA8, colorSpace: space),
+          let canvas = CGContext(data: nil, width: raster.width, height: raster.height, bitsPerComponent: 8, bytesPerRow: raster.width * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+          let pixels = canvas.data?.assumingMemoryBound(to: UInt8.self) else { throw Failure(message: "Could not prepare native color adjustment memory.") }
+    canvas.setBlendMode(.copy)
+    canvas.draw(raster, in: CGRect(x: 0, y: 0, width: raster.width, height: raster.height))
+    for y in 0..<raster.height {
+      try check(id)
+      for x in 0..<raster.width {
+        let offset = y * canvas.bytesPerRow + x * 4, alpha = Int(pixels[offset + 3])
+        if alpha == 0 { continue }
+        // CGContext stores premultiplied bytes; curves/HSL operate on straight color.
+        let inputRed = min(255, (Int(pixels[offset]) * 255 + alpha / 2) / alpha)
+        let inputGreen = min(255, (Int(pixels[offset + 1]) * 255 + alpha / 2) / alpha)
+        let inputBlue = min(255, (Int(pixels[offset + 2]) * 255 + alpha / 2) / alpha)
+        var red = Double(tables[0][inputRed]) / 255, green = Double(tables[1][inputGreen]) / 255, blue = Double(tables[2][inputBlue]) / 255
+        let upper = max(red, max(green, blue)), lower = min(red, min(green, blue)), delta = upper - lower
+        if usesHsl && delta > 0.000001 {
+          let section = upper == red ? (green - blue) / delta : upper == green ? (blue - red) / delta + 2 : (red - green) / delta + 4
+          var hue = (section * 60 + 360).truncatingRemainder(dividingBy: 360)
+          var lightness = (upper + lower) / 2
+          var saturation = delta / (1 - abs(2 * lightness - 1))
+          var band = 0
+          while band < 7 && hue >= centers[band + 1] { band += 1 }
+          let weight = (hue - centers[band]) / (centers[band + 1] - centers[band])
+          func mix(_ component: Int) -> Double { adjustments[band][component] * (1 - weight) + adjustments[(band + 1) % 8][component] * weight }
+          hue = (hue + mix(0) + 360).truncatingRemainder(dividingBy: 360)
+          saturation = min(1, max(0, saturation * (1 + mix(1) / 100)))
+          let light = mix(2) / 100
+          lightness = light >= 0 ? lightness + (1 - lightness) * light : lightness * (1 + light)
+          let chroma = (1 - abs(2 * lightness - 1)) * saturation
+          let intermediate = chroma * (1 - abs((hue / 60).truncatingRemainder(dividingBy: 2) - 1))
+          let base = lightness - chroma / 2
+          switch Int(hue) / 60 {
+          case 0: (red, green, blue) = (chroma, intermediate, 0)
+          case 1: (red, green, blue) = (intermediate, chroma, 0)
+          case 2: (red, green, blue) = (0, chroma, intermediate)
+          case 3: (red, green, blue) = (0, intermediate, chroma)
+          case 4: (red, green, blue) = (intermediate, 0, chroma)
+          default: (red, green, blue) = (chroma, 0, intermediate)
+          }
+          red += base; green += base; blue += base
+        }
+        func premultiplied(_ value: Double) -> UInt8 { UInt8((min(255, max(0, Int((value * 255).rounded()))) * alpha + 127) / 255) }
+        pixels[offset] = premultiplied(red); pixels[offset + 1] = premultiplied(green); pixels[offset + 2] = premultiplied(blue)
+      }
+    }
+    try check(id)
+    guard let output = canvas.makeImage() else { throw Failure(message: "Could not finish the color adjustment.") }
+    return CIImage(cgImage: output)
   }
   private func color(_ value: String) -> UIColor {
     let hex = value.replacingOccurrences(of: "#", with: "")
@@ -183,11 +295,19 @@ final class ImageTools {
         let path = UIBezierPath()
         for (i, p) in points.enumerated() { let point = CGPoint(x: min(max(p[0],0),1)*width, y: min(max(p[1],0),1)*height); if i == 0 { path.move(to: point) } else { path.addLine(to: point) } }
         let kind = mark["kind"] as? String ?? "draw", redaction = mark["kind"] as? String == "redact"
-        path.lineWidth = max(1, number(mark,"width",0.005,0.001...0.1)*width); path.lineCapStyle = .round; path.lineJoinStyle = .round
+        path.lineWidth = number(mark,"width",0.005,0.001...0.1)*width; path.lineCapStyle = .round; path.lineJoinStyle = .round
         let brush = mark["brush"] as? String ?? "pen", pattern = mark["pattern"] as? String ?? "solid"
-        let alpha: CGFloat = redaction ? 1 : brush == "highlighter" ? 0.3 : brush == "pencil" ? 170.0/255 : brush == "marker" ? 210.0/255 : 1
-        if !redaction && pattern != "solid" { let dash: [CGFloat] = pattern == "dotted" ? [path.lineWidth*0.1,path.lineWidth*2.4] : [path.lineWidth*4,path.lineWidth*2]; path.setLineDash(dash,count:dash.count,phase:0) }
-        if kind == "polygon" || redaction { path.close(); if redaction { UIColor.black.setFill(); path.fill() } else if let fill = mark["fillColor"] as? String, !fill.isEmpty { color(fill).setFill(); path.fill() } }
+        let fallback: Double = brush == "highlighter" ? 0.3 : brush == "pencil" ? 170.0/255 : brush == "marker" ? 210.0/255 : 1
+        let alpha: CGFloat = redaction ? 1 : CGFloat(number(mark, "opacity", fallback, 0.01...1))
+        if !redaction && kind != "polygon" && pattern == "dotted" {
+          let vertices = points.map { CGPoint(x: min(max($0[0], 0), 1) * width, y: min(max($0[1], 0), 1) * height) }
+          ctx.addPath(StrokeDots.path(vertices, width: path.lineWidth))
+          ctx.setFillColor(color(mark["color"] as? String ?? "#1D4ED8").withAlphaComponent(alpha).cgColor)
+          ctx.fillPath()
+          continue
+        }
+        if !redaction && kind != "polygon" && pattern == "dashed" { let dash: [CGFloat] = [path.lineWidth*4,path.lineWidth*2]; path.setLineDash(dash,count:dash.count,phase:0) }
+        if kind == "polygon" || redaction { path.close(); if redaction { UIColor.black.setFill(); path.fill() } else if let fill = mark["fillColor"] as? String, !fill.isEmpty { color(fill).withAlphaComponent((mark["opacity"] as? NSNumber)?.doubleValue.isFinite == true ? alpha : 1).setFill(); path.fill() } }
         (redaction ? UIColor.black : color(mark["color"] as? String ?? "#1D4ED8").withAlphaComponent(alpha)).setStroke(); path.stroke()
       }
       if let mark {

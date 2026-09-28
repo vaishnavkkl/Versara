@@ -1,3 +1,4 @@
+import { useEditorDraft } from '../editor/use-editor-draft';
 import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
@@ -25,6 +26,14 @@ type Erase = { x: number; y: number; width: number; height: number; background: 
 /** `font` is a standard PDF font name (Helvetica-Bold, Times-Italic, …); `text` may hold several lines. */
 type TextEdit = { lineId?: number; erase?: Erase; text: string; font: string; size: number; color: number; x: number; y: number; underline?: boolean };
 type Preview = { uri: string; width: number; height: number };
+
+type TextDraft = { edits: TextEdit[]; history: TextEdit[][]; future: TextEdit[][]; refWidth: number };
+function validTextDraft(value: unknown): value is TextDraft {
+  if (!value || typeof value !== 'object') return false;
+  const draft = value as TextDraft;
+  const edits = (items: unknown): items is TextEdit[] => Array.isArray(items) && items.length <= 500 && items.every(item => item && typeof item.text === 'string' && item.text.length <= 10000 && typeof item.font === 'string' && ['size','color','x','y'].every(key => Number.isFinite(item[key])));
+  return Number.isFinite(draft.refWidth) && draft.refWidth > 0 && edits(draft.edits) && [draft.history,draft.future].every(items => Array.isArray(items) && items.length <= 30 && items.every(edits));
+}
 
 const PREVIEW_SIZE = 1600;
 const MAX_HISTORY = 30;
@@ -76,6 +85,12 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const ticket = useRef(0);
   const opening = useRef<Promise<void>>(Promise.resolve());
   const closeRef = useRef(() => {});
+  const recognitionUri = useRef<string | null>(null);
+  const recovery = useEditorDraft({ id: `image:${id}:text`, uri: file?.uri, value: { edits, history, future, refWidth: analysis?.width ?? 1 }, dirty: !!edits.length,
+    validate: validTextDraft, restore: value => {
+      if (analysis && Math.abs(value.refWidth - analysis.width) < 1) { setEdits(value.edits); setHistory(value.history); setFuture(value.future); }
+      else setError('The image dimensions changed. The previous text draft could not be restored.');
+    } });
 
   useEffect(() => {
     mounted.current = true;
@@ -89,7 +104,9 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
         const engine = FileEngine;
         const result = await withLoading(addOnly ? 'Opening your image…' : 'Finding text in your image…', async () => {
           session.create({ intermediates: true, idempotent: true });
+          recognitionUri.current = addOnly ? null : value.uri;
           const found = addOnly ? null : await engine.recognizeImageText(value.uri);
+          recognitionUri.current = null;
           if (cancelled) return null;
           const first = await engine.renderImageText(JSON.stringify({ uri: value.uri, outputUri: new File(session, `preview-${++ticket.current}.jpg`).uri, refWidth: found?.width ?? 1, edits: [], maxSize: PREVIEW_SIZE, preview: true }));
           // Added text is measured against the preview width, which the full-size export scales from.
@@ -104,7 +121,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
         if (!cancelled) setError((cause as Error).message || 'Could not read text in this image.');
       }
     })();
-    return () => { cancelled = true; mounted.current = false; };
+    return () => { cancelled = true; mounted.current = false; if (recognitionUri.current) FileEngine?.cancelImageTextRecognition?.(recognitionUri.current); };
   }, [id, session, addOnly, workspace]);
 
   useEffect(() => () => {
@@ -135,7 +152,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const annotations = useMemo(() => JSON.stringify(draftEdits), [draftEdits]);
   function closeBox() { Keyboard.dismiss(); setShowFormatting(false); setLine(null); setEditing(null); setPlacement(null); setText(''); setIndent(0); }
   function selectLine(lineId: number) {
-    if (!analysis || busy || addOnly) return;
+    if (!analysis || busy || !recovery.ready || addOnly) return;
     const target = analysis.lines.find(item => item.id === lineId);
     if (!target) return;
     const index = edits.findIndex(edit => edit.lineId === lineId);
@@ -150,7 +167,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
     setPlacement(existing && existing.text ? { x: existing.x, y: existing.y } : { x: metrics.x, y: metrics.y });
   }
   function place(point: { x: number; y: number }) {
-    if (busy || !adding) return;
+    if (busy || !recovery.ready || !adding) return;
     if (!placement && !line) { setText(''); setEditing(null); setIndent(0); if (analysis) setSizeInput(String(Math.max(12, Math.round(analysis.width / 24)))); }
     setPlacement(point);
   }
@@ -190,21 +207,21 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
     if (busy) return;
     if (boxOpen) { closeBox(); return; }
     if (!edits.length && !workspace.changed) { close(); return; }
-    showDialog('Discard text edits?', 'Your changes to this image have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: close }], { ios: 'textformat', android: 'text-fields' });
+    showDialog('Discard text edits?', 'Your changes to this image have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void Promise.all([recovery.clear(), workspace.discard()]).then(close).catch(cause => setError((cause as Error).message)); } }], { ios: 'textformat', android: 'text-fields' });
   }
   useEffect(() => { closeRef.current = requestClose; });
 
   async function applyToWorkspace() {
-    if (!file || !analysis || !FileEngine || busy) throw new Error('Wait for the image to finish loading.');
+    if (!file || !analysis || !FileEngine || busy || !recovery.ready) throw new Error('Wait for the image to finish loading.');
     if (!edits.length) return;
     Keyboard.dismiss(); setBusy(true);
     try {
-      const result = await workspace.render(outputUri => FileEngine!.renderImageText(JSON.stringify({ uri: file.uri, outputUri, refWidth: analysis.width, edits, format: 'png', quality: 100 })));
-      workspace.accept(result, file);
+      await workspace.apply(outputUri => FileEngine!.renderImageText(JSON.stringify({ uri: file.uri, outputUri, refWidth: analysis.width, edits, format: 'png', quality: 100 })), file);
+      await recovery.clear();
     } finally { if (mounted.current) setBusy(false); }
   }
   async function save() {
-    if (!file || !analysis || !FileEngine || busy || !edits.length) return;
+    if (!file || !analysis || !FileEngine || busy || !recovery.ready || (!edits.length && !workspace.changed)) return;
     if (boxOpen) { showDialog('Text box still open', 'Apply or cancel this text before saving the image.', undefined, { ios: 'character.textbox', android: 'text-fields' }); return; }
     const engine = FileEngine;
     const png = file.mimeType === 'image/png';
@@ -224,10 +241,10 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
         const stored = await saveEditedOutput({ output: rendered.uri, mimeType: rendered.mimeType, kind: 'image', mode, origin: workspace.origin ?? file, name: options.name });
         return { result: rendered, saved: stored };
       });
+      await recovery.clear(); await workspace.discard();
       toast(`Saved to ${saved.device.location}`);
       if (!mounted.current) return;
       if (mode === 'replace' && saved.recent) { router.replace({ pathname: '/file-preview', params: { id: saved.recent.id } }); return; }
-      setHistory([]); setFuture([]);
       showDialog('Image saved', `${saved.file.name}\n${result.width} × ${result.height} · ${formatSize(result.size)}\nSaved to ${saved.device.location}`, [
         { text: 'Keep editing', style: 'cancel' },
         { text: 'Share', onPress: () => { void shareFile({ uri: saved.file.uri, mimeType: result.mimeType }).catch(() => {}); } },
@@ -243,17 +260,17 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const objectsJson = useMemo(() => JSON.stringify(analysis?.lines.map(item => ({ id: item.id, x: item.x, y: item.y, width: item.width, height: item.height })) ?? []), [analysis]);
   return <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.systemBackground }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
     <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}>
-      <ImageWorkspaceTools id={id} current={addOnly ? 'text' : 'edit_text'} disabled={!file || busy || boxOpen} onApply={applyToWorkspace} />
+      <ImageWorkspaceTools id={id} current={addOnly ? 'text' : 'edit_text'} disabled={!file || busy || !recovery.ready || boxOpen} onApply={applyToWorkspace} />
       {boxOpen ? <Pressable accessibilityRole="button" accessibilityLabel={addOnly ? 'Apply added text' : 'Apply text change'}
         disabled={busy || (addOnly && !text.trim())} onPress={() => apply()}
         style={[styles.save, getGradients(colors).module, (busy || (addOnly && !text.trim())) && styles.disabled]}>
         <UniversalIcon ios="checkmark" android="check" size={24} color={colors.moduleText} />
-      </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Save image with text changes" disabled={!edits.length || busy} onPress={() => { void save(); }}
-        style={[styles.save, getGradients(colors).module, (!edits.length || busy) && styles.disabled]}>
+      </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Save image with text changes" disabled={(!edits.length && !workspace.changed) || busy || !recovery.ready} onPress={() => { void save(); }}
+        style={[styles.save, getGradients(colors).module, ((!edits.length && !workspace.changed) || busy || !recovery.ready) && styles.disabled]}>
         <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText>
       </Pressable>}
     </ScreenHeader>
-    {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
+    {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error || recovery.error}</ThemedText>}
     {!analysis || !preview || !file ? <View style={styles.center}>{!error && <AppLoader size="large" />}</View> : <View style={styles.grow}>
       <View style={styles.grow}>
         {active && NativeEditCanvas && <NativeEditCanvas key={file.uri} style={styles.grow} source={preview.uri}

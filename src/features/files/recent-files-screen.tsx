@@ -29,6 +29,7 @@ import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { hasNativePdfLibrary, useDevicePdfs } from './use-device-pdfs';
 import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
+import { stagePreviewFile } from './preview-handoff';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
@@ -49,7 +50,7 @@ function cacheList(key: string, value: CachedList) {
   if (listCache.size > 8) listCache.delete(listCache.keys().next().value!);
 }
 
-export function RecentFilesScreen({ kind }: { kind: FileKind }) {
+export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: FileKind; onSelect?: (file: RecentFile) => Promise<boolean>; selectionTitle?: string }) {
   const colors = usePalette();
   const active = useScreenActive();
   const [grid] = useLayoutPreference();
@@ -67,13 +68,17 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
   const [revision, setRevision] = useState(0);
   const focused = useRef(false);
   const picking = useRef(false);
+  const navigating = useRef(false);
+  const refreshOnReturn = useRef(false);
 
   const lastRevision = useRef(revision);
   useFocusEffect(useCallback(() => {
     focused.current = true;
+    navigating.current = false;
     const key = `${kind}|${search.trim()}`;
     const cached = listCache.get(key);
-    const forced = lastRevision.current !== revision;
+    const forced = lastRevision.current !== revision || refreshOnReturn.current;
+    refreshOnReturn.current = false;
     lastRevision.current = revision;
     setBusy(picking.current);
     let cancelled = false;
@@ -97,31 +102,45 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
     return () => { cancelled = true; focused.current = false; clearTimeout(timer); };
   }, [kind, search, revision]));
 
-  function openLibrary(file: RecentFile) {
+  async function openLibrary(file: RecentFile) {
     // The listing already has the document path. Avoid resolving it again inside
     // the generic media screen while its slide transition is running.
-    if (file.kind === 'pdf') { openPdfScreen(file); return; }
-    router.push({ pathname: '/file-preview', params: { id: file.id } });
+    navigating.current = true;
+    setBusy(true);
+    try {
+      if (onSelect) {
+        const opened = await onSelect(file);
+        if (!opened) { navigating.current = false; if (focused.current) setBusy(false); }
+        return;
+      }
+      if (file.kind === 'pdf') { openPdfScreen(file); return; }
+      stagePreviewFile(file);
+      router.push({ pathname: '/file-preview', params: { id: file.id } });
+    } catch (cause) {
+      navigating.current = false;
+      setBusy(false);
+      throw cause;
+    }
   }
 
   async function openItem(item: RecentListItem) {
-    if (picking.current) return;
-    if (item.source === 'library') { openLibrary(item); return; }
+    if (picking.current || navigating.current) return;
     picking.current = true; setBusy(true); setError(null);
-    toast(`Opening ${item.name}…`);
+    if (item.source === 'device') toast(`Opening ${item.name}…`);
     try {
-      const file = await importDeviceRecent(item);
-      if (focused.current) openLibrary(file);
+      const file = item.source === 'library' ? item : await importDeviceRecent(item);
+      if (item.source === 'device') refreshOnReturn.current = true;
+      if (focused.current) await openLibrary(file);
     } catch (cause) {
       if (focused.current) setError((cause as Error).message || 'Could not open this file. Try again.');
     } finally {
       picking.current = false;
-      if (focused.current) setBusy(false);
+      if (focused.current && !navigating.current) setBusy(false);
     }
   }
 
   async function browse() {
-    if (picking.current) return;
+    if (picking.current || navigating.current) return;
     picking.current = true; setBusy(true); setError(null);
     try {
       if (kind !== 'pdf') {
@@ -129,12 +148,13 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
         if (status === 'denied' || status === 'undetermined') await requestFileAccess();
       }
       const file = await importRecentFile(kind);
-      if (file && focused.current) openLibrary(file);
+      if (file) refreshOnReturn.current = true;
+      if (file && focused.current) await openLibrary(file);
     } catch (cause) {
       if (focused.current) setError((cause as Error).message || 'Could not open this file. Try again.');
     } finally {
       picking.current = false;
-      if (focused.current) {
+      if (focused.current && !navigating.current) {
         setBusy(false);
         void getFileAccessStatus().then(status => {
           if (focused.current) setAccessHint(kind !== 'pdf' && (status === 'denied' || status === 'undetermined') && wasFileAccessAsked());
@@ -166,18 +186,18 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
   const label = FILE_LABELS[kind];
   const article = kind === 'image' || kind === 'audio' ? 'an' : 'a';
   const nativeItems = useMemo(() => JSON.stringify(files.map(item => ({
-    id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: item.source === 'library',
+    id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
     detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${new Date(item.opened).toLocaleDateString()}`,
-  }))), [files]);
+  }))), [files, onSelect]);
   const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground });
 
   return (
     <View style={[styles.screen, getGradients(colors).page]}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Back to dashboard" onPress={() => router.navigate('/(tabs)')} style={styles.iconButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={onSelect ? 'Back to Privacy' : 'Back to dashboard'} onPress={() => onSelect ? (router.canGoBack() ? router.back() : router.replace('/(modules)/privacy')) : router.navigate('/(tabs)')} style={styles.iconButton}>
           <UniversalIcon ios="chevron.left" android="arrow-back" color={colors.label} size={24} />
         </Pressable>
-        <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>{label}</ThemedText>
+        <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>{selectionTitle ?? label}</ThemedText>
         <HelpButton /><LayoutToggle />
       </View>
 
@@ -244,7 +264,7 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
           style={styles.nativeList}
           items={nativeItems} palette={nativePalette} grid={grid} disabled={busy} active={active && !busy}
           onOpen={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item) void openItem(item); }}
-          onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item?.source === 'library' && !busy) remove(item); }}
+          onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (!onSelect && item?.source === 'library' && !busy) remove(item); }}
         />
       ) : (
         <FlatList
@@ -265,7 +285,7 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
                 <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} style={[styles.file, grid && styles.gridFile]}>
                   <View style={[styles.thumbnail, grid && styles.gridThumbnail]}>
                     {!fromDevice || (kind === 'image' && item.uri.startsWith('content://'))
-                      ? <FileThumbnail uri={item.uri} kind={kind} active={active} />
+                      ? <FileThumbnail uri={item.uri} kind={kind} active={active && !busy} />
                       : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={kind === 'video' ? 'play.rectangle' : kind === 'audio' ? 'waveform' : kind === 'image' ? 'photo' : 'doc.richtext'} android={kind === 'video' ? 'smart-display' : kind === 'audio' ? 'graphic-eq' : kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
                   </View>
                   <View style={styles.grow}>
@@ -275,7 +295,7 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
                     </ThemedText>
                   </View>
                 </Pressable>
-                {!fromDevice && (
+                {!fromDevice && !onSelect && (
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name} from Recents`} onPress={() => remove(item)} style={[styles.iconButton, grid ? styles.removeCorner : styles.removeTop]}>
                     <UniversalIcon ios="xmark.circle.fill" android="cancel" size={20} color={colors.secondaryLabel} />
                   </Pressable>

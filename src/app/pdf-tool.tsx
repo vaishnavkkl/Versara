@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { BackHandler, Keyboard, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { BackHandler, Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { showDialog } from '@/components/app-dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ScreenHeader } from '@/components/screen-header';
-import { HelpButton } from '@/components/help-button';
+import { UniversalIcon } from '@/components/universal-icon';
+import { PdfToolLayoutContext } from '@/features/pdf/pdf-tool-layout';
 import { ToolButton } from '@/components/tool-button';
 import { usePalette } from '@/theme/colors';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
@@ -26,6 +27,9 @@ export default function PdfToolScreen() {
   const mounted = useRef(true);
   const [focused, setFocused] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
+  const discardDraft = useRef<() => Promise<void>>(() => Promise.resolve());
+  const registerDiscard = useCallback((action: () => Promise<void>) => { discardDraft.current = action; }, []);
+  const [landscape, setLandscape] = useState(false);
   useEffect(() => { if (session) recordToolUse(`PDF:${session.tool}`); }, [session]);
   useEffect(() => {
     mounted.current = true;
@@ -45,7 +49,7 @@ export default function PdfToolScreen() {
     Keyboard.dismiss();
     showDialog('Discard PDF edits?', 'Your changes to this PDF have not been saved.', [
       { text: 'Keep editing', style: 'cancel' },
-      { text: 'Discard', style: 'destructive', onPress: leave },
+      { text: 'Discard', style: 'destructive', onPress: () => { void discardDraft.current().then(leave).catch(() => showDialog('Draft could not be discarded', 'Try again to avoid recovering these edits next time.')); } },
     ], { ios: 'exclamationmark.triangle', android: 'warning' });
   }
   const closeRef = useRef(close);
@@ -56,19 +60,20 @@ export default function PdfToolScreen() {
     return () => subscription.remove();
   }, [unsaved]);
   const tool = session?.tool;
-  return <SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
-    <Stack.Screen options={{ gestureEnabled: !unsaved }} />
-    {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close}><HelpButton tool={tool} /></ScreenHeader>}
+  return <PdfToolLayoutContext.Provider value={{ landscape, setLandscape }}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
+    <Stack.Screen options={{ gestureEnabled: !unsaved, orientation: landscape ? 'landscape' : 'portrait' }} />
+    {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close}><Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { backgroundColor: colors.accentSurface, opacity: pressed ? .6 : 1 }]}><UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.accent} /></Pressable></ScreenHeader>}
     {!session ? <View style={styles.empty}><ThemedText>Select a file from the PDF tools to get started.</ThemedText><ToolButton title="Back to PDF tools" onPress={close} /></View>
       : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} />
-      : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : 'edit'} />
+      : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : 'edit'} />
       : tool === 'merge' || tool === 'split' ? <OrganizePdf operation={tool} initialSelection={session} />
       : tool === 'extract' || tool === 'delete' ? <EditPdfPages operation={tool} initialSelection={session} />
       : tool === 'reorder' || tool === 'rotate' ? <ArrangePdfPages operation={tool} initialSelection={session} />
       : tool === 'from_image' ? <ImageToPdf initialSelection={session} />
-      : <AdvancedPdfTool session={session} onUnsavedChange={setUnsaved} />}
-  </SafeAreaView>;
+      : <AdvancedPdfTool session={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} />}
+  </SafeAreaView></PdfToolLayoutContext.Provider>;
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 }, empty: { flex: 1, padding: 24, gap: 16, justifyContent: 'center' },
+  orientation: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });

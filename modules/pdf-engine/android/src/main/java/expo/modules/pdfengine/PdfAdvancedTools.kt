@@ -12,9 +12,12 @@ import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
 import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
+import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
+import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.rendering.PDFRenderer
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.text.TextPosition
 import com.tom_roush.pdfbox.util.Matrix
 import com.googlecode.tesseract.android.TessBaseAPI
 import expo.modules.kotlin.Promise
@@ -28,14 +31,36 @@ import kotlin.math.*
 class PdfAdvancedTools {
   private val worker = Executors.newSingleThreadExecutor()
   private val jobs = PdfJobRegistry()
-  fun cancel(id: String) = jobs.cancel(id)
-  fun destroy() = jobs.destroy(worker)
+  private val recognitionLock = Any()
+  private val recognizers = mutableMapOf<String, TessBaseAPI>()
+  fun cancel(id: String) { jobs.cancel(id); synchronized(recognitionLock) { recognizers[id]?.stop() } }
+  fun destroy() { synchronized(recognitionLock) { recognizers.values.forEach { it.stop() } }; jobs.destroy(worker) }
   private fun local(context: Context, uri: String): File {
     val parsed = Uri.parse(uri)
     require(parsed.scheme == "file" && parsed.path != null) { "Choose a local PDF." }
     return File(parsed.path!!).canonicalFile.also {
       require(it.path.startsWith(context.cacheDir.canonicalPath + File.separator) && it.isFile) { "Choose the PDF again." }
     }
+  }
+  private class TextFound : RuntimeException()
+  private fun hasSelectableText(pdf: PDDocument, number: Int, check: () -> Unit): Boolean {
+    // Stop at the first non-whitespace glyph instead of allocating a page string.
+    check()
+    var positions = 0
+    var examined = 0
+    val detector = object : PDFTextStripper() {
+      override fun processTextPosition(text: TextPosition) {
+        if (positions++ % 64 == 0) check()
+        if (!text.unicode.isNullOrBlank()) throw TextFound()
+        examined += max(1, text.unicode?.length?.coerceAtMost(100_001) ?: 1)
+        // Match iOS's bounded probe: retain an exceptionally large existing
+        // layer conservatively instead of walking an unbounded whitespace run.
+        if (examined > 100_000) throw TextFound()
+      }
+    }.apply { startPage = number + 1; endPage = number + 1 }
+    val found = try { detector.getText(pdf); false } catch (_: TextFound) { true }
+    check()
+    return found
   }
   private fun memory(context: Context) = MemoryUsageSetting.setupTempFileOnly().setTempDir(context.cacheDir)
   fun run(context: Context, id: String, request: String, promise: Promise, progress: (Int, Int) -> Unit) {
@@ -48,7 +73,7 @@ class PdfAdvancedTools {
         require(request.length <= 2_000_000) { "Too many annotations. Save your changes first." }
         val r = JSONObject(request)
         val op = r.getString("operation")
-        require(op in setOf("info", "preview", "estimate", "duplicate", "insert", "compress", "to_image", "highlight", "draw", "shapes", "sign", "watermark", "numbers", "protect", "metadata", "flatten", "ocr", "extract_text", "repair")) { "Unknown PDF tool." }
+        require(op in setOf("info", "preview", "estimate", "duplicate", "insert", "compress", "to_image", "highlight", "draw", "shapes", "sign", "watermark", "numbers", "protect", "metadata", "redact", "flatten", "ocr", "extract_text", "repair")) { "Unknown PDF tool." }
         PDFBoxResourceLoader.init(context.applicationContext)
         val input = local(context, r.getString("uri"))
         val password = r.optString("inputPassword")
@@ -62,6 +87,12 @@ class PdfAdvancedTools {
           if (op !in setOf("info", "preview")) {
             require(permission.canModify() && permission.canExtractContent() && permission.canAssembleDocument()) { "This PDF restricts editing or extraction. Use an unrestricted copy." }
             require(pdf.signatureDictionaries.isEmpty()) { "This PDF is digitally signed. Use an unsigned copy to preserve its signatures." }
+            PdfIntegrity.requireUnsigned(context, input, password, check)
+          }
+          // A PDFBox full rewrite cannot retain the loaded encryption policy
+          // without replacing credentials. Never silently remove protection.
+          require(!pdf.isEncrypted || op in setOf("info", "preview", "estimate", "compress", "to_image", "ocr", "extract_text", "protect")) {
+            "This tool cannot preserve this PDF's existing encryption. Use an explicitly unlocked copy; the protected original is unchanged."
           }
           if (op == "info") {
             val box = pdf.getPage(0).cropBox
@@ -91,12 +122,15 @@ class PdfAdvancedTools {
             check()
             val box = pdf.getPage(page).cropBox
             val pixels = if (Runtime.getRuntime().maxMemory() < 256L * 1024 * 1024) 1_500_000f else 3_000_000f
-            val scale = min(requestedDpi / 72, sqrt(pixels / (box.width * box.height).coerceAtLeast(1f)))
+            val scale = min(min(requestedDpi / 72, sqrt(pixels / (box.width * box.height).coerceAtLeast(1f))), 4096f / max(box.width, box.height))
             require(scale.isFinite() && scale > 0 && box.width > 0 && box.height > 0) { "This PDF has invalid page dimensions." }
-            return renderer.renderImage(page, scale).also { check() }
+            val bitmap = renderer.renderImage(page, scale)
+            try { check(); return bitmap }
+            catch (error: Throwable) { bitmap.recycle(); throw error }
           }
           val outputs = JSONArray()
           var outputCount = count
+          var ocrSummary: JSONObject? = null
           when (op) {
             "preview", "to_image" -> {
               val selected = if (op == "preview") listOf(pages.first()) else pages
@@ -112,14 +146,9 @@ class PdfAdvancedTools {
               }
             }
             "estimate" -> {
-              var bytes = 0L
-              val samples = listOf(0, count / 2, count - 1).distinct()
-              samples.forEach { page ->
-                val bitmap = render(page)
-                try { val stream = java.io.ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, (jpegQuality * 100).toInt(), stream); bytes += stream.size() }
-                finally { bitmap.recycle() }
-              }
-              check(); promise.resolve(JSONObject().put("estimatedSize", if (quality == "max") input.length() else bytes / samples.size * count + count * 1200).toString()); return@submit
+              // Raster-page samples do not estimate embedded-image optimization.
+              // The original-byte fallback makes the source size an upper bound.
+              check(); promise.resolve(JSONObject().put("estimatedSize", input.length()).put("estimateKind", "upperBound").toString()); return@submit
             }
             "extract_text", "ocr" -> {
               val tess = if (op == "ocr") TessBaseAPI() else null
@@ -130,8 +159,53 @@ class PdfAdvancedTools {
                   if (!data.isFile) { data.parentFile!!.mkdirs(); val temp = File(data.parentFile, "eng.partial"); try { context.assets.open("tessdata/eng.traineddata").use { from -> temp.outputStream().use { from.copyTo(it) } }; check(temp.renameTo(data)) { "Could not prepare offline OCR." } } finally { temp.delete() } }
                   require(tess.init(root.path, "eng")) { "Offline OCR data could not be loaded." }
                   tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+                  synchronized(recognitionLock) { check(); recognizers[id] = tess }
                 }
-                output(0).bufferedWriter(Charsets.UTF_8).use { writer ->
+                val searchable = op == "ocr" && r.optString("ocrFormat", "text") == "pdf"
+                require(r.optString("ocrFormat", "text") in setOf("text", "pdf")) { "Choose text or searchable PDF output." }
+                if (searchable) {
+                  require(pages.size <= 100) { "Recognize up to 100 pages at a time." }
+                  val recognized = JSONArray()
+                  var totalWords = 0
+                  pages.forEachIndexed { index, page ->
+                    check()
+                    val hasText = r.optBoolean("skipExistingText", true) && hasSelectableText(pdf, page, check)
+                    val words = JSONArray()
+                    if (!hasText) {
+                      val bitmap = render(page, 160f)
+                      try {
+                        tess!!.setImage(bitmap); tess.utF8Text; check()
+                        val iterator = tess.resultIterator
+                        if (iterator != null) try {
+                          val level = TessBaseAPI.PageIteratorLevel.RIL_WORD
+                          iterator.begin()
+                          do {
+                            check()
+                            val text = iterator.getUTF8Text(level)?.trim().orEmpty()
+                            val box = iterator.getBoundingBox(level) ?: continue
+                            if (text.isEmpty() || box.size < 4) continue
+                            require(text.length <= 256 && !text.any { it == '\n' || it == '\r' || it == '\t' }) { "An OCR word cannot be placed safely. Export text instead." }
+                            val l = box[0].coerceIn(0, bitmap.width); val t = box[1].coerceIn(0, bitmap.height)
+                            val rr = box[2].coerceIn(0, bitmap.width); val b = box[3].coerceIn(0, bitmap.height)
+                            if (rr <= l || b <= t) continue
+                            require(words.length() < 2000 && totalWords < 20000) { "Too much OCR text. Choose fewer pages." }
+                            words.put(JSONObject().put("text", text).put("x", l.toDouble() / bitmap.width).put("y", t.toDouble() / bitmap.height).put("width", (rr - l).toDouble() / bitmap.width).put("height", (b - t).toDouble() / bitmap.height))
+                            totalWords++
+                          } while (iterator.next(level))
+                        } finally { iterator.delete() }
+                      } finally { tess!!.clear(); bitmap.recycle() }
+                    }
+                    recognized.put(JSONObject().put("page", page).put("words", words).put("skipped", hasText))
+                    progress(index + 1, pages.size + 1)
+                  }
+                  check()
+                  val target = output(0)
+                  val request = JSONObject().put("action", "ocr_save").put("path", input.canonicalPath).put("outputPath", target.canonicalPath).put("inputPassword", password).put("ocrPages", recognized)
+                  val response = JSONObject(NativeTextEditor({ cancelled.get() }, { _, _ -> }).run(request.toString(), context.cacheDir.canonicalPath, context.filesDir.canonicalPath))
+                  require(!response.has("error")) { response.optString("error", "Could not create a searchable PDF.") }
+                  ocrSummary = response
+                  check(); progress(pages.size + 1, pages.size + 1)
+                } else output(0).bufferedWriter(Charsets.UTF_8).use { writer ->
                   pages.forEachIndexed { index, page ->
                     check(); writer.write("--- Page ${page + 1} ---\n")
                     val text = if (tess == null) PDFTextStripper().apply { startPage = page + 1; endPage = page + 1; sortByPosition = true }.getText(pdf) else {
@@ -141,17 +215,59 @@ class PdfAdvancedTools {
                     writer.write(text); writer.write("\n\n"); check(); progress(index + 1, pages.size)
                   }
                 }
-              } finally { tess?.recycle() }
+              } finally { synchronized(recognitionLock) { recognizers.remove(id); tess?.recycle() } }
             }
-            "compress", "flatten" -> {
-              if (op == "compress" && quality == "max") { pdf.isAllSecurityToBeRemoved = true; pdf.save(output(0)) }
-              else PDDocument(memory(context)).use { result ->
+            "compress" -> {
+              if (pdf.isEncrypted) input.copyTo(output(0))
+              else {
+                if (quality != "max") optimizeImages(pdf, quality, check, progress)
+                check(); pdf.save(output(0))
+              }
+            }
+            "redact" -> {
+              val regions = r.getJSONArray("rects")
+              require(regions.length() in 1..3000) { "Choose between 1 and 3,000 covers." }
+              val covers = (0 until regions.length()).map { index ->
+                val rect = regions.getJSONObject(index)
+                val page = rect.getInt("page")
+                val x = rect.getDouble("x"); val y = rect.getDouble("y")
+                val w = rect.getDouble("width"); val h = rect.getDouble("height")
+                require(page in 1..count && listOf(x,y,w,h).all { it.isFinite() } && x >= 0 && y >= 0 && w > 0 && h > 0 && x+w <= 1.000001 && y+h <= 1.000001) { "Invalid redaction region." }
+                page to doubleArrayOf(x,y,w,h)
+              }.groupBy({ it.first }, { it.second })
+              // A new document receives only already-redacted pixels: no source
+              // text, cropped content, attachments, annotations or object history.
+              PDDocument(memory(context)).use { result ->
                 for (page in 0 until count) {
-                  val bitmap = render(page, if (op == "flatten") 160f else dpi)
+                  val bitmap = render(page, 160f)
+                  try {
+                    val canvas = android.graphics.Canvas(bitmap)
+                    val paint = android.graphics.Paint().apply { color = android.graphics.Color.BLACK; isAntiAlias = false }
+                    for (rect in covers[page + 1].orEmpty()) {
+                      check()
+                      val left = floor(rect[0]*bitmap.width).toInt().coerceIn(0, bitmap.width)
+                      val top = floor(rect[1]*bitmap.height).toInt().coerceIn(0, bitmap.height)
+                      val right = ceil((rect[0]+rect[2])*bitmap.width).toInt().coerceIn(0, bitmap.width)
+                      val bottom = ceil((rect[1]+rect[3])*bitmap.height).toInt().coerceIn(0, bitmap.height)
+                      canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+                    }
+                    val original = pdf.getPage(page); val box = original.cropBox; val rotated = original.rotation % 180 != 0
+                    val dest = PDPage(PDRectangle(if (rotated) box.height else box.width, if (rotated) box.width else box.height)); result.addPage(dest)
+                    PDPageContentStream(result, dest).use { stream -> stream.drawImage(com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory.createFromImage(result, bitmap), 0f, 0f, dest.mediaBox.width, dest.mediaBox.height) }
+                  } finally { bitmap.recycle() }
+                  check(); progress(page + 1, count)
+                }
+                check(); result.save(output(0, true))
+              }
+            }
+            "flatten" -> {
+              PDDocument(memory(context)).use { result ->
+                for (page in 0 until count) {
+                  val bitmap = render(page, 160f)
                   try {
                     val original = pdf.getPage(page); val box = original.cropBox; val rotated = original.rotation % 180 != 0
                     val dest = PDPage(PDRectangle(if (rotated) box.height else box.width, if (rotated) box.width else box.height)); result.addPage(dest)
-                    PDPageContentStream(result, dest).use { stream -> stream.drawImage(JPEGFactory.createFromImage(result, bitmap, if (op == "flatten") .95f else jpegQuality), 0f, 0f, dest.mediaBox.width, dest.mediaBox.height) }
+                    PDPageContentStream(result, dest).use { stream -> stream.drawImage(JPEGFactory.createFromImage(result, bitmap, .95f), 0f, 0f, dest.mediaBox.width, dest.mediaBox.height) }
                   } finally { bitmap.recycle() }
                   check(); progress(page + 1, count)
                 }
@@ -159,7 +275,6 @@ class PdfAdvancedTools {
               }
             }
             else -> {
-              pdf.isAllSecurityToBeRemoved = true
               when (op) {
                 "duplicate" -> {
                   require(count + pages.size <= 2000) { "Keep the result below 2,001 pages." }
@@ -180,6 +295,7 @@ class PdfAdvancedTools {
                     if (position == count) pdf.addPage(blank) else pdf.pages.insertBefore(blank, pdf.getPage(position))
                   } else PDDocument.load(local(context, source), memory(context)).use { other ->
                     require(!other.isEncrypted && other.currentAccessPermission.canAssembleDocument() && count + other.numberOfPages <= 2000) { "Choose an unrestricted PDF; keep the result below 2,001 pages." }
+                    PdfIntegrity.requireUnsigned(context, local(context, source), check = check)
                     val before = if (position < count) pdf.getPage(position) else null
                     for (page in other.pages) { val copy = pdf.importPage(page); copy.resources = page.resources; copy.cropBox = page.cropBox; copy.mediaBox = page.mediaBox; copy.rotation = page.rotation; if (before != null) { pdf.removePage(copy); pdf.pages.insertBefore(copy, before) }; check() }
                     // Save while imported resources are still alive.
@@ -238,10 +354,11 @@ class PdfAdvancedTools {
           // Verify every PDF before making any result visible. Encrypted output is reopened with its new password.
           for ((partial, file) in staged) {
             check(); require(partial.length() > 0) { "The output is empty." }
-            if (file.extension.lowercase() == "pdf") PDDocument.load(partial, if (op == "protect") r.getString("password") else "", memory(context)).use { verified ->
+            if (file.extension.lowercase() == "pdf") PDDocument.load(partial, if (op == "protect") r.getString("password") else password, memory(context)).use { verified ->
               require(verified.numberOfPages == outputCount) { "The saved PDF could not be verified." }
               if (op == "repair") for (index in 0 until outputCount) { check(); val preview = PDFRenderer(verified).renderImage(index, .15f); preview.recycle() }
               if (op == "protect") require(verified.isEncrypted) { "Password protection could not be verified." }
+              else require(verified.isEncrypted == pdf.isEncrypted) { "The saved PDF did not preserve its encryption. No output was kept." }
             }
           }
           // Rasterising an already compact/vector PDF can make it larger. Keep
@@ -251,7 +368,8 @@ class PdfAdvancedTools {
           }
           for ((partial, file) in staged) { check(); require(partial.renameTo(file)) { "Could not save output. Check available storage." }; committed.add(file); outputs.put(JSONObject().put("uri", Uri.fromFile(file)).put("size", file.length()).put("pageCount", outputCount)) }
           val response = JSONObject().put("outputs", outputs)
-          if (op == "ocr" || op == "extract_text") {
+          if (ocrSummary != null) response.put("ocrSummary", ocrSummary)
+          if ((op == "ocr" && r.optString("ocrFormat", "text") == "text") || op == "extract_text") {
             val buffer = ByteArray(16_000)
             val length = committed.first().inputStream().use { it.read(buffer) }
             response.put("textPreview", if (length > 0) String(buffer, 0, length, Charsets.UTF_8) else "")
@@ -264,6 +382,52 @@ class PdfAdvancedTools {
       } finally { staged.forEach { it.first.delete() } }
     }
   }
+  /** Replace only ordinary opaque RGB/gray image resources, never whole pages.
+   * Masks, tagged images, optional-content images and large decodes stay intact.
+   * Keeping the original resource is always preferable to losing PDF semantics.
+   */
+  private fun optimizeImages(pdf: PDDocument, quality: String, check: () -> Unit, progress: (Int, Int) -> Unit) {
+    val visited = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<com.tom_roush.pdfbox.cos.COSDictionary, Boolean>())
+    val replacements = java.util.IdentityHashMap<com.tom_roush.pdfbox.cos.COSStream, PDImageXObject>()
+    val examined = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<com.tom_roush.pdfbox.cos.COSStream, Boolean>())
+    val edge = if (quality == "small") 1280 else 2200
+    val jpeg = if (quality == "small") .58f else .80f
+    val decodePixels = if (Runtime.getRuntime().maxMemory() < 256L * 1024 * 1024) 1_500_000L else 3_000_000L
+    fun visit(resources: PDResources?, depth: Int = 0) {
+      if (resources == null || depth > 32 || visited.size >= 10_000 || !visited.add(resources.cosObject)) return
+      for (name in resources.xObjectNames.toList()) {
+        check()
+        val item = resources.getXObject(name)
+        if (item is PDFormXObject) { visit(item.resources, depth + 1); continue }
+        if (item !is PDImageXObject) continue
+        val cached = replacements[item.cosObject]
+        if (cached != null) { resources.put(name, cached); continue }
+        if (examined.size >= 2_000 || !examined.add(item.cosObject)) continue
+        val dictionary = item.cosObject
+        // Do not turn transparency, masks, accessibility structure or layers
+        // into a different representation during ordinary compression.
+        if (item.isStencil || item.bitsPerComponent != 8 || item.width <= 0 || item.height <= 0 || item.width.toLong() * item.height > decodePixels) continue
+        if (listOf("Mask", "SMask", "SMaskInData", "StructParent", "OC", "Alternates").any { dictionary.containsKey(COSName.getPDFName(it)) }) continue
+        if (item.colorSpace.name !in setOf("DeviceRGB", "DeviceGray")) continue
+        val bitmap = item.image ?: continue
+        var scaled: Bitmap? = null
+        try {
+          check()
+          val factor = min(1.0, edge.toDouble() / max(bitmap.width, bitmap.height))
+          val working = if (factor < 1) Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * factor).toInt()), max(1, (bitmap.height * factor).toInt()), true).also { scaled = it } else bitmap
+          val replacement = JPEGFactory.createFromImage(pdf, working, jpeg)
+          if (replacement.cosObject.length >= dictionary.length) continue
+          // Preserve non-encoding entries (rendering intent and image metadata).
+          val encoding = setOf("Length", "Filter", "DecodeParms", "Width", "Height", "BitsPerComponent", "ColorSpace", "Decode")
+          for (key in dictionary.keySet()) if (key.name !in encoding) replacement.cosObject.setItem(key, dictionary.getItem(key))
+          replacements[dictionary] = replacement
+          resources.put(name, replacement)
+        } finally { if (scaled !== bitmap) scaled?.recycle(); bitmap.recycle() }
+      }
+    }
+    for ((index, page) in pdf.pages.withIndex()) { check(); visit(page.resources); progress(index + 1, pdf.numberOfPages) }
+  }
+
   private fun drawMarks(stream: PDPageContentStream, marks: JSONArray, page: Int, w: Float, h: Float, check: () -> Unit) {
     require(marks.length() <= 300) { "Save after 300 annotations." }
     for (i in 0 until marks.length()) {

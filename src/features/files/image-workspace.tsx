@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { AppLoader } from '@/components/app-loader';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -7,20 +8,25 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { ThemedText } from '@/components/themed-text';
 import { IMAGE_SECTIONS } from '@/constants/image-methods';
 import { usePalette } from '@/theme/colors';
-import { getRecentFile, type RecentFile } from './recent-files';
+import { draftSource, readEditorDraft, removeEditorDraft, writeEditorDraft } from '../editor/editor-drafts';
+import { getRecentFile, documentRoot, storedUri, type RecentFile } from './recent-files';
 import { ADVANCED_IMAGE_TOOLS } from './image-tools';
 
 const tabs: Record<string, string> = { crop: 'crop', rotate: 'rotate', flip_h: 'rotate', flip_v: 'rotate', brightness: 'adjust', contrast: 'adjust', saturation: 'adjust', temperature: 'adjust', filters: 'filters', export: 'export' };
 type Draft = { uri: string; size: number; mimeType: string };
+type WorkspaceDraft = { version: 1; draft: RecentFile; files: string[] };
 class ImageWorkspace {
-  readonly directory = new Directory(Paths.cache, `image-workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  readonly directory: Directory;
   private draft?: RecentFile;
   origin?: RecentFile;
   private files: string[] = [];
   private users = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private pending = new Set<Promise<unknown>>();
-  constructor(readonly id: string) {}
+  private opening?: Promise<RecentFile | null>;
+  private source = '';
+  private applying = false;
+  constructor(readonly id: string) { this.directory = new Directory(Paths.document, '.editor-workspaces', encodeURIComponent(id)); }
   retain() { clearTimeout(this.timer); this.users++; }
   release() {
     this.users--;
@@ -28,13 +34,43 @@ class ImageWorkspace {
       void Promise.allSettled([...this.pending]).then(() => {
         if (this.users) return;
         workspaces.delete(this.id);
-        try { if (this.directory.exists) this.directory.delete(); } catch { /* OS cache cleanup can retry. */ }
+        if (!this.draft) try { if (this.directory.exists) this.directory.delete(); } catch { /* A later release can retry. */ }
       });
     }, 2500);
   }
-  async resolve() { if (this.draft) return this.draft; const file = await getRecentFile(this.id); if (file) this.origin = file; return file; }
+  async resolve(): Promise<RecentFile | null> {
+    if (this.draft) return this.draft;
+    if (this.opening) return this.opening;
+    const opening = (async () => {
+      const file = await getRecentFile(this.id);
+      if (!file) return null;
+      this.origin = file; this.source = draftSource(file.uri);
+      const restored = (uri: string) => uri.startsWith('document://') ? documentRoot() + uri.slice('document://'.length) : uri;
+      const saved = await readEditorDraft<WorkspaceDraft>(`workspace:${this.id}`, this.source);
+      if (saved?.version === 1 && saved.draft && typeof saved.draft.uri === 'string' && Array.isArray(saved.files)) {
+        const uri = restored(saved.draft.uri);
+        if (uri.startsWith(this.directory.uri.replace(/\/+$/, '') + '/') && new File(uri).exists) {
+          this.draft = { ...saved.draft, uri, id: this.id };
+          this.files = saved.files.filter(item => typeof item === 'string').map(restored).filter(item => item.startsWith(this.directory.uri.replace(/\/+$/, '') + '/')).slice(-2);
+          return this.draft;
+        }
+      }
+      return file;
+    })();
+    this.opening = opening;
+    this.pending.add(opening);
+    void opening.then(() => this.pending.delete(opening), () => { this.pending.delete(opening); this.opening = undefined; });
+    return opening;
+  }
   get changed() { return !!this.draft; }
-  async render<T>(operation: (uri: string) => Promise<T>, format = 'png'): Promise<T> {
+  async apply<T extends Draft>(operation: (uri: string) => Promise<T>, file: RecentFile, format = 'png'): Promise<T> {
+    if (this.applying) throw new Error('Wait for the current image change to finish.');
+    this.applying = true;
+    const work = (async () => { const result = await this.render(operation, format); await this.accept(result, file); return result; })();
+    this.pending.add(work);
+    try { return await work; } finally { this.pending.delete(work); this.applying = false; }
+  }
+  private async render<T>(operation: (uri: string) => Promise<T>, format = 'png'): Promise<T> {
     this.directory.create({ intermediates: true, idempotent: true });
     const output = new File(this.directory, `${Date.now()}-${Math.random().toString(36).slice(2)}.${format === 'jpeg' ? 'jpg' : format}`);
     const job = operation(output.uri); this.pending.add(job);
@@ -42,11 +78,21 @@ class ImageWorkspace {
     catch (cause) { try { if (output.exists) output.delete(); } catch { /* Session cleanup retries. */ } throw cause; }
     finally { this.pending.delete(job); }
   }
-  accept(result: Draft, file: RecentFile) {
-    this.draft = { ...file, ...result, id: this.id, name: this.origin?.name ?? file.name };
-    this.files.push(result.uri);
+  private async accept(result: Draft, file: RecentFile) {
+    const draft = { ...file, ...result, id: this.id, name: this.origin?.name ?? file.name };
+    const files = [...this.files, result.uri];
+    const job = writeEditorDraft(`workspace:${this.id}`, this.source, { version: 1, draft: { ...draft, uri: storedUri(draft.uri) }, files: files.slice(-2).map(storedUri) } satisfies WorkspaceDraft);
+    this.pending.add(job);
+    try { await job; this.draft = draft; this.files = files; }
+    catch (cause) { try { new File(result.uri).delete(); } catch { /* Never delete an accepted frame. */ } throw cause; }
+    finally { this.pending.delete(job); }
     // Keep one preceding frame while the outgoing native view releases it.
     while (this.files.length > 2) { const uri = this.files.shift()!; try { new File(uri).delete(); } catch { /* Workspace cleanup retries. */ } }
+  }
+  async discard() {
+    await removeEditorDraft(`workspace:${this.id}`);
+    this.draft = undefined; this.opening = undefined;
+    // Active views still own the current file. The final release removes it.
   }
 }
 const workspaces = new Map<string, ImageWorkspace>();
@@ -65,7 +111,7 @@ export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: st
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const colors = usePalette();
-  const sections = IMAGE_SECTIONS.map(section => ({ title: section.title, data: section.tools.filter(tool => tool.id !== current && (tool.id in tabs || ADVANCED_IMAGE_TOOLS.has(tool.id) || ['text', 'edit_text'].includes(tool.id))).map(tool => ({ ...tool, available: true })) })).filter(section => section.data.length);
+  const sections = useMemo(() => IMAGE_SECTIONS.map(section => ({ title: section.title, data: section.tools.filter(tool => tool.id !== current && (tool.id in tabs || ADVANCED_IMAGE_TOOLS.has(tool.id) || ['text', 'edit_text'].includes(tool.id))).map(tool => ({ ...tool, available: true })) })).filter(section => section.data.length), [current]);
   async function choose(tool: string) {
     if (switching || disabled) return;
     Keyboard.dismiss(); setSwitching(true); setError('');
@@ -75,11 +121,11 @@ export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: st
       if (tool in tabs) router.replace({ pathname: '/image-editor', params: { id, tab: tabs[tool] } });
       else if (tool === 'text' || tool === 'edit_text') router.replace({ pathname: '/image-text', params: { id, mode: tool === 'text' ? 'add' : 'edit' } });
       else router.replace({ pathname: '/image-tool', params: { id, tool } });
-    } catch (cause) { setError((cause as Error).message || 'Could not apply changes.'); setOpen(true); }
-    finally { setSwitching(false); }
+    } catch (cause) { if (mounted.current) { setError((cause as Error).message || 'Could not apply changes.'); setOpen(true); } }
+    finally { if (mounted.current) setSwitching(false); }
   }
   return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={switching ? 'Applying changes' : 'Switch image tool'} disabled={disabled || switching} onPress={() => setOpen(true)} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', opacity: disabled || switching ? .4 : 1 }}><UniversalIcon ios="square.grid.3x3" android="apps" size={24} color={colors.systemBlue} /></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={switching ? 'Applying changes' : 'Switch image tool'} disabled={disabled || switching} onPress={() => setOpen(true)} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', opacity: disabled || switching ? .4 : 1 }}>{switching ? <AppLoader accessibilityLabel="Applying changes" /> : <UniversalIcon ios="square.grid.3x3" android="apps" size={24} color={colors.systemBlue} />}</Pressable>
     <ToolboxSheet visible={open} title="Image tools" subtitle="Changes carry into the next tool. Export when you are ready." sections={sections} footer={<ThemedText accessibilityRole={error ? 'alert' : undefined}>{error || 'Your original image stays unchanged.'}</ThemedText>} onClose={() => setOpen(false)} onAction={tool => void choose(tool)} />
   </>;
 }

@@ -24,8 +24,8 @@ export default function GuideScreen() {
         <ThemedText style={{ color: colors.secondaryLabel }}>Just a few steps. Go at your own pace.</ThemedText>
         {(instructions ?? ['Choose PDF or Image. Open a file or pick one from Recents.', 'Preview your file. In a PDF, tap the small pages below to jump ahead. Open Toolbox for editing tools.', 'Make your changes and save the result as a new copy.']).map((text, index) => <View key={text} style={styles.row}><View style={[styles.number, { backgroundColor: colors.accentSurface }]}><ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>{index + 1}</ThemedText></View><ThemedText style={styles.grow}>{text}</ThemedText></View>)}
         <View style={[styles.note, { backgroundColor: colors.secondarySystemBackground }]}><UniversalIcon ios="lock.shield" android="security" size={22} color={colors.systemBlue} /><ThemedText style={styles.grow}>File processing happens on your device. Your original stays unchanged.</ThemedText></View>
-        <ToolButton title="Try a short practice demo" onPress={() => setPractising(true)} />
-        <ToolButton title="Got it" secondary onPress={close} />
+        <ToolButton title="Try a short practice demo" icon={{ ios: 'play.circle', android: 'play-circle-outline' }} onPress={() => setPractising(true)} />
+        <ToolButton title="Got it" icon={{ ios: 'checkmark', android: 'check' }} secondary onPress={close} />
       </> : <>
         <ThemedText accessibilityLiveRegion="polite" style={{ color: colors.secondaryLabel }}>Practice only · {step + 1} of 3 · No real files used</ThemedText>
         <ThemedText accessibilityRole="header" style={styles.title}>{['1. Choose a file', '2. Make a change', '3. Check and save'][step]}</ThemedText>
@@ -35,8 +35,8 @@ export default function GuideScreen() {
           <View style={[styles.paper, { borderColor: colors.separator }]}><ThemedText style={styles.paperTitle}>Weekend plan</ThemedText><ThemedText style={styles.paperText}>Meet friends</ThemedText><ThemedText style={[styles.paperText, { fontWeight: '600' }]}>{changed ? '10:00 AM' : '9:00 AM'}</ThemedText><View style={styles.line} /><View style={[styles.line, { width: '65%' }]} /></View>
         </View>
         <ThemedText>{['Normally, your device opens Files. For this demo, select the example above.', 'Try changing the meeting time. In Edit PDF, tap real text, type your change and tap Apply.', 'Check your result, then use Save to device / share in a real tool. This demo has not created or saved a file.'][step]}</ThemedText>
-        {step === 0 ? <ToolButton title="Use this example" onPress={() => setStep(1)} /> : step === 1 ? <><ToolButton title={changed ? 'Undo example change' : 'Change time to 10:00 AM'} onPress={() => setChanged(value => !value)} /><ToolButton title="See the result" secondary disabled={!changed} onPress={() => setStep(2)} /></> : <ToolButton title="Finish demo" onPress={close} />}
-        <ToolButton title={step > 0 ? 'Back' : 'Skip demo'} secondary onPress={() => step > 0 ? setStep(value => value - 1) : close()} />
+        {step === 0 ? <ToolButton title="Use this example" icon={{ ios: 'doc.text', android: 'description' }} onPress={() => setStep(1)} /> : step === 1 ? <><ToolButton title={changed ? 'Undo example change' : 'Change time to 10:00 AM'} icon={changed ? { ios: 'arrow.uturn.backward', android: 'undo' } : { ios: 'clock', android: 'schedule' }} onPress={() => setChanged(value => !value)} /><ToolButton title="See the result" icon={{ ios: 'eye', android: 'visibility' }} secondary disabled={!changed} onPress={() => setStep(2)} /></> : <ToolButton title="Finish demo" icon={{ ios: 'checkmark.circle', android: 'check-circle' }} onPress={close} />}
+        <ToolButton title={step > 0 ? 'Back' : 'Skip demo'} icon={step > 0 ? { ios: 'arrow.left', android: 'arrow-back' } : { ios: 'forward.end', android: 'skip-next' }} secondary onPress={() => step > 0 ? setStep(value => value - 1) : close()} />
       </>}
     </ScrollView>
   </SafeAreaView>;

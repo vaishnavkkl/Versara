@@ -1,4 +1,8 @@
 export const TOOL_HELP: Record<string, readonly [string, string, string]> = {
+  privacy: ['Choose Privacy Review, Redact Image or Remove Metadata, then select a photo or screenshot.', 'Review the whole image. English text suggestions can miss sensitive details, including QR codes and faces.', 'Export a new copy. Your original stays unchanged and processing stays on your device.'],
+  privacy_scan: ['Choose a screenshot or photo to scan for possible sensitive English text.', 'Review each suggestion and add covers for anything missed. Check QR codes and other visible details manually.', 'Export and inspect the new image before sharing. Your original stays unchanged.'],
+  privacy_redact: ['Choose a photo or screenshot, then cover details you want to hide.', 'Review the whole image and adjust the selected areas before exporting.', 'Export a new image with the covers applied to its pixels. Your original stays unchanged.'],
+  privacy_metadata: ['Choose a photo or screenshot.', 'Create a fresh image without its source metadata. Visible text, faces and QR codes are still present.', 'Review the copy before sharing. Use Redact Image to cover visible details when needed.'],
   info: ['Choose a PDF or open Details from the reader.', 'Review page count, dimensions, PDF version and encryption.', 'Scroll to see document properties such as title and author.'],
   duplicate: ['Enter page numbers or ranges, such as 1, 3-5.', 'Each selected page is copied immediately after its original.', 'Name the result, then create and save your PDF.'],
   insert: ['Choose an insertion position. Use 0 for the beginning.', 'Insert a blank page, or choose a PDF to insert all its pages.', 'Name the result, then save or share it.'],

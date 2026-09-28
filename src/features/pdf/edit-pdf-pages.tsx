@@ -1,8 +1,9 @@
+import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { rememberPdfResults } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
@@ -26,6 +27,7 @@ const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export function EditPdfPages({ operation, initialSelection }: { operation: 'extract' | 'delete'; initialSelection?: InitialSelection }) {
   const colors = usePalette();
   const active = useScreenActive();
+  const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const extracting = operation === 'extract';
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
@@ -41,6 +43,14 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState<Output | null>(null);
+
+  const pageCount = source?.pageCount ?? 0;
+  const pages = useMemo(() => Array.from({ length: pageCount }, (_, index) => index + 1), [pageCount]);
+  const togglePage = useCallback((page: number) => setSelected(current => {
+    const next = new Set(current); if (next.has(page)) next.delete(page); else next.add(page); return next;
+  }), []);
+  const sourceUri = source?.uri ?? '';
+  const renderPage = useCallback(({ item }: { item: number }) => <SelectablePage item={item} uri={sourceUri} active={active && visibleKeys.has(String(item))} selected={selected.has(item)} busy={busy} extracting={extracting} onToggle={togglePage} onPreview={setPreviewPage} />, [sourceUri, active, visibleKeys, selected, busy, extracting, togglePage]);
 
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -160,7 +170,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   </ScrollView>;
 
   return <View style={styles.screen}>
-    <FlatList data={source ? Array.from({ length: source.pageCount }, (_, index) => index + 1) : []} numColumns={3} extraData={selected} keyExtractor={page => String(page)} contentContainerStyle={styles.list} columnWrapperStyle={styles.row} keyboardShouldPersistTaps="handled" initialNumToRender={18} windowSize={5}
+    <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={pages} numColumns={3} extraData={selected} keyExtractor={page => String(page)} contentContainerStyle={styles.list} columnWrapperStyle={styles.row} keyboardShouldPersistTaps="handled" initialNumToRender={9} maxToRenderPerBatch={3} windowSize={3}
       ListHeaderComponent={<View style={styles.form}>
         <ThemedText style={styles.heading}>1. Choose a PDF</ThemedText>
         <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{extracting ? 'Pick the pages you want to keep in a new PDF.' : 'Pick the pages you want to remove. We’ll save a new copy.'}</ThemedText>
@@ -176,16 +186,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
           {showRanges && <><TextInput accessibilityLabel="Page numbers or ranges" placeholder="For example: 1, 3, 5-8" placeholderTextColor={colors.secondaryLabel} value={rangeText} onChangeText={setRangeText} editable={!busy} maxLength={1400} style={[styles.input, { color: colors.label, backgroundColor: colors.accentSurface }]} /><ToolButton title="Select these pages" secondary onPress={applyRanges} disabled={busy || !rangeText.trim()} /></>}
         </>}
       </View>}
-      renderItem={({ item }) => <View style={[styles.page, { backgroundColor: colors.accentSurface, borderColor: selected.has(item) ? colors.systemBlue : colors.separator }]}>
-        <Pressable accessibilityRole="checkbox" accessibilityLabel={`Page ${item}, ${extracting ? 'keep in new PDF' : 'remove from new PDF'}`} accessibilityState={{ checked: selected.has(item), disabled: busy }} disabled={busy} onPress={() => setSelected(current => { const next = new Set(current); if (next.has(item)) next.delete(item); else next.add(item); return next; })} style={styles.select}>
-          <View style={styles.pageThumb}><FileThumbnail uri={source!.uri} kind="pdf" page={item - 1} active={active} /></View>
-          <View style={styles.pageMeta}>
-            <UniversalIcon ios={selected.has(item) ? 'checkmark.circle.fill' : 'circle'} android={selected.has(item) ? 'check-circle' : 'radio-button-unchecked'} size={18} color={colors.systemBlue} />
-            <ThemedText style={styles.caption}>Page {item}</ThemedText>
-          </View>
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => setPreviewPage(item)} style={styles.eye}><UniversalIcon ios="eye" android="visibility" size={20} color={colors.systemBlue} /></Pressable>
-      </View>}
+      renderItem={renderPage}
     />
     {(!!source || busy || !!error) && <View style={[styles.footer, { borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
@@ -196,6 +197,23 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     </View>}
   </View>;
 }
+
+const SelectablePage = memo(function SelectablePage({ item, uri, active, selected, busy, extracting, onToggle, onPreview }: {
+  item: number; uri: string; active: boolean; selected: boolean; busy: boolean; extracting: boolean;
+  onToggle: (page: number) => void; onPreview: (page: number) => void;
+}) {
+  const colors = usePalette();
+  return <View style={[styles.page, { backgroundColor: colors.accentSurface, borderColor: selected ? colors.systemBlue : colors.separator }]}>
+        <Pressable accessibilityRole="checkbox" accessibilityLabel={`Page ${item}, ${extracting ? 'keep in new PDF' : 'remove from new PDF'}`} accessibilityState={{ checked: selected, disabled: busy }} disabled={busy} onPress={() => onToggle(item)} style={styles.select}>
+          <View style={styles.pageThumb}><FileThumbnail uri={uri} kind="pdf" page={item - 1} active={active} /></View>
+          <View style={styles.pageMeta}>
+            <UniversalIcon ios={selected ? 'checkmark.circle.fill' : 'circle'} android={selected ? 'check-circle' : 'radio-button-unchecked'} size={18} color={colors.systemBlue} />
+            <ThemedText style={styles.caption}>Page {item}</ThemedText>
+          </View>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => onPreview(item)} style={styles.eye}><UniversalIcon ios="eye" android="visibility" size={20} color={colors.systemBlue} /></Pressable>
+      </View>;
+});
 
 const styles = StyleSheet.create({
   screen: { flex: 1 }, grow: { flex: 1 }, list: { padding: s.lg, gap: s.md }, form: { gap: s.md, paddingVertical: s.md }, row: { flexDirection: 'row', gap: s.sm },

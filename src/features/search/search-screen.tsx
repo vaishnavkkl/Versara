@@ -1,3 +1,4 @@
+import { openPrivacyTool } from '@/features/privacy/open-privacy-tool';
 import { toolColors } from '@/theme/tool-colors';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
@@ -20,6 +21,7 @@ import { discardPdfToolSession, pickPdfTool, type PdfTool } from '@/features/pdf
 import { SEARCH_TOOLS, SUGGESTED_TOOLS, type SearchTool } from './search-tools';
 import { clearSearchHistory, hydrateSearchHistory, recordSearch, recordToolUse, removeSearch, useSearchHistory } from './search-history';
 import { requestFileSearch } from './file-search';
+import { getPrivacyTool } from '@/features/privacy/privacy-tools';
 
 const QUICK_SEARCHES = [
   { label: 'PDFs', query: '.pdf', kind: 'pdf' }, { label: 'JPG photos', query: '.jpg', kind: 'image' },
@@ -57,7 +59,7 @@ export function SearchScreen() {
   const tools = useMemo(() => {
     if (!term || scope === 'Files') return [];
     const words = term.toLowerCase().split(/\s+/);
-    return SEARCH_TOOLS.filter(tool => words.every(word => `${tool.title} ${tool.subtitle} ${tool.module}`.toLowerCase().includes(word)))
+    return SEARCH_TOOLS.filter(tool => words.every(word => `${tool.title} ${tool.subtitle} ${tool.module} ${tool.keywords ?? ''}`.toLowerCase().includes(word)))
       .sort((a, b) => Number(a.availability !== 'ready') - Number(b.availability !== 'ready')).slice(0, 20);
   }, [scope, term]);
   const recentTools = history.tools.map(id => SEARCH_TOOLS.find(tool => tool.key === id)).filter((tool): tool is SearchTool => !!tool);
@@ -92,7 +94,11 @@ export function SearchScreen() {
     busy.current = true; setOpening(tool.key); Keyboard.dismiss();
     let session: string | null = null;
     try {
-      if (tool.module === 'PDF') {
+      if (tool.module === 'Privacy') {
+        const privacyTool = getPrivacyTool(tool.id);
+        if (!privacyTool) throw new Error('This privacy tool is unavailable. Please choose another tool.');
+        if (!(await openPrivacyTool(privacyTool.id, { current: () => mounted.current }))) return;
+      } else if (tool.module === 'PDF') {
         session = await pickPdfTool(tool.id as PdfTool, tool.title);
         if (!session) return;
         if (!mounted.current) { discardPdfToolSession(session); return; }

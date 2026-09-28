@@ -8,18 +8,22 @@
 #include "fpdf_save.h"
 #include "fpdf_signature.h"
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <codecvt>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <locale>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace versara {
@@ -226,34 +230,196 @@ static void applyMark(FPDF_PAGE page, const Json& mark) {
     FPDF_DeviceToPage(page, 0, 0, 100000, 100000, 0, int(x * 100000), int(y * 100000), &px, &py);
     return std::make_pair(float(px), float(py));
   };
-  const auto first = point(points[0]);
+  const auto shape = mark.value("shape", std::string("draw"));
+  const bool closed = shape == "polygon" || shape == "highlight";
+  const auto pattern = mark.value("pattern", std::string("solid"));
+  const bool dotted = !closed && pattern == "dotted";
+  const auto unit = float(std::clamp(mark.value("width", .005), .001, .08) * FPDF_GetPageWidthF(page));
+  std::vector<std::pair<float, float>> vertices;
+  for (const auto& p : points) vertices.push_back(point(p));
+  const auto first = vertices.front();
   auto path = FPDFPageObj_CreateNewPath(first.first, first.second);
   require(path != nullptr, "Could not create shape.");
   std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> owned(path, FPDFPageObj_Destroy);
-  for (size_t i = 1; i < points.size(); ++i) { const auto p = point(points[i]); require(FPDFPath_LineTo(path, p.first, p.second), "Could not draw shape."); }
-  const auto shape = mark.value("shape", std::string("draw"));
-  const bool closed = shape == "polygon" || shape == "highlight";
-  if (closed) FPDFPath_Close(path);
+  if (dotted) {
+    // Filled circles work consistently across raster previews and PDF readers.
+    const float radius = unit / 2, control = radius * .55228475f;
+    auto dot = [&](float x, float y) {
+      require(FPDFPath_MoveTo(path, x + radius, y)
+        && FPDFPath_BezierTo(path, x + radius, y + control, x + control, y + radius, x, y + radius)
+        && FPDFPath_BezierTo(path, x - control, y + radius, x - radius, y + control, x - radius, y)
+        && FPDFPath_BezierTo(path, x - radius, y - control, x - control, y - radius, x, y - radius)
+        && FPDFPath_BezierTo(path, x + control, y - radius, x + radius, y - control, x + radius, y)
+        && FPDFPath_Close(path), "Could not draw dot.");
+    };
+    std::vector<float> lengths;
+    float total = 0;
+    for (size_t i = 1; i < vertices.size(); ++i) {
+      const float length = std::hypot(vertices[i].first - vertices[i-1].first, vertices[i].second - vertices[i-1].second);
+      lengths.push_back(length); total += length;
+    }
+    const float spacing = std::max({unit * 3, total / 2047, .001f});
+    float next = spacing, travelled = 0; int dots = 1;
+    dot(first.first, first.second);
+    for (size_t i = 0; i < lengths.size(); ++i) {
+      const auto length = lengths[i]; if (length <= 0) continue;
+      const auto a = vertices[i], b = vertices[i+1];
+      while (next <= travelled + length && dots < 2048) {
+        const float t = std::clamp((next - travelled) / length, 0.f, 1.f);
+        dot(a.first + (b.first - a.first) * t, a.second + (b.second - a.second) * t);
+        next += spacing; ++dots;
+      }
+      travelled += length;
+    }
+  } else {
+    for (size_t i = 1; i < vertices.size(); ++i) require(FPDFPath_LineTo(path, vertices[i].first, vertices[i].second), "Could not draw shape.");
+    if (closed) FPDFPath_Close(path);
+  }
   const bool highlight = shape == "highlight" || shape == "highlight-brush";
   auto rgb = [](const std::string& color) { require(color.size() == 7 && color[0] == '#', "Invalid colour."); return std::stoul(color.substr(1), nullptr, 16); };
   const auto color = rgb(mark.value("color", std::string("#1D4ED8")));
   const auto fill = mark.value("fillColor", std::string(""));
-  const auto inside = fill.empty() ? color : rgb(fill);
+  const auto inside = dotted || fill.empty() ? color : rgb(fill);
   const auto brush = mark.value("brush", std::string("pen"));
-  const auto alpha = highlight || brush == "highlighter" ? 77 : brush == "pencil" ? 170 : brush == "marker" ? 210 : 255;
-  FPDFPageObj_SetStrokeColor(path, (color >> 16) & 255, (color >> 8) & 255, color & 255, alpha);
-  FPDFPageObj_SetFillColor(path, (inside >> 16) & 255, (inside >> 8) & 255, inside & 255, highlight ? 77 : 255);
-  FPDFPageObj_SetStrokeWidth(path, float(std::clamp(mark.value("width", .005), .001, .08) * FPDF_GetPageWidthF(page)));
-  FPDFPageObj_SetLineCap(path, FPDF_LINECAP_ROUND); FPDFPageObj_SetLineJoin(path, FPDF_LINEJOIN_ROUND);
-  const auto pattern = mark.value("pattern", std::string("solid"));
-  const auto unit = float(std::clamp(mark.value("width", .005), .001, .08) * FPDF_GetPageWidthF(page));
-  if (pattern == "dotted" || pattern == "dashed") {
-    const float dash[] = { unit * (pattern == "dotted" ? .1f : 4.f), unit * (pattern == "dotted" ? 2.4f : 2.f) };
-    FPDFPageObj_SetDashArray(path, dash, 2, 0);
+  int alpha = highlight || brush == "highlighter" ? 77 : brush == "pencil" ? 170 : brush == "marker" ? 210 : 255;
+  if (mark.contains("opacity")) {
+    const auto opacity = mark.at("opacity").get<double>();
+    require(std::isfinite(opacity), "Choose a valid ink opacity.");
+    alpha = int(std::round(std::clamp(opacity, .01, 1.0) * 255));
   }
-  FPDFPath_SetDrawMode(path, closed && (highlight || !fill.empty()) ? FPDF_FILLMODE_WINDING : FPDF_FILLMODE_NONE, shape != "highlight");
+  FPDFPageObj_SetStrokeColor(path, (color >> 16) & 255, (color >> 8) & 255, color & 255, alpha);
+  FPDFPageObj_SetFillColor(path, (inside >> 16) & 255, (inside >> 8) & 255, inside & 255, dotted || highlight || mark.contains("opacity") ? alpha : 255);
+  FPDFPageObj_SetStrokeWidth(path, unit);
+  FPDFPageObj_SetLineCap(path, FPDF_LINECAP_ROUND); FPDFPageObj_SetLineJoin(path, FPDF_LINEJOIN_ROUND);
+  if (!closed && pattern == "dashed") {
+    const float dash[] = { unit * 4, unit * 2 };
+    require(FPDFPageObj_SetDashArray(path, dash, 2, 0), "Could not draw dashed stroke.");
+  }
+  FPDFPath_SetDrawMode(path, dotted || (closed && (highlight || !fill.empty())) ? FPDF_FILLMODE_WINDING : FPDF_FILLMODE_NONE, !dotted && shape != "highlight");
   FPDFPage_InsertObject(page, owned.release());
 }
+// OCR words use display-space boxes from a bounded native recognition bitmap.
+// Add invisible text to the original page; images, links and forms stay intact.
+static Verification addOcrWords(FPDF_DOCUMENT doc, FPDF_PAGE page, const Json& words,
+                                const std::string& tag, const std::function<void()>& check) {
+  require(words.is_array() && words.size() <= 2000, "A page has too many OCR words. Export fewer pages.");
+  const int originalObjects = FPDFPage_CountObjects(page);
+  require(originalObjects >= 0 && originalObjects + words.size() <= 25000, "This page is too complex for searchable PDF output. Export text instead.");
+  const double pageWidth = FPDF_GetPageWidthF(page), pageHeight = FPDF_GetPageHeightF(page);
+  require(std::isfinite(pageWidth) && std::isfinite(pageHeight) && pageWidth > 0 && pageHeight > 0, "This page has invalid dimensions.");
+  Verification verification;
+  for (const auto& word : words) {
+    check();
+    const std::string text = word.at("text");
+    require(!text.empty() && utf16(text).size() <= 256, "An OCR word is too long to place safely.");
+    const double x = word.at("x"), y = word.at("y"), w = word.at("width"), h = word.at("height");
+    require(std::isfinite(x) && std::isfinite(y) && std::isfinite(w) && std::isfinite(h) && x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= 1.00001 && y + h <= 1.00001, "Invalid OCR text position.");
+    auto raw = newText(doc, "Helvetica", 12);
+    std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> object(raw, FPDFPageObj_Destroy);
+    setText(raw, text);
+    require(FPDFTextObj_SetTextRenderMode(raw, FPDF_TEXTRENDERMODE_INVISIBLE), "Could not create the searchable text layer.");
+    float l, b, r, t;
+    require(FPDFPageObj_GetBounds(raw, &l, &b, &r, &t) && std::isfinite(l) && std::isfinite(b) && std::isfinite(r) && std::isfinite(t) && r > l && t > b, "OCR found characters that cannot be placed. Export text instead.");
+    auto point = [&](double nx, double ny) {
+      double px, py;
+      require(FPDF_DeviceToPage(page, 0, 0, 100000, 100000, 0, int(std::round(nx * 100000)), int(std::round(ny * 100000)), &px, &py), "Could not align OCR to this page.");
+      require(std::isfinite(px) && std::isfinite(py), "This page has invalid OCR coordinates.");
+      return std::pair<double, double>{px, py};
+    };
+    const auto origin = point(x, y + h), right = point(x + w, y + h), top = point(x, y);
+    const double a = (right.first - origin.first) / (r - l), bb = (right.second - origin.second) / (r - l);
+    const double c = (top.first - origin.first) / (t - b), d = (top.second - origin.second) / (t - b);
+    FS_MATRIX matrix{float(a), float(bb), float(c), float(d), float(origin.first - a * l - c * b), float(origin.second - bb * l - d * b)};
+    require(std::isfinite(matrix.a) && std::isfinite(matrix.b) && std::isfinite(matrix.c) && std::isfinite(matrix.d) && std::isfinite(matrix.e) && std::isfinite(matrix.f), "This page cannot safely position searchable text.");
+    require(FPDFPageObj_SetMatrix(raw, &matrix), "Could not align the searchable text layer.");
+    const auto mark = FPDFPageObj_AddMark(raw, tag.c_str());
+    require(mark && FPDFPageObjMark_SetIntParam(doc, raw, mark, "word", int(verification.size())), "Could not identify the searchable text for verification.");
+    FPDFPage_InsertObject(page, object.release());
+    verification.push_back({raw, text});
+  }
+  if (!verification.empty()) {
+    require(FPDFPage_GenerateContent(page), "Could not write the searchable page.");
+    TextPage extracted(page);
+    for (const auto& item : verification) { check(); require(sameText(textOf(item.first, extracted.value), item.second), "OCR contains characters this PDF font cannot preserve. Export text instead.", "PDF_FONT_UNSUPPORTED"); }
+  }
+  return verification;
+}
+
+// Verify the new layer after serialization, rather than accepting a page merely
+// because it already contains some unrelated, pre-existing selectable text.
+static int verifyOcrWords(FPDF_PAGE page, const Json& words, const std::string& tag,
+                          const std::function<void()>& check) {
+  const int count = FPDFPage_CountObjects(page);
+  require(count >= 0 && count <= 25000, "The saved page is too complex to verify safely.");
+  TextPage extracted(page);
+  const int characters = FPDFText_CountChars(extracted.value);
+  require(characters >= 0 && characters <= 1000000, "The saved page has too much text to verify safely.");
+  const auto expectedTag = utf16(tag);
+  std::set<int> verified;
+  for (int i = 0; i < count; ++i) {
+    check();
+    const auto object = FPDFPage_GetObject(page, i);
+    require(object != nullptr, "A saved page object could not be verified.");
+    const int marks = FPDFPageObj_CountMarks(object);
+    require(marks >= 0 && marks <= 128, "The saved page has too many content marks to verify safely.");
+    for (int m = 0; m < marks; ++m) {
+      check();
+      const auto mark = FPDFPageObj_GetMark(object, m);
+      std::array<FPDF_WCHAR, 128> name{};
+      unsigned long bytes = 0;
+      require(mark && FPDFPageObjMark_GetName(mark, name.data(), sizeof(name), &bytes), "A saved content mark could not be read.");
+      if (bytes != (expectedTag.size() + 1) * sizeof(FPDF_WCHAR) || bytes > sizeof(name) || !std::equal(expectedTag.begin(), expectedTag.end(), name.begin()) || name[expectedTag.size()] != 0) continue;
+      int index = -1;
+      require(FPDFPageObjMark_GetParamIntValue(mark, "word", &index) && index >= 0 && size_t(index) < words.size() && verified.insert(index).second, "The saved OCR layer has missing or duplicate words.");
+      const auto& expected = words.at(index);
+      require(FPDFPageObj_GetType(object) == FPDF_PAGEOBJ_TEXT && FPDFTextObj_GetTextRenderMode(object) == FPDF_TEXTRENDERMODE_INVISIBLE, "The saved OCR layer is not invisible. No output was kept.");
+      require(textOf(object, extracted.value) == expected.at("text").get<std::string>(), "The saved OCR text changed during export. Export text instead.", "PDF_FONT_UNSUPPORTED");
+      float left, bottom, right, top;
+      require(FPDFPageObj_GetBounds(object, &left, &bottom, &right, &top) && std::isfinite(left) && std::isfinite(bottom) && std::isfinite(right) && std::isfinite(top), "The saved OCR position could not be read.");
+      int minX = 100000, minY = 100000, maxX = 0, maxY = 0;
+      for (const auto px : {left, right}) for (const auto py : {bottom, top}) {
+        int dx = 0, dy = 0;
+        require(FPDF_PageToDevice(page, 0, 0, 100000, 100000, 0, px, py, &dx, &dy), "The saved OCR position could not be mapped.");
+        minX = std::min(minX, dx); minY = std::min(minY, dy);
+        maxX = std::max(maxX, dx); maxY = std::max(maxY, dy);
+      }
+      const double x = minX / 100000.0, y = minY / 100000.0, rightEdge = maxX / 100000.0, bottomEdge = maxY / 100000.0;
+      const double ex = expected.at("x"), ey = expected.at("y"), ew = expected.at("width"), eh = expected.at("height");
+      require(std::abs(x - ex) <= .001 && std::abs(y - ey) <= .001 && std::abs(rightEdge - ex - ew) <= .001 && std::abs(bottomEdge - ey - eh) <= .001, "The saved OCR text does not align with the scan. No output was kept.");
+    }
+  }
+  require(verified.size() == words.size(), "The saved OCR layer is incomplete. No output was kept.");
+  return int(verified.size());
+}
+
+static void applyImage(FPDF_DOCUMENT doc, FPDF_PAGE page, const Json& command) {
+  const auto path = command.at("pixelPath").get<std::string>();
+  std::ifstream input(path, std::ios::binary);
+  require(bool(input), "The signature image is missing. Add it again.");
+  auto dimension = [&]() { unsigned char bytes[4]; input.read(reinterpret_cast<char*>(bytes), 4); require(bool(input), "Invalid signature image."); return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) | (uint32_t(bytes[2]) << 8) | bytes[3]; };
+  const auto width = dimension(), height = dimension();
+  require(width > 0 && height > 0 && width <= 1024 && height <= 1024 && fs::file_size(path) == 8 + uint64_t(width)*height*4, "Invalid signature image size.");
+  std::vector<unsigned char> pixels(size_t(width)*height*4);
+  input.read(reinterpret_cast<char*>(pixels.data()), std::streamsize(pixels.size()));
+  require(bool(input), "Incomplete signature image.");
+  auto bitmap = FPDFBitmap_CreateEx(int(width), int(height), FPDFBitmap_BGRA, pixels.data(), int(width)*4);
+  require(bitmap != nullptr, "Could not prepare signature pixels.");
+  std::unique_ptr<std::remove_pointer_t<FPDF_BITMAP>, decltype(&FPDFBitmap_Destroy)> ownedBitmap(bitmap, FPDFBitmap_Destroy);
+  auto object = FPDFPageObj_NewImageObj(doc);
+  require(object != nullptr, "Could not add the signature.");
+  std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> owned(object, FPDFPageObj_Destroy);
+  require(FPDFImageObj_SetBitmap(nullptr, 0, object, bitmap), "Could not embed the signature image.");
+  const auto points = command.at("points");
+  require(points.is_array() && points.size() == 2, "Invalid signature placement.");
+  double left=1, top=1, right=0, bottom=0;
+  for (const auto& p : points) { const double x=p.at(0), y=p.at(1); require(std::isfinite(x) && std::isfinite(y) && x>=0 && x<=1 && y>=0 && y<=1, "Keep the signature inside the page."); left=std::min(left,x); top=std::min(top,y); right=std::max(right,x); bottom=std::max(bottom,y); }
+  require(right>left && bottom>top, "Make the signature larger.");
+  auto position = [&](double x,double y) { double px,py; FPDF_DeviceToPage(page,0,0,100000,100000,0,int(x*100000),int(y*100000),&px,&py); return std::make_pair(px,py); };
+  const auto bl=position(left,bottom), br=position(right,bottom), tl=position(left,top);
+  require(FPDFImageObj_SetMatrix(object,br.first-bl.first,br.second-bl.second,tl.first-bl.first,tl.second-bl.second,bl.first,bl.second), "Could not position the signature.");
+  FPDFPage_InsertObject(page,object); owned.release();
+}
+
 static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& commands,
                   const std::function<void()>& check) {
   if (std::none_of(commands.begin(), commands.end(), [pageNumber](const auto& command) { return command.at("page").template get<int>() == pageNumber; })) return 0;
@@ -263,7 +429,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
   std::map<int, std::string> originalText;
   { TextPage original(page);
     for (const auto& command : commands) {
-      if (command.at("page").get<int>() != pageNumber || command.at("kind") == "add" || command.at("kind") == "mark" || command.at("kind") == "number") continue;
+      if (command.at("page").get<int>() != pageNumber || command.at("kind") == "add" || command.at("kind") == "mark" || command.at("kind") == "image" || command.at("kind") == "number") continue;
       const int id = command.at("objectId");
       require(objects.count(id) != 0, "The selected text changed. Reopen this page.", "PDF_STALE_TEXT");
       originalText[id] = textOf(objects.at(id), original.value);
@@ -275,6 +441,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
   for (auto command : commands) {
     check();
     if (command.at("page").get<int>() != pageNumber) continue;
+    if (command.at("kind") == "image") { applyImage(doc, page, command); changed = true; continue; }
     if (command.at("kind") == "mark") { applyMark(page, command); changed = true; continue; }
     if (command.at("kind") == "number") {
       const float size = command.value("size", 11.0f), margin = command.value("margin", 24.0f);
@@ -422,11 +589,103 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     check();
     std::call_once(initialized, [] { FPDF_InitLibrary(); });
     const auto options = Json::parse(request);
-    const auto input = childPath(options.at("path"), cacheRoot, true);
+    const auto input = [&]() {
+      try { return childPath(options.at("path"), cacheRoot, true); }
+      catch (const Failure& failure) {
+        // Reader search is read-only and may target an app-owned saved document.
+        // Mutating tools still require their isolated cache copy.
+        if (options.at("action") != "search" || failure.code != "PDF_INVALID_PATH") throw;
+        return childPath(options.at("path"), documentRoot, true);
+      }
+    }();
+    if (options.at("action") == "search") require(fs::file_size(input) <= 512ULL * 1024 * 1024, "Search a PDF smaller than 512 MB on this device.", "PDF_INPUT_LIMIT");
     Document document(input.string(), options.value("inputPassword", std::string("")));
     const bool annotationJob = options.value("nativeEditor", false);
     const auto doc = document.value;
-    const auto commands = options.value("edits", Json::array());
+    const auto securityRevision = FPDF_GetSecurityHandlerRevision(doc);
+    const auto permissions = FPDF_GetDocPermissions(doc);
+    if (options.at("action") == "inspect") {
+      check();
+      return Json{{"pageCount", FPDF_GetPageCount(doc)}, {"signatureCount", FPDF_GetSignatureCount(doc)},
+                  {"securityRevision", securityRevision}, {"permissions", permissions}}.dump();
+    }
+    if (options.at("action") == "ocr_save") {
+      require((permissions & 0x418) == 0x418, "This PDF restricts editing or extraction.", "PDF_PROTECTED");
+      require(FPDF_GetSignatureCount(doc) == 0, "Use an unsigned copy to preserve this PDF's digital signatures.", "PDF_SIGNED");
+      const int count = FPDF_GetPageCount(doc);
+      require(count > 0 && count <= 2000, "Choose a PDF with 1 to 2,000 pages.");
+      const auto& pages = options.at("ocrPages");
+      require(pages.is_array() && !pages.empty() && pages.size() <= 100, "Recognize up to 100 selected pages at a time.");
+      const auto output = childPath(options.at("outputPath"), fs::path(documentRoot) / "Versara PDFs", false);
+      require(output.extension() == ".partial" && output.stem().extension() == ".pdf" && !fs::exists(output), "Choose a new searchable PDF name.");
+      temporary = output.string() + ".partial";
+      require(!fs::exists(temporary), "This searchable PDF is already being saved.");
+      std::set<int> visited;
+      static unsigned long long ocrSequence = 0; // runEditor holds engineLock.
+      const std::string ocrTag = "VersaraOCR-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + "-" + std::to_string(++ocrSequence);
+      int words = 0, recognized = 0, skipped = 0, empty = 0;
+      for (const auto& entry : pages) {
+        check(); const int number = entry.at("page");
+        require(number >= 0 && number < count && visited.insert(number).second, "Choose valid, unique OCR pages.");
+        Page page(doc, number);
+        const auto& items = entry.at("words");
+        require(items.is_array() && items.size() <= 2000 && words + int(items.size()) <= 20000, "OCR output is too large. Choose fewer pages.");
+        if (entry.value("skipped", false)) { require(items.empty(), "A skipped OCR page cannot contain new words."); ++skipped; continue; }
+        if (items.empty()) { ++empty; continue; }
+        words += int(addOcrWords(doc, page.value, items, ocrTag, check).size()); ++recognized;
+      }
+      require(words > 0 || skipped > 0, "No readable text was recognized. Try clearer, upright scans or export text.");
+      check();
+      { Writer writer(temporary, cancelled); const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL); check(); require(saved && writer.finish(), "Could not save the searchable PDF. Check free storage."); }
+      check();
+      { Document verify(temporary.string(), options.value("inputPassword", std::string("")));
+        require(FPDF_GetPageCount(verify.value) == count && FPDF_GetSecurityHandlerRevision(verify.value) == securityRevision && FPDF_GetDocPermissions(verify.value) == permissions, "The searchable PDF did not preserve its structure or security.");
+        int verifiedWords = 0;
+        for (const auto& entry : pages) { if (entry.at("words").empty()) continue; check(); Page page(verify.value, entry.at("page")); verifiedWords += verifyOcrWords(page.value, entry.at("words"), ocrTag, check); }
+        require(verifiedWords == words, "The saved OCR layer is incomplete. No output was kept.");
+      }
+      check(); fs::rename(temporary, output); temporary.clear();
+      return Json{{"wordCount", words}, {"pagesAdded", recognized}, {"skippedPages", skipped}, {"emptyPages", empty}}.dump();
+    }
+    auto commands = options.value("edits", Json::array());
+    if (options.at("action") == "search") {
+      require((permissions & 16) != 0, "Text search is restricted for this PDF.", "PDF_PROTECTED");
+      const auto query = utf16(options.value("query", std::string("")));
+      require(!query.empty() && query.size() <= 128 && query.find(u'\0') == std::u16string::npos, "Search for 1 to 128 visible characters.");
+      const int pages = FPDF_GetPageCount(doc);
+      require(pages > 0 && pages <= 2000, "Search a PDF with 1 to 2,000 pages.");
+      Json matches = Json::array();
+      bool truncated = false;
+      for (int number = 0; number < pages && !truncated; ++number) {
+        check(); Page page(doc, number); TextPage text(page.value);
+        const int characters = FPDFText_CountChars(text.value);
+        require(characters <= 500000, "A page is too complex for text search on this device.");
+        if (characters <= 0) continue;
+        auto handle = FPDFText_FindStart(text.value, reinterpret_cast<FPDF_WIDESTRING>(query.c_str()), 0, 0);
+        require(handle != nullptr, "Could not search this page.");
+        std::unique_ptr<std::remove_pointer_t<FPDF_SCHHANDLE>, decltype(&FPDFText_FindClose)> search(handle, FPDFText_FindClose);
+        while (FPDFText_FindNext(handle)) {
+          check();
+          if (matches.size() >= 500) { truncated = true; break; }
+          const int start = FPDFText_GetSchResultIndex(handle), length = FPDFText_GetSchCount(handle);
+          const int rectangles = FPDFText_CountRects(text.value, start, length);
+          Json rects = Json::array(), pdfRects = Json::array();
+          for (int i = 0; i < std::min(rectangles, 32); ++i) {
+            double l, t, r, b;
+            if (!FPDFText_GetRect(text.value, i, &l, &t, &r, &b)) continue;
+            int x1, y1, x2, y2;
+            FPDF_PageToDevice(page.value, 0, 0, 100000, 100000, 0, l, t, &x1, &y1);
+            FPDF_PageToDevice(page.value, 0, 0, 100000, 100000, 0, r, b, &x2, &y2);
+            rects.push_back({std::min(x1, x2) / 100000.0, std::min(y1, y2) / 100000.0, std::max(x1, x2) / 100000.0, std::max(y1, y2) / 100000.0});
+            pdfRects.push_back({l, b, r, t});
+          }
+          matches.push_back({{"page", number}, {"rects", rects}, {"pdfRects", pdfRects}});
+        }
+        if (number % 10 == 0 || number + 1 == pages) progress(number + 1, pages);
+      }
+      check();
+      return Json{{"matches", matches}, {"truncated", truncated}}.dump();
+    }
     if (options.at("action") == "selection") {
       require((FPDF_GetDocPermissions(doc) & 16) != 0, "Copying is restricted for this PDF.");
       const int number = options.at("page");
@@ -456,6 +715,15 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     const int count = FPDF_GetPageCount(doc);
     require(count >= 1 && count <= 2000, "Choose a PDF with 1 to 2,000 pages.");
     require(commands.is_array() && commands.size() <= 2000, "Save up to 2,000 changes at a time.");
+    int images = 0;
+    for (auto& command : commands) if (command.value("kind", std::string()) == "image") {
+      require(++images <= 32, "Use up to 32 image signatures per save.");
+      const auto value = command.at("pixelPath").get<std::string>();
+      fs::path safe;
+      try { safe = childPath(value, cacheRoot, true); }
+      catch (...) { safe = childPath(value, fs::path(documentRoot) / "Versara Signature Drafts", true); }
+      command["pixelPath"] = safe.string();
+    }
     for (const auto& command : commands) require(command.at("page").get<int>() >= 0 && command.at("page").get<int>() < count, "Invalid page number.");
     if (options.at("action") == "preview") {
       const int number = options.at("page");
@@ -516,10 +784,16 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     for (int number : changed) { check(); Page page(doc, number); apply(doc, page.value, number, commands, check); progress(++completed, int(changed.size()) + 1); }
     check();
     { Writer writer(temporary, cancelled);
-      const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL | (annotationJob ? FPDF_REMOVE_SECURITY : 0));
+      // Keep the original encryption dictionary and credentials. Modifying a
+      // document is not permission to silently remove its opening password.
+      const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL);
       check(); require(saved && writer.finish(), "Could not save the PDF. Check free storage.");
     }
-    { Document verify(temporary.string()); require(FPDF_GetPageCount(verify.value) == count, "The saved PDF did not pass verification."); }
+    { Document verify(temporary.string(), options.value("inputPassword", std::string("")));
+      require(FPDF_GetPageCount(verify.value) == count, "The saved PDF did not pass verification.");
+      require(FPDF_GetSecurityHandlerRevision(verify.value) == securityRevision && FPDF_GetDocPermissions(verify.value) == permissions,
+              "The saved PDF did not preserve its password or permissions. No output was kept.", "PDF_SECURITY_CHANGED");
+    }
     check();
     fs::rename(temporary, output); temporary.clear();
     progress(int(changed.size()) + 1, int(changed.size()) + 1);

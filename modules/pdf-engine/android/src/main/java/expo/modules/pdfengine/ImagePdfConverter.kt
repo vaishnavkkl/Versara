@@ -3,9 +3,11 @@ package expo.modules.pdfengine
 import android.content.Context
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
+import android.graphics.pdf.PdfRenderer
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
@@ -79,7 +81,20 @@ class ImagePdfConverter {
           partial.outputStream().use { pdf.writeTo(it) }
         } finally { pdf.close() }
         checkCancelled()
-        if (partial.length() == 0L || !partial.renameTo(output)) throw ConversionFailure("PDF_WRITE_FAILED", "Could not save the PDF. Check available storage.")
+        if (partial.length() == 0L) throw ConversionFailure("PDF_WRITE_FAILED", "Could not save the PDF. Check available storage.")
+        ParcelFileDescriptor.open(partial, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+          PdfRenderer(descriptor).use { verified ->
+            if (verified.pageCount != options.uris.size) throw ConversionFailure("PDF_WRITE_FAILED", "The generated PDF did not pass verification.")
+            for (index in 0 until verified.pageCount) {
+              checkCancelled()
+              verified.openPage(index).use { page ->
+                if (page.width <= 0 || page.height <= 0) throw ConversionFailure("PDF_WRITE_FAILED", "The generated PDF contains an invalid page.")
+              }
+            }
+          }
+        }
+        checkCancelled()
+        if (!partial.renameTo(output)) throw ConversionFailure("PDF_WRITE_FAILED", "Could not save the PDF. Check available storage.")
         committed = true
         checkCancelled()
         promise.resolve(mapOf("uri" to Uri.fromFile(output).toString(), "pageCount" to options.uris.size, "size" to output.length().toDouble()))

@@ -1,0 +1,11 @@
+# Image signatures in PDF
+
+Add Signature retains freehand signing and adds an image action. Images are normalized upright into bounded 1024-pixel PNG assets on native workers. Existing transparent pixels are preserved. The optional Remove background action removes light paper around ink; it is not general subject segmentation and can affect pale ink. Restore background returns to the original normalized image. Both variants are prepared once; toggling does not rerun processing.
+
+The native PDF markup canvas displays image layers and selects newly added images. One finger moves the selected image; corner handles resize it proportionally within the page; two fingers zoom and pan the document. Select, duplicate, delete, undo and redo use the existing mark history. Stroke-style controls do not change image signatures. Up to 8 distinct source images and 32 image placements are supported per document.
+
+Export uses the shared PDFium engine on Android and iOS. A validated, bounded BGRA file supplies the transparent image object. Display-space coordinates map through PDFium to the visible crop box and page rotation. Existing PDF text, links and page content are preserved; the document is not rasterized. This is a visual signature, not a cryptographic digital signature. Existing signing/encryption restrictions and named output saving remain in effect.
+
+Image assets stay in the application-private Versara Signature Drafts directory for draft recovery. Draft removal deletes its assets unless another draft references them. Recovery rebases iOS sandbox paths. Orphans older than one hour are pruned before import, while referenced drafts are kept. Asset storage has a 64 MiB admission budget and a file-count guard. Active canvases decode at most 16 512-pixel variants off the UI thread and release references on teardown. Native processing and view queues are bounded; cancellation cleans partial outputs.
+
+No new library, model download, paid SDK or cloud processing is used. A rebuilt native app is required. Validation is limited to lint, TypeScript, offline Android Kotlin/C++ compilation and source review; iOS compilation requires Xcode. No automated tests or connected-device operations are performed. Gesture appearance, background-removal quality and frame times still require manual device review before release.

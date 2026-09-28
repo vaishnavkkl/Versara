@@ -34,6 +34,8 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     }
   }
   private var items: [RecentImage] = []
+  private var itemsJSON = ""
+  private var paletteJSON = ""
   private var grid = false
   private var label = UIColor.label
   private var secondary = UIColor.secondaryLabel
@@ -88,6 +90,8 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     } else { list.reloadData() }
   }
   func setItems(_ value: String) {
+    guard itemsJSON != value else { return }
+    itemsJSON = value
     items = Array(((try? JSONDecoder().decode([RecentImage].self, from: Data(value.utf8))) ?? []).prefix(160))
     list.reloadData()
   }
@@ -98,7 +102,9 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     list.reloadData()
   }
   func setPalette(_ value: String) {
+    guard paletteJSON != value else { return }
     guard let values = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: String] else { return }
+    paletteJSON = value
     func color(_ key: String) -> UIColor {
       let hex = values[key, default: "#000000"].trimmingCharacters(in: CharacterSet(charactersIn: "#"))
       let rgb = UInt32(hex, radix: 16) ?? 0
@@ -140,7 +146,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     let token = cell.token
     let finish: (UIImage?) -> Void = { [weak self, weak cell] image in
       DispatchQueue.main.async {
-        guard let self = self, let cell = cell, cell.token == token, self.window != nil, let image = image else { return }
+        guard let self = self, self.active, let cell = cell, cell.token == token, self.window != nil, let image = image else { return }
         if let cg = image.cgImage { self.cache.setObject(image, forKey: key, cost: cg.bytesPerRow * cg.height) }
         cell.image.image = image
       }

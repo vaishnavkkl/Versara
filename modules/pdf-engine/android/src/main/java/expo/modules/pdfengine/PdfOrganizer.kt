@@ -57,6 +57,11 @@ class PdfOrganizer {
       document.close()
       throw PdfJobFailure("PDF_PAGE_LIMIT", "Choose a PDF with between 1 and 2,000 pages.")
     }
+    try { PdfIntegrity.requireUnsigned(context, input(context, value)) }
+    catch (error: Exception) {
+      document.close()
+      throw PdfJobFailure("PDF_INTEGRITY_FAILED", error.message ?: "Could not inspect this PDF safely.")
+    }
     return document
   }
   private fun reject(promise: Promise, error: Throwable) {

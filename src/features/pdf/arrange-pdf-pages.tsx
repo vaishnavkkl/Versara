@@ -1,9 +1,13 @@
+import { EditorOption } from '@/components/editor-option';
+import { PdfPreviewFooter } from './pdf-preview';
+import { useStableCallback } from '@/hooks/use-stable-callback';
+import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { rememberPdfResults } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
-import { useEffect, useRef, useState } from 'react';
-import { FlatList, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
@@ -27,7 +31,10 @@ const originalPages = (count: number): Page[] => Array.from({ length: count }, (
 
 export function ArrangePdfPages({ operation, initialSelection }: { operation: 'reorder' | 'rotate'; initialSelection?: InitialSelection }) {
   const colors = usePalette();
+  const { width, height } = useWindowDimensions();
+  const landscape = width > height;
   const active = useScreenActive();
+  const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const reorder = operation === 'reorder';
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
@@ -37,12 +44,27 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   const [name, setName] = useState('');
   const [moving, setMoving] = useState<number | null>(null);
   const [position, setPosition] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [allPages, setAllPages] = useState(false);
+  const [fileOptions, setFileOptions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [phase, setPhase] = useState('');
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState<Output | null>(null);
+
+  const moveRow = useStableCallback(movePage);
+  const rotateRow = useStableCallback(rotate);
+  const startMove = useCallback((original: number, index: number) => { setMoving(original); setPosition(String(index + 1)); }, []);
+  const cancelMove = useCallback(() => { setMoving(null); Keyboard.dismiss(); }, []);
+  const sourceUri = source?.uri ?? '';
+  const count = pages.length;
+  const renderPage = useCallback(({ item, index }: { item: Page; index: number }) => <ArrangePageRow
+    item={item} index={index} uri={sourceUri} active={active && visibleKeys.has(String(item.original))} busy={busy} reorder={reorder} count={count}
+    moving={moving === item.original} position={moving === item.original ? position : ''} onPosition={setPosition}
+    onMove={moveRow} onRotate={rotateRow} onStartMove={startMove} onCancelMove={cancelMove} onPreview={setPreviewPage} />,
+  [sourceUri, active, visibleKeys, busy, reorder, count, moving, position, moveRow, rotateRow, startMove, cancelMove]);
 
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -90,6 +112,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
       if (!mounted.current) return;
       setSource({ ...picked[0], pageCount: details[0].pageCount });
       setPages(originalPages(details[0].pageCount)); setMoving(null); setPosition('');
+      setCurrentPage(1); setAllPages(false); setFileOptions(false);
       setName(`${picked[0].name.replace(/\.pdf$/i, '')} - ${reorder ? 'reordered' : 'rotated'}`);
       accepted = true;
     } catch (cause) { fail(cause); }
@@ -161,8 +184,40 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     {busy && <AppLoader />}
   </ScrollView>;
 
+  if (source && !reorder) return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, landscape && styles.rotationLandscape]}>
+    <PdfDocumentPreview key={source.uri} uri={source.uri} count={source.pageCount} embedded
+      page={currentPage} onPageChange={setCurrentPage} rotation={pages[currentPage - 1]?.rotation ?? 0} disabled={busy} onClose={() => {}} />
+    <ScrollView style={landscape ? styles.rotationSide : styles.rotationDock} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
+    {fileOptions && <View style={styles.fileOptions}>
+      <ThemedText style={styles.label}>New PDF name</ThemedText>
+      <TextInput accessibilityLabel="New PDF name" value={name} onChangeText={setName} editable={!busy} maxLength={100}
+        style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
+      <ToolButton title="Choose another PDF" secondary disabled={busy} onPress={choose} />
+    </View>}
+    <PdfPreviewFooter>
+      {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
+      {busy ? <View style={styles.liveActions}><AppLoader /><ThemedText style={styles.grow} accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText>
+        <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />
+      </View> : <>
+        <View style={styles.liveActions}>
+          <EditorOption label="This page" compact selected={!allPages} onPress={() => setAllPages(false)} icon={{ ios: 'doc', android: 'description' }} />
+          <EditorOption label="All pages" compact selected={allPages} onPress={() => setAllPages(true)} icon={{ ios: 'doc.on.doc', android: 'library-books' }} />
+          <EditorOption label="File options" compact selected={fileOptions} onPress={() => setFileOptions(value => !value)} icon={{ ios: 'doc.badge.gearshape', android: 'drive-file-rename-outline' }} />
+          <EditorOption label="Reset" compact disabled={!changed} onPress={() => setPages(originalPages(source.pageCount))} />
+        </View>
+        <View style={styles.liveActions}>
+          <EditorOption label="Left 90°" icon={{ ios: 'rotate.left', android: 'rotate-left' }} onPress={() => rotate(allPages ? null : currentPage, -90)} />
+          <EditorOption label="Right 90°" icon={{ ios: 'rotate.right', android: 'rotate-right' }} onPress={() => rotate(allPages ? null : currentPage, 90)} />
+          <View style={styles.saveAction}><ToolButton title="Save PDF" disabled={!available || !changed} onPress={save} /></View>
+        </View>
+        <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{changed ? changed + (changed === 1 ? ' page changed' : ' pages changed') : 'Turn a page to get started.'}</ThemedText>
+      </>}
+    </PdfPreviewFooter>
+    </ScrollView>
+  </KeyboardAvoidingView>;
+
   return <View style={styles.screen}>
-    <FlatList data={pages} keyExtractor={page => String(page.original)} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5}
+    <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={pages} keyExtractor={page => String(page.original)} contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled" initialNumToRender={4} maxToRenderPerBatch={3} windowSize={3}
       ListHeaderComponent={<View style={styles.form}>
         <ThemedText style={styles.heading}>1. Choose a PDF</ThemedText>
         <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? 'Put your pages in the right order, then save a new copy.' : 'Turn sideways or upside-down pages the right way up.'}</ThemedText>
@@ -181,24 +236,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
           <ToolButton title="Reset changes" secondary disabled={busy || !changed} onPress={() => { setPages(originalPages(source.pageCount)); setMoving(null); setError(''); }} />
         </>}
       </View>}
-      renderItem={({ item, index }) => <View style={[styles.card, { backgroundColor: colors.accentSurface, borderColor: colors.separator }]}>
-        <View style={styles.actions}>
-          <View style={styles.thumb}><FileThumbnail uri={source!.uri} kind="pdf" page={item.original - 1} active={active} /></View>
-          <View style={styles.grow}><ThemedText style={styles.label}>{reorder ? `${index + 1}. Original page ${item.original}` : `Page ${item.original}`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? `Position ${index + 1} in the new PDF` : item.rotation === 0 ? 'No change' : item.rotation === 270 ? 'Turn left 90°' : `Turn right ${item.rotation}°`}</ThemedText></View>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Preview original page ${item.original}`} disabled={busy} onPress={() => setPreviewPage(item.original)} style={styles.icon}><UniversalIcon ios="eye" android="visibility" size={22} color={colors.systemBlue} /></Pressable>
-        </View>
-        <View style={styles.actions}>
-          {reorder ? <>
-            <Pressable accessibilityRole="button" accessibilityLabel={`Move original page ${item.original} up`} disabled={busy || index === 0} onPress={() => movePage(item.original, index - 1)} style={[styles.icon, (busy || index === 0) && styles.disabled]}><UniversalIcon ios="arrow.up" android="arrow-upward" size={22} color={colors.systemBlue} /></Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={`Move original page ${item.original} down`} disabled={busy || index === pages.length - 1} onPress={() => movePage(item.original, index + 1)} style={[styles.icon, (busy || index === pages.length - 1) && styles.disabled]}><UniversalIcon ios="arrow.down" android="arrow-downward" size={22} color={colors.systemBlue} /></Pressable>
-            <View style={styles.grow}><ToolButton title="Move to…" secondary disabled={busy || pages.length < 2} onPress={() => { setMoving(item.original); setPosition(String(index + 1)); }} /></View>
-          </> : <>
-            <View style={styles.grow}><ToolButton title="Left 90°" secondary disabled={busy} onPress={() => rotate(item.original, -90)} /></View>
-            <View style={styles.grow}><ToolButton title="Right 90°" secondary disabled={busy} onPress={() => rotate(item.original, 90)} /></View>
-          </>}
-        </View>
-        {reorder && moving === item.original && <View style={styles.actions}><TextInput accessibilityLabel={`New position for original page ${item.original}`} keyboardType="number-pad" value={position} onChangeText={setPosition} maxLength={4} editable={!busy} style={[styles.input, styles.grow, { color: colors.label, backgroundColor: colors.systemBackground }]} /><ToolButton title="Move" disabled={busy} onPress={() => movePage(item.original, Number(position) - 1)} /><ToolButton title="Cancel" secondary disabled={busy} onPress={() => { setMoving(null); Keyboard.dismiss(); }} /></View>}
-      </View>}
+      renderItem={renderPage}
     />
     {(!!source || busy || !!error) && <View style={[styles.footer, { borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
@@ -210,10 +248,41 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   </View>;
 }
 
+const ArrangePageRow = memo(function ArrangePageRow({ item, index, uri, active, busy, reorder, count, moving, position, onPosition, onMove, onRotate, onStartMove, onCancelMove, onPreview }: {
+  item: Page; index: number; uri: string; active: boolean; busy: boolean; reorder: boolean; count: number; moving: boolean; position: string;
+  onPosition: (value: string) => void; onMove: (original: number, destination: number) => void; onRotate: (original: number | null, degrees: number) => void;
+  onStartMove: (original: number, index: number) => void; onCancelMove: () => void; onPreview: (page: number) => void;
+}) {
+  const colors = usePalette();
+  return <View style={[styles.card, { backgroundColor: colors.accentSurface, borderColor: colors.separator }]}>
+        <View style={styles.actions}>
+          <View style={styles.thumb}><FileThumbnail uri={uri} kind="pdf" page={item.original - 1} active={active} /></View>
+          <View style={styles.grow}><ThemedText style={styles.label}>{reorder ? `${index + 1}. Original page ${item.original}` : `Page ${item.original}`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? `Position ${index + 1} in the new PDF` : item.rotation === 0 ? 'No change' : item.rotation === 270 ? 'Turn left 90°' : `Turn right ${item.rotation}°`}</ThemedText></View>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Preview original page ${item.original}`} disabled={busy} onPress={() => onPreview(item.original)} style={styles.icon}><UniversalIcon ios="eye" android="visibility" size={22} color={colors.systemBlue} /></Pressable>
+        </View>
+        <View style={styles.actions}>
+          {reorder ? <>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Move original page ${item.original} up`} disabled={busy || index === 0} onPress={() => onMove(item.original, index - 1)} style={[styles.icon, (busy || index === 0) && styles.disabled]}><UniversalIcon ios="arrow.up" android="arrow-upward" size={22} color={colors.systemBlue} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Move original page ${item.original} down`} disabled={busy || index === count - 1} onPress={() => onMove(item.original, index + 1)} style={[styles.icon, (busy || index === count - 1) && styles.disabled]}><UniversalIcon ios="arrow.down" android="arrow-downward" size={22} color={colors.systemBlue} /></Pressable>
+            <View style={styles.grow}><ToolButton title="Move to…" secondary disabled={busy || count < 2} onPress={() => { onStartMove(item.original, index); }} /></View>
+          </> : <>
+            <View style={styles.grow}><ToolButton title="Left 90°" secondary disabled={busy} onPress={() => onRotate(item.original, -90)} /></View>
+            <View style={styles.grow}><ToolButton title="Right 90°" secondary disabled={busy} onPress={() => onRotate(item.original, 90)} /></View>
+          </>}
+        </View>
+        {reorder && moving && <View style={styles.actions}><TextInput accessibilityLabel={`New position for original page ${item.original}`} keyboardType="number-pad" value={position} onChangeText={onPosition} maxLength={4} editable={!busy} style={[styles.input, styles.grow, { color: colors.label, backgroundColor: colors.systemBackground }]} /><ToolButton title="Move" disabled={busy} onPress={() => onMove(item.original, Number(position) - 1)} /><ToolButton title="Cancel" secondary disabled={busy} onPress={() => { onCancelMove(); }} /></View>}
+      </View>;
+});
+
 const styles = StyleSheet.create({
   screen: { flex: 1 }, grow: { flex: 1, minWidth: 0 }, list: { padding: s.lg, gap: s.md }, form: { gap: s.md, paddingBottom: s.md },
   heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body }, actions: { flexDirection: 'row', alignItems: 'center', gap: s.sm },
   card: { padding: s.md, gap: s.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md }, icon: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.3 },
-  thumb: { width: 52, height: 68 },
+  thumb: { width: 96, height: 128 },
+  rotationLandscape: { flexDirection: 'row' }, rotationSide: { width: 280, flexGrow: 0 }, rotationDock: { maxHeight: '48%', flexGrow: 0 },
+  liveActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: s.sm },
+  saveAction: { flexGrow: 1, minWidth: 110 },
+  fileOptions: { padding: s.sm, gap: s.sm },
+  caption: { ...t.caption },
   input: { minHeight: 48, borderRadius: radius.sm, padding: s.md, ...t.body }, footer: { padding: s.lg, borderTopWidth: StyleSheet.hairlineWidth, gap: s.sm }, result: { flexGrow: 1, padding: s.xl, gap: s.lg, justifyContent: 'center' },
 });

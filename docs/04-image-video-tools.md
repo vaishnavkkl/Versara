@@ -4,6 +4,8 @@ Heavy media processing must be done locally via native engines (e.g., CoreImage 
 
 The implemented image tools, platform encoder availability, memory limits and file actions are documented in [Image tools and file actions](27-image-tools-and-file-actions.md).
 
+Native tone curves, Levels and HSL controls are covered in [advanced color editing](32-native-tone-curves-hsl.md). Slider scheduling and image-list navigation improvements are documented in [the editor follow-up](33-ocr-and-image-preview-follow-up.md).
+
 ## Image Utilities
 - **Compression:** Target file size, quality-based, batch compression. Must show before/after preview.
 - **Resize:** Exact pixels, percentage, aspect-ratio lock, social presets.

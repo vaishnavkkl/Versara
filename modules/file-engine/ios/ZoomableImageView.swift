@@ -11,6 +11,10 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
   private let imageView = UIImageView()
   private var source = ""
   private var ticket = 0
+  private let worker = OperationQueue()
+  private var requestedTarget: CGFloat = 0
+  private var loadedTarget: CGFloat = 0
+  private var disposed = false
   private var dismissing = false
   private static let dismissDistance: CGFloat = 120
   private static let maxZoom: CGFloat = 5
@@ -18,6 +22,8 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
+    worker.maxConcurrentOperationCount = 1
+    worker.qualityOfService = .utility
     clipsToBounds = true
     scroll.delegate = self
     scroll.minimumZoomScale = 1
@@ -42,8 +48,35 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
   func setSource(_ value: String) {
     guard value != source else { return }
     source = value
+    ticket += 1
+    worker.cancelAllOperations()
+    requestedTarget = 0; loadedTarget = 0
+    imageView.image = nil
+    scroll.setZoomScale(1, animated: false)
     load()
   }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    if window == nil {
+      ticket += 1
+      worker.cancelAllOperations()
+      requestedTarget = 0; loadedTarget = 0
+      imageView.image = nil
+    } else { load() }
+  }
+
+  func dispose() {
+    guard !disposed else { return }
+    disposed = true
+    ticket += 1
+    worker.cancelAllOperations()
+    imageView.layer.removeAllAnimations()
+    scroll.delegate = nil
+    imageView.image = nil
+  }
+
+  deinit { worker.cancelAllOperations() }
 
   override func layoutSubviews() {
     super.layoutSubviews()
@@ -51,32 +84,48 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
     scroll.frame = bounds
     scroll.setZoomScale(1, animated: false)
     layoutImage()
-    if imageView.image == nil { load() }
+    load()
   }
 
-  private func load() {
-    guard !source.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+  private func load(detail: Bool = false) {
+    guard !disposed, window != nil, !source.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+    let screenScale = window?.screen.scale ?? UIScreen.main.scale
+    let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
+    let cap: CGFloat = detail ? (lowMemory ? 2048 : 4096) : (lowMemory ? 1536 : 2048)
+    let magnification: CGFloat = detail ? min(2, max(1, scroll.zoomScale)) : 1
+    let target = min(max(bounds.width, bounds.height) * screenScale * magnification, cap)
+    guard target > requestedTarget else { return }
+    requestedTarget = target
     ticket += 1
     let current = ticket
     let uri = source
-    let screenScale = window?.screen.scale ?? UIScreen.main.scale
-    let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
-    // Twice the screen's longest side keeps zoomed detail sharp without full-resolution decodes.
-    let target = min(max(bounds.width, bounds.height) * screenScale * 2, lowMemory ? 2048 : 4096)
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let image = Self.decode(uri: uri, maxPixels: target)
-      DispatchQueue.main.async {
-        guard let self, current == self.ticket else { return }
-        guard let image else {
-          self.onError(["message": "This image format could not be previewed on your device."])
-          return
+    worker.cancelAllOperations()
+    let operation = BlockOperation()
+    operation.addExecutionBlock { [weak self, weak operation] in
+      guard operation?.isCancelled == false else { return }
+      autoreleasepool {
+        let image = Self.decode(uri: uri, maxPixels: target)
+        guard operation?.isCancelled == false else { return }
+        DispatchQueue.main.async { [weak self] in
+          guard let self, !self.disposed, self.window != nil, current == self.ticket else { return }
+          guard let image else {
+            self.requestedTarget = self.loadedTarget
+            // Keep a working fit preview if the optional zoom detail cannot be decoded.
+            if self.imageView.image == nil { self.onError(["message": "This image format could not be previewed on your device."]) }
+            return
+          }
+          let firstImage = self.imageView.image == nil
+          self.imageView.image = image
+          self.loadedTarget = target
+          if firstImage {
+            self.scroll.setZoomScale(1, animated: false)
+            self.layoutImage()
+          }
+          if firstImage { self.onLoad(["width": image.size.width, "height": image.size.height]) }
         }
-        self.imageView.image = image
-        self.scroll.setZoomScale(1, animated: false)
-        self.layoutImage()
-        self.onLoad(["width": image.size.width, "height": image.size.height])
       }
     }
+    worker.addOperation(operation)
   }
 
   private static func decode(uri: String, maxPixels: CGFloat) -> UIImage? {
@@ -121,6 +170,10 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
   func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
   func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+
+  func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+    load(detail: true)
+  }
 
   func scrollViewDidScroll(_ scrollView: UIScrollView) {
     guard scrollView.zoomScale <= 1.01, !dismissing else { imageView.alpha = 1; return }

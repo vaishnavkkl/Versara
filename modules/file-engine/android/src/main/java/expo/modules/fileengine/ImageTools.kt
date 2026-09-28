@@ -47,21 +47,43 @@ internal class ImageTools {
     return mapOf("width" to (if (swapped) bounds.outHeight else bounds.outWidth), "height" to (if (swapped) bounds.outWidth else bounds.outHeight), "size" to file.length(), "mimeType" to (bounds.outMimeType ?: "image/*"), "formats" to listOf("jpeg", "png", "webp"), "camera" to (exif?.getAttribute(ExifInterface.TAG_MODEL) ?: ""), "taken" to (exif?.getAttribute(ExifInterface.TAG_DATETIME) ?: ""), "hasLocation" to (exif?.getAttribute(ExifInterface.TAG_GPS_LATITUDE) != null))
   }
   private fun process(context: Context, r: JSONObject, check: () -> Unit): Map<String, Any> {
+    if (r.optString("tool") == "signature") return SignatureImage.process(context, r, check)
+    if (r.optString("tool") == "privacy") return ImagePrivacyExport.process(context, r, check)
     check(); val input = local(context, r.getString("uri")); require(input.isFile) { "The image is no longer available." }
     if (r.optString("action") == "info") return info(input)
     val target = local(context, r.getString("outputUri")); require(!target.exists()) { "Choose a new output name." }
     val temporary = File(target.path + ".partial")
     val preview = r.optString("action") == "preview"
-    val low = ImageProcessing.lowMemory(context)
-    val budget = if (low) 3_000_000 else 6_000_000
-    val limit = if (preview) 1440 else if (low) 2048 else 3072
-    var bitmap = ImageProcessing.decode(context, Uri.fromFile(input), limit)
+    val budget = ImageProcessing.exportPixelBudget(context)
+    val original = info(input)
+    val sourceWidth = (original.getValue("width") as Number).toInt()
+    val sourceHeight = (original.getValue("height") as Number).toInt()
+    var requestedWidth = r.optInt("width", 0); var requestedHeight = r.optInt("height", 0)
+    if (r.has("percent")) {
+      val percent = r.getDouble("percent")
+      require(percent.isFinite() && percent in .1..400.0) { "Enter a percentage from 0.1 to 400." }
+      requestedWidth = max(1, (sourceWidth * percent / 100).roundToInt())
+      requestedHeight = max(1, (sourceHeight * percent / 100).roundToInt())
+    }
+    val resizing = requestedWidth > 0 || requestedHeight > 0
+    val outputWidth = if (requestedWidth > 0) requestedWidth else if (requestedHeight > 0) max(1, (requestedHeight * sourceWidth.toDouble() / sourceHeight).roundToInt()) else sourceWidth
+    val outputHeight = if (requestedHeight > 0) requestedHeight else if (requestedWidth > 0) max(1, (requestedWidth * sourceHeight.toDouble() / sourceWidth).roundToInt()) else sourceHeight
+    val targetBytes = r.optLong("targetBytes", 0)
+    require(targetBytes == 0L || targetBytes >= 10_240) { "Choose a target of at least 10 KB." }
+    if (!preview && resizing) ImageProcessing.requireExportSize(outputWidth, outputHeight, budget)
+    // Only an explicit resize or target-byte compression may decode below the source resolution.
+    val decodeScale = when {
+      resizing -> min(1.0, max(outputWidth.toDouble() / sourceWidth, outputHeight.toDouble() / sourceHeight))
+      targetBytes > 0 && sourceWidth.toLong() * sourceHeight > budget -> sqrt(budget.toDouble() / (sourceWidth.toDouble() * sourceHeight)) * .999
+      else -> 1.0
+    }
+    val limit = if (preview) 1440 else max(1, ceil(max(sourceWidth, sourceHeight) * decodeScale).toInt())
+    var bitmap = if (preview) ImageProcessing.decode(context, Uri.fromFile(input), limit)
+      else ImageProcessing.decodeExport(context, Uri.fromFile(input), if (resizing || targetBytes > 0) limit else null, budget)
     fun swap(next: Bitmap) { if (next !== bitmap) { bitmap.recycle(); bitmap = next } }
-    fun sized(w: Int, h: Int): Bitmap { require(w in 1..8192 && h in 1..8192 && w.toLong() * h <= budget) { "Reduce output dimensions to fit this device's image limit." }; return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }
+    fun sized(w: Int, h: Int): Bitmap { ImageProcessing.requireExportSize(w, h, budget); return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }
     try {
       check()
-      val original = info(input)
-      if (bitmap.width.toLong() * bitmap.height > budget) { val scale = sqrt(budget.toDouble() / (bitmap.width.toDouble() * bitmap.height)); swap(Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).toInt()), max(1, (bitmap.height * scale).toInt()), true)) }
       r.optJSONArray("perspective")?.let { points ->
         require(points.length() == 4) { "Choose four perspective corners." }
         val source = FloatArray(8)
@@ -93,22 +115,20 @@ internal class ImageTools {
           } finally { filtered.recycle() }
         } else swap(filtered)
       }
-      check()
-      var requestedWidth = r.optInt("width", 0); var requestedHeight = r.optInt("height", 0)
-      if (r.has("percent")) {
-        val percent = r.getDouble("percent")
-        require(percent.isFinite() && percent in .1..400.0) { "Enter a percentage from 0.1 to 400." }
-        requestedWidth = max(1, ((original.getValue("width") as Number).toDouble() * percent / 100).roundToInt())
-        requestedHeight = max(1, ((original.getValue("height") as Number).toDouble() * percent / 100).roundToInt())
-        require(requestedWidth in 1..8192 && requestedHeight in 1..8192 && requestedWidth.toLong() * requestedHeight <= budget) { "Choose a smaller percentage for this image." }
+      if (r.has("curves") || r.has("hsl") || r.has("levels")) {
+        if (!bitmap.isMutable || bitmap.config != Bitmap.Config.ARGB_8888) swap(bitmap.copy(Bitmap.Config.ARGB_8888, true))
+        adjustColor(bitmap, r, check)
       }
-      if (requestedWidth > 0 || requestedHeight > 0) {
-        val w = if (requestedWidth > 0) requestedWidth else max(1, (requestedHeight * bitmap.width.toDouble() / bitmap.height).roundToInt())
-        val h = if (requestedHeight > 0) requestedHeight else max(1, (requestedWidth * bitmap.height.toDouble() / bitmap.width).roundToInt())
+      check()
+      if (resizing) {
+        val w = outputWidth
+        val h = outputHeight
         val ratio = if (preview) min(1.0, 1440.0 / max(w, h)) else 1.0
         val next = sized(max(1, (w * ratio).roundToInt()), max(1, (h * ratio).roundToInt()))
-        val canvas = Canvas(next); canvas.drawColor(color(r.optString("background", "#FFFFFF")))
         val mode = r.optString("resizeMode", "fit")
+        val canvas = Canvas(next)
+        // Fit intentionally adds a background; fill/stretch preserve the source's alpha.
+        if (mode == "fit") canvas.drawColor(color(r.optString("background", "#FFFFFF")))
         val scale = if (mode == "fill") max(next.width.toFloat() / bitmap.width, next.height.toFloat() / bitmap.height) else min(next.width.toFloat() / bitmap.width, next.height.toFloat() / bitmap.height)
         val bw = if (mode == "stretch") next.width.toFloat() else bitmap.width * scale; val bh = if (mode == "stretch") next.height.toFloat() else bitmap.height * scale
         canvas.drawBitmap(bitmap, null, RectF((next.width-bw)/2, (next.height-bh)/2, (next.width+bw)/2, (next.height+bh)/2), Paint(Paint.FILTER_BITMAP_FLAG)); swap(next)
@@ -116,7 +136,7 @@ internal class ImageTools {
       val paddingFraction = r.optDouble("padding", 0.0).coerceIn(0.0, .3)
       var padding = (paddingFraction * min(bitmap.width, bitmap.height)).roundToInt()
       val paddedPixels = (bitmap.width + padding * 2).toDouble() * (bitmap.height + padding * 2)
-      if (padding > 0 && paddedPixels > budget) {
+      if (preview && padding > 0 && paddedPixels > budget) {
         val scale = sqrt(budget / paddedPixels) * .999
         swap(Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).toInt()), max(1, (bitmap.height * scale).toInt()), true))
         padding = (paddingFraction * min(bitmap.width, bitmap.height)).roundToInt()
@@ -131,8 +151,6 @@ internal class ImageTools {
       val compression = when(format) { "png" -> Bitmap.CompressFormat.PNG; "webp" -> if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP; else -> Bitmap.CompressFormat.JPEG }
       if (format == "jpeg" && bitmap.hasAlpha()) { val next = sized(bitmap.width, bitmap.height); Canvas(next).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }; swap(next) }
       target.parentFile?.mkdirs()
-      val targetBytes = r.optLong("targetBytes", 0)
-      require(targetBytes == 0L || targetBytes >= 10_240) { "Choose a target of at least 10 KB." }
       require(targetBytes == 0L || format != "png") { "Choose JPG or WebP for target-size compression." }
       var quality = r.optInt("quality", 90).coerceIn(10, 100)
       var achieved = false
@@ -147,6 +165,87 @@ internal class ImageTools {
       return mapOf("uri" to Uri.fromFile(target).toString(), "width" to bitmap.width, "height" to bitmap.height, "size" to target.length(), "mimeType" to "image/${if(format == "jpeg") "jpeg" else format}", "sourceWidth" to original.getValue("width"), "sourceHeight" to original.getValue("height"))
     } finally { bitmap.recycle(); temporary.delete() }
   }
+  /** Same sRGB, straight-alpha equations as ImageTools.swift. No platform filter presets. */
+  private fun adjustColor(bitmap: Bitmap, request: JSONObject, check: () -> Unit) {
+    val levels = request.optJSONObject("levels")
+    require(!request.has("levels") || levels != null) { "Choose valid input levels." }
+    val black = levels?.getDouble("black") ?: 0.0
+    val white = levels?.getDouble("white") ?: 1.0
+    val gamma = levels?.getDouble("gamma") ?: 1.0
+    require(black.isFinite() && white.isFinite() && gamma.isFinite() && black in 0.0..1.0 && white in 0.0..1.0 && white - black >= 1.0 / 255 - 1e-12 && gamma in .1..3.0) { "Keep the black point below white and choose gamma from 0.1 to 3." }
+    val curveNames = arrayOf("rgb", "red", "green", "blue")
+    val curves = request.optJSONObject("curves")
+    require(!request.has("curves") || curves != null) { "Choose valid tone curves." }
+    val anchors = Array(4) { channel ->
+      val values = curves?.optJSONArray(curveNames[channel])
+      require(curves == null || values?.length() == 5) { "Each tone curve needs five anchors." }
+      DoubleArray(5) { index -> (values?.getDouble(index) ?: index / 4.0).also { require(it.isFinite() && it in 0.0..1.0) { "Choose tone values from 0 to 100%." } } }
+    }
+    fun curve(values: DoubleArray, input: Double): Double {
+      val x = input.coerceIn(0.0, 1.0) * 4
+      val segment = min(3, x.toInt())
+      return values[segment] + (values[segment + 1] - values[segment]) * (x - segment)
+    }
+    val tables = Array(3) { channel -> IntArray(256) { value ->
+      val leveled = ((value / 255.0 - black) / (white - black)).coerceIn(0.0, 1.0).pow(1 / gamma)
+      (curve(anchors[channel + 1], curve(anchors[0], leveled)) * 255).roundToInt().coerceIn(0, 255)
+    } }
+    val names = arrayOf("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
+    val centers = doubleArrayOf(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0, 360.0)
+    val hsl = request.optJSONObject("hsl")
+    require(!request.has("hsl") || hsl != null) { "Choose valid HSL adjustments." }
+    val adjustments = Array(8) { band ->
+      val values = hsl?.optJSONObject(names[band])
+      require(hsl == null || values != null) { "Choose valid color ranges." }
+      DoubleArray(3) { component ->
+        val name = arrayOf("hue", "saturation", "lightness")[component]
+        (values?.getDouble(name) ?: 0.0).also { require(it.isFinite() && it in (if (component == 0) -180.0..180.0 else -100.0..100.0)) { "Choose a valid color adjustment." } }
+      }
+    }
+    val usesHsl = adjustments.any { band -> band.any { it != 0.0 } }
+    val usesCurves = tables.indices.any { channel -> tables[channel].indices.any { tables[channel][it] != it } }
+    if (!usesCurves && !usesHsl) return
+    val row = IntArray(bitmap.width)
+    for (y in 0 until bitmap.height) {
+      check(); bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+      for (x in row.indices) {
+        val original = row[x]; val alpha = Color.alpha(original)
+        if (alpha == 0) continue
+        var red = tables[0][Color.red(original)] / 255.0
+        var green = tables[1][Color.green(original)] / 255.0
+        var blue = tables[2][Color.blue(original)] / 255.0
+        val upper = max(red, max(green, blue)); val lower = min(red, min(green, blue)); val delta = upper - lower
+        // Hue ranges never colorize neutral gray pixels.
+        if (usesHsl && delta > 0.000001) {
+          var hue = (when (upper) { red -> (green - blue) / delta; green -> (blue - red) / delta + 2; else -> (red - green) / delta + 4 } * 60 + 360) % 360
+          var lightness = (upper + lower) / 2
+          var saturation = delta / (1 - abs(2 * lightness - 1))
+          var band = 0
+          while (band < 7 && hue >= centers[band + 1]) band++
+          val weight = (hue - centers[band]) / (centers[band + 1] - centers[band])
+          fun mix(component: Int) = adjustments[band][component] * (1 - weight) + adjustments[(band + 1) % 8][component] * weight
+          hue = (hue + mix(0) + 360) % 360
+          saturation = (saturation * (1 + mix(1) / 100)).coerceIn(0.0, 1.0)
+          val light = mix(2) / 100
+          lightness = if (light >= 0) lightness + (1 - lightness) * light else lightness * (1 + light)
+          val chroma = (1 - abs(2 * lightness - 1)) * saturation
+          val intermediate = chroma * (1 - abs((hue / 60) % 2 - 1))
+          val offset = lightness - chroma / 2
+          when (hue.toInt() / 60) {
+            0 -> { red = chroma; green = intermediate; blue = 0.0 }
+            1 -> { red = intermediate; green = chroma; blue = 0.0 }
+            2 -> { red = 0.0; green = chroma; blue = intermediate }
+            3 -> { red = 0.0; green = intermediate; blue = chroma }
+            4 -> { red = intermediate; green = 0.0; blue = chroma }
+            else -> { red = chroma; green = 0.0; blue = intermediate }
+          }
+          red += offset; green += offset; blue += offset
+        }
+        row[x] = Color.argb(alpha, (red * 255).roundToInt().coerceIn(0,255), (green * 255).roundToInt().coerceIn(0,255), (blue * 255).roundToInt().coerceIn(0,255))
+      }
+      bitmap.setPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+    }
+  }
   private fun color(value: String) = runCatching { Color.parseColor(value) }.getOrDefault(Color.BLACK)
   private fun annotate(context: Context, bitmap: Bitmap, r: JSONObject, check: () -> Unit) {
     val canvas = Canvas(bitmap); val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
@@ -157,13 +256,20 @@ internal class ImageTools {
       if (points.length() < 2) continue
       val path = Path(); for (j in 0 until points.length()) { val point = points.getJSONArray(j); val x = point.getDouble(0).toFloat().coerceIn(0f,1f)*w; val y = point.getDouble(1).toFloat().coerceIn(0f,1f)*h; if(j == 0) path.moveTo(x,y) else path.lineTo(x,y) }
       val kind = mark.optString("kind"); val redaction = kind == "redact"
-      val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if(redaction) Color.BLACK else color(mark.optString("color", "#1D4ED8")); strokeWidth = max(1f, mark.optDouble("width", .005).toFloat()*w); strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE }
+      val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if(redaction) Color.BLACK else color(mark.optString("color", "#1D4ED8")); strokeWidth = mark.optDouble("width", .005).coerceIn(.001, .1).toFloat()*w; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE }
       if (!redaction) {
-        paint.alpha = when(mark.optString("brush")) { "highlighter" -> 77; "pencil" -> 170; "marker" -> 210; else -> 255 }
+        val opacity = mark.optDouble("opacity", Double.NaN)
+        paint.alpha = if (opacity.isFinite()) (opacity.coerceIn(.01, 1.0) * 255).roundToInt() else when(mark.optString("brush")) { "highlighter" -> 77; "pencil" -> 170; "marker" -> 210; else -> 255 }
         val unit = paint.strokeWidth
-        paint.pathEffect = when(mark.optString("pattern")) { "dotted" -> DashPathEffect(floatArrayOf(unit*.1f,unit*2.4f),0f); "dashed" -> DashPathEffect(floatArrayOf(unit*4,unit*2),0f); else -> null }
+        if (kind != "polygon" && mark.optString("pattern") == "dotted") {
+          val vertices = (0 until points.length()).map { j -> val p = points.getJSONArray(j); PointF(p.getDouble(0).toFloat().coerceIn(0f, 1f) * w, p.getDouble(1).toFloat().coerceIn(0f, 1f) * h) }
+          paint.style = Paint.Style.FILL
+          canvas.drawPath(StrokeDots.path(vertices, unit), paint)
+          continue
+        }
+        paint.pathEffect = if (kind != "polygon" && mark.optString("pattern") == "dashed") DashPathEffect(floatArrayOf(unit*4,unit*2),0f) else null
       }
-      if (kind == "polygon" || redaction) { path.close(); val fill = mark.optString("fillColor"); if(fill.isNotEmpty() || redaction) { paint.style = Paint.Style.FILL; val border = paint.color; paint.color = if(redaction) Color.BLACK else color(fill); canvas.drawPath(path,paint); paint.color = border; paint.style = Paint.Style.STROKE } }
+      if (kind == "polygon" || redaction) { path.close(); val fill = mark.optString("fillColor"); if(fill.isNotEmpty() || redaction) { paint.style = Paint.Style.FILL; val border = paint.color; val alpha = paint.alpha; paint.color = if(redaction) Color.BLACK else color(fill); paint.alpha = if (redaction || !mark.optDouble("opacity", Double.NaN).isFinite()) 255 else alpha; canvas.drawPath(path,paint); paint.color = border; paint.style = Paint.Style.STROKE } }
       canvas.drawPath(path, paint)
     }
     r.optJSONObject("watermark")?.let { mark ->

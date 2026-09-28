@@ -1,3 +1,5 @@
+import { useScreenActive } from '@/hooks/use-screen-active';
+import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View, type ListRenderItem } from 'react-native';
 import { FileThumbnail } from '@/components/file-thumbnail';
@@ -6,16 +8,18 @@ import { usePalette } from '@/theme/colors';
 
 const ITEM_WIDTH = 68;
 
-const PageThumb = memo(function PageThumb({ uri, index, selected, onSelect }: { uri: string; index: number; selected: boolean; onSelect: (page: number) => void }) {
+const PageThumb = memo(function PageThumb({ uri, index, selected, active, onSelect }: { active: boolean; uri: string; index: number; selected: boolean; onSelect: (page: number) => void }) {
   const colors = usePalette();
   return <Pressable accessibilityRole="button" accessibilityLabel={`Page ${index + 1}`} accessibilityState={{ selected }} onPress={() => onSelect(index)} style={[styles.item, { height: 86 }] }>
-    <View style={[styles.thumbnail, { borderColor: selected ? colors.systemBlue : 'transparent' }]}><FileThumbnail uri={uri} kind="pdf" page={index} /></View>
+    <View style={[styles.thumbnail, { borderColor: selected ? colors.systemBlue : 'transparent' }]}><FileThumbnail uri={uri} kind="pdf" active={active} page={index} /></View>
     <ThemedText style={[styles.number, { color: selected ? colors.systemBlue : colors.secondaryLabel, fontWeight: selected ? '700' : '400' }]}>{index + 1}</ThemedText>
   </Pressable>;
 });
 
 export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1 }) {
   const colors = usePalette();
+  const active = useScreenActive();
+  const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const list = useRef<FlatList<number>>(null);
   const select = useRef(onSelect);
   useEffect(() => { select.current = onSelect; });
@@ -23,14 +27,14 @@ export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, par
   const pages = useMemo(() => Array.from({ length: count }, (_, index) => index).filter(index => parity === undefined || index % 2 === parity), [count, parity]);
   // Fast scrolling in the reader changes the page many times a second; follow it once it settles.
   useEffect(() => {
-    if (page >= count || !pages.length) return;
+    if (!active || page >= count || !pages.length) return;
     const index = Math.min(pages.length - 1, parity === undefined ? page : Math.floor(page / 2));
     const timer = setTimeout(() => list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 }), 160);
     return () => clearTimeout(timer);
-  }, [page, count, parity, pages.length]);
-  const renderItem = useCallback<ListRenderItem<number>>(({ item }) => <PageThumb uri={uri} index={item} selected={item === page} onSelect={stableSelect} />, [uri, page, stableSelect]);
+  }, [active, page, count, parity, pages.length]);
+  const renderItem = useCallback<ListRenderItem<number>>(({ item }) => <PageThumb uri={uri} index={item} active={active && visibleKeys.has(String(item))} selected={item === page} onSelect={stableSelect} />, [uri, page, active, visibleKeys, stableSelect]);
   return <View style={[vertical ? styles.sideStrip : styles.strip, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
-    <FlatList ref={list} horizontal={!vertical} data={pages} keyExtractor={String} initialNumToRender={vertical ? 3 : 8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
+    <FlatList ref={list} onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} horizontal={!vertical} data={pages} keyExtractor={String} initialNumToRender={vertical ? 3 : 8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
       removeClippedSubviews showsHorizontalScrollIndicator={false} renderItem={renderItem} getItemLayout={vertical ? (_, index) => ({ length: 86, offset: 86 * index, index }) : getItemLayout} />
   </View>;
 }

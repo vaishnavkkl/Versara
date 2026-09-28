@@ -1,4 +1,5 @@
-import { useMemo, type ReactElement } from 'react';
+import { useStableCallback } from '@/hooks/use-stable-callback';
+import { memo, useCallback, useMemo, type ReactElement } from 'react';
 import { SectionList, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from './themed-text';
@@ -22,17 +23,26 @@ export function ToolGrid({ sections, onAction, footer, grid = true, tone = 'defa
       return result;
     }, []),
   })), [sections, columns]);
+  const selectAction = useStableCallback(onAction);
+  const renderRow = useCallback(({ item: row }: { item: Action[] }) => <View style={styles.row}>
+    {row.map(item => <ToolCard key={item.id} {...item} grid={grid} tone={tone} onAction={selectAction} />)}
+    {row.length < columns && <View style={styles.spacer} />}
+  </View>, [columns, grid, tone, selectAction]);
   return <SectionList<Action[]> sections={rows} keyExtractor={row => row.map(item => item.id).join('|')} style={styles.list}
     keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" stickySectionHeadersEnabled={false} initialNumToRender={6} maxToRenderPerBatch={4} windowSize={3}
     contentContainerStyle={{ paddingHorizontal: s.xl, paddingBottom: Math.max(s.xxl, insets.bottom) }}
     renderSectionHeader={({ section }) => <ThemedText accessibilityRole="header" style={[styles.section, { color: colors.secondaryLabel }]}>{section.title}</ThemedText>}
-    renderItem={({ item: row }) => <View style={styles.row}>
-      {row.map(item => <ModuleCard key={item.id} title={item.title} description={item.subtitle} ios={item.ios} android={item.android}
-        variant={grid ? 'tool' : 'list'} tone={tone} disabled={item.unavailable} detail={item.unavailable ? 'Coming later' : undefined} onPress={() => onAction(item.id)} />)}
-      {row.length < columns && <View style={styles.spacer} />}
-    </View>}
+    renderItem={renderRow}
     ListFooterComponent={footer} />;
 }
+const ToolCard = memo(function ToolCard({ id, title, subtitle, ios, android, unavailable, grid, tone, onAction }: Action & {
+  grid: boolean; tone: ModuleTone; onAction: (id: string) => void;
+}) {
+  const onPress = useCallback(() => onAction(id), [id, onAction]);
+  return <ModuleCard title={title} description={subtitle} ios={ios} android={android}
+    variant={grid ? 'tool' : 'list'} tone={tone} disabled={unavailable} detail={unavailable ? 'Coming later' : undefined} onPress={onPress} />;
+});
+
 const styles = StyleSheet.create({
   list: { flex: 1 },
   section: { ...t.label, paddingTop: s.md, paddingBottom: s.md },

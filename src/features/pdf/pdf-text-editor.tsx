@@ -1,3 +1,7 @@
+import { useResponsiveEditorToolbar, responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
+import { retainPdfEditingSource } from './pdf-tool-session';
+import { useEditorDraft } from '../editor/use-editor-draft';
+import { pdfDraftId } from '../editor/editor-drafts';
 import { askSaveOptions, saveEditedOutput, type SaveMode } from '../files/save-file';
 import { toast } from '@/components/toast';
 import { showDialog } from '@/components/app-dialog';
@@ -53,6 +57,14 @@ function commandFor(page: number, selected: TextObject | null, placement: { x: n
   }
   return { kind: 'add', page, ...placement!, text: draft.text, size: points, font: font === 'original' ? 'Helvetica' : font, color: draft.color ?? DEFAULT_INK, ...underline };
 }
+type TextRecovery = { edits: Edit[]; history: Edit[][]; future: Edit[][]; page: number };
+function validTextRecovery(value: unknown): value is TextRecovery {
+  if (!value || typeof value !== 'object') return false;
+  const draft = value as TextRecovery;
+  const changes = (list: unknown): list is Edit[] => Array.isArray(list) && list.length <= 500 && list.every(item => item && ['replace','delete','add'].includes(item.kind) && Number.isInteger(item.page) && item.page >= 0 && (item.text === undefined || typeof item.text === 'string' && item.text.length <= 10000));
+  return Number.isInteger(draft.page) && draft.page >= 0 && changes(draft.edits) && [draft.history,draft.future].every(list => Array.isArray(list) && list.length <= 30 && list.every(changes));
+}
+
 const sameEdit = (a: Edit | undefined, b: Edit) => !!a && a.kind === b.kind && a.text === b.text && (a.font ?? 'original') === (b.font ?? 'original') && a.size === b.size && a.color === b.color && !!a.underline === !!b.underline && (a.indent ?? 0) === (b.indent ?? 0);
 
 function makeDraft(edits: Edit[], page: number, selected: TextObject | null, placement: { x: number; y: number } | null, addition: number | null, draft: Draft, pendingOnPage = false): { changes: Edit[]; error?: string } {
@@ -75,13 +87,14 @@ function makeDraft(edits: Edit[], page: number, selected: TextObject | null, pla
 }
 
 /** `onUnsavedChange` lets the screen confirm before leaving with edits that are not saved. */
-export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsavedChange }: { initialMode?: 'edit' | 'add' | 'delete'; initialSelection?: InitialSelection; onUnsavedChange?: (unsaved: boolean) => void }) {
+export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsavedChange, onDiscardReady }: { initialMode?: 'edit' | 'add' | 'delete'; initialSelection?: InitialSelection; onUnsavedChange?: (unsaved: boolean) => void; onDiscardReady?: (action: () => Promise<void>) => void }) {
   const colors = usePalette();
   const screenActive = usePdfScreenActive();
   const available = !!PdfEngine?.editPdfText;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
   const [previewQueue] = useState(() => new PdfPreviewQueue(directory));
   const [source, setSource] = useState<LocalFile | null>(null);
+  const [sourceOrigin, setSourceOrigin] = useState(initialSelection?.origin);
   const [page, setPage] = useState(0);
   const [preview, setPreview] = useState<PagePreview | null>(null);
   const [edits, setEdits] = useState<Edit[]>([]);
@@ -117,6 +130,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
+  const toolbar = useResponsiveEditorToolbar([44, 44], ['Text list', 'Save (' + edits.length + ')'], 2);
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
@@ -186,6 +200,11 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const draftIssue = draft.error;
   const unsaved = (edits.length > 0 && edits !== savedEdits) || draft.changes !== edits || (!!placement && !!text.trim());
   useEffect(() => { onUnsavedChange?.(unsaved); }, [unsaved, onUnsavedChange]);
+  const recoveryOrigin = sourceOrigin?.uri;
+  const recovery = useEditorDraft({ id: recoveryOrigin ? pdfDraftId(recoveryOrigin, 'text') : null, uri: source ? recoveryOrigin : undefined,
+    value: { edits: makeDraft(edits, page, selected, placement, editingAddition, { text, style: textStyle, size, indent, color: ink }).changes, history, future, page }, dirty: unsaved,
+    validate: validTextRecovery, restore: value => { setEdits(value.edits); setHistory(value.history); setFuture(value.future); setPage(Math.min(value.page, Math.max(0, (preview?.pageCount ?? 1) - 1))); } });
+  useEffect(() => { onDiscardReady?.(recovery.discard); }, [onDiscardReady, recovery.discard]);
   const sourceUri = source?.uri;
   const publishLivePreview = useEffectEvent((next: PagePreview, key: string) => {
     showPreview(next);
@@ -204,7 +223,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     return () => { session.active = false; };
   }, [sourceUri, page, selected?.id, editingAddition, adding, busy, result, screenActive, previewQueue]);
   useEffect(() => {
-    if (!screenActive || !sourceUri || busy || result || locked.current) return;
+    if (!screenActive || !sourceUri || busy || !recovery.ready || result || locked.current) return;
     if (draftIssue) { previewQueue.cancel(); return; }
     const session = liveSession.current;
     const key = `${sourceUri}\n${page}\n${draftJson}`;
@@ -222,7 +241,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       setPreviewError((cause as Error).message || 'Could not preview this change.');
       setPreviewStatus('Preview unavailable');
     });
-  }, [sourceUri, page, draftJson, draftIssue, draftRevision, selected?.id, editingAddition, adding, busy, result, previewQueue, screenActive]);
+  }, [sourceUri, page, draftJson, draftIssue, draftRevision, selected?.id, editingAddition, adding, busy, result, previewQueue, screenActive, recovery.ready]);
 
   // Keep the running render; the queue replaces only the waiting draft.
   const invalidateDraft = useCallback(() => {
@@ -275,6 +294,10 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       let next = await loadPage(picked, start, []);
       if (next && start >= next.pageCount) { start = 0; next = await loadPage(picked, 0, []); }
       if (!next) return;
+      const origin = Array.isArray(initialFiles) && initialSelection?.origin ? initialSelection.origin : await retainPdfEditingSource(picked);
+      if (!mounted.current) return;
+      if (source) await recovery.discard();
+      setSourceOrigin(origin);
       if (source) { try { new File(source.uri).delete(); } catch { /* Session cleanup retries. */ } }
       setSource(picked); setPage(start); setFragmentPage(0); setEditingAddition(null); showPreview(next);
       setEdits([]); setHistory([]); setFuture([]); setSelected(null); setPlacement(null);
@@ -335,7 +358,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     if (next.length > 500) { setError('Save these changes before adding more.'); return; }
     void change(next);
   }
-  const origin = initialSelection?.origin ?? (source ? { uri: source.uri, name: source.name } : null);
+  const origin = sourceOrigin ?? (source ? { uri: source.uri, name: source.name } : null);
   async function save(mode: SaveMode, chosenName: string) {
     if (!source || !PdfEngine || locked.current || !edits.length) return;
     begin('Saving your PDF...'); setProgress(0);
@@ -348,12 +371,14 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       const outputUri = new File(savedPdfDirectory(), filename).uri;
       const output: PdfResult = JSON.parse(await PdfEngine.editPdfText(id, JSON.stringify({ action: 'save', uri: source.uri, outputUri, edits })));
       const saved = await saveEditedOutput({ output: output.uri, mimeType: 'application/pdf', kind: 'pdf', mode, origin, name: `${base}.pdf` });
+      await recovery.clear();
       if (mounted.current) { setResult({ ...output, uri: saved.file.uri, name: saved.file.name, location: saved.device.location }); setSavedEdits(edits); }
       toast(`Saved to ${saved.device.location}`);
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
   async function requestSave() {
+    if (!recovery.ready) return;
     if (selected || placement) {
       showDialog('Text box still open', 'Apply or cancel this text box before saving the PDF.', undefined, { ios: 'character.textbox', android: 'text-fields' }); return;
     }
@@ -378,12 +403,16 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     <ToolButton title="Return to edits" secondary disabled={busy} onPress={() => setResult(null)} />
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
   </ScrollView>;
-  const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
-  return <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-    {source && preview ? <>
-      <PdfPreviewToolbar page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)}>
+  const toolActions = <View style={responsiveToolbarStyles.tools}>
         <Pressable accessibilityRole="button" accessibilityLabel={adding ? 'Select existing text' : 'Add text'} disabled={busy} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} style={[styles.icon, { backgroundColor: adding ? colors.accentSurface : 'transparent' }]}><UniversalIcon ios="text.badge.plus" android="text-fields" size={24} color={colors.systemBlue} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="PDF options" disabled={busy} onPress={() => { setShowOptions(!showOptions); setShowTextList(false); }} style={styles.icon}><UniversalIcon ios="ellipsis" android="more-horiz" size={24} color={colors.systemBlue} /></Pressable>
+  </View>;
+  const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
+  return <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    {toolbar.measurements}
+    {source && preview ? <>
+      <PdfPreviewToolbar page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)}>
+        {(keyboardOpen || !toolbar.atBottom) && toolActions}
       </PdfPreviewToolbar>
       <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={nativeTextBox ? 'Type on the page. Drag the blue handle to move text.' : adding ? 'Tap to place text. Pinch to zoom.' : 'Pinch to zoom. Tap text to edit.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
@@ -406,7 +435,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         <Pressable accessibilityRole="button" accessibilityLabel="Apply text" disabled={busy || !text.trim()} style={styles.icon} onPress={() => apply(selected ? 'replace' : 'add')}><UniversalIcon ios="checkmark" android="check" size={24} color={colors.systemBlue} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Cancel selection" style={styles.icon} onPress={() => { Keyboard.dismiss(); invalidateDraft(); setSelected(null); setPlacement(null); setEditingAddition(null); }}><UniversalIcon ios="xmark" android="close" size={20} color={colors.secondaryLabel} /></Pressable>
       </View>}
-      {!!(draftIssue || previewError) && <ThemedText accessibilityRole="alert" style={styles.hint}>{draftIssue || previewError}</ThemedText>}
+      {!!(draftIssue || previewError || recovery.error) && <ThemedText accessibilityRole="alert" style={styles.hint}>{draftIssue || previewError || recovery.error}</ThemedText>}
       {(((selected || placement) && showFormatting) || showTextList || showOptions) && <ScrollView style={styles.dock} contentContainerStyle={styles.dockContent} keyboardShouldPersistTaps="handled">
         {(selected || placement) && showFormatting && <View style={[styles.editPanel, { backgroundColor: colors.secondarySystemBackground }]}>
           <ThemedText style={styles.label}>Text style</ThemedText>
@@ -430,7 +459,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
           <ThemedText style={styles.label}>New PDF name</ThemedText>
           <TextInput accessibilityLabel="New PDF name" value={name} onChangeText={setName} editable={!busy} maxLength={100} style={inputStyle} />
           <ToolButton title="Choose another PDF" secondary disabled={busy} onPress={() => {
-            if (edits.length) showDialog('Choose another PDF?', 'Your unsaved changes will be discarded.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void choose(); } }]);
+            if (unsaved) showDialog('Choose another PDF?', 'Your unsaved changes will be discarded.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void choose(); } }]);
             else void choose();
           }} />
           <ThemedText style={{ color: colors.secondaryLabel }}>Scans and text inside embedded groups cannot be edited. Delete removes page text; it is not secure redaction.</ThemedText>
@@ -444,11 +473,12 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     </View>}
     {!keyboardOpen && <View style={[styles.footer, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
-      {busy ? <View style={styles.row}><AppLoader /><ThemedText style={styles.grow} accessibilityLiveRegion="polite">{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText><ToolButton title="Cancel" secondary onPress={() => { previewQueue.cancel(); if (job.current) PdfEngine?.cancelTextEdit(job.current); }} /></View> : source && <View style={styles.row}>
+      {busy ? <View style={styles.row}><AppLoader /><ThemedText style={styles.grow} accessibilityLiveRegion="polite">{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText><ToolButton title="Cancel" secondary onPress={() => { previewQueue.cancel(); if (job.current) PdfEngine?.cancelTextEdit(job.current); }} /></View> : source && <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
+        {toolbar.atBottom && toolActions}
         <Pressable accessibilityRole="button" accessibilityLabel="Undo" disabled={!history.length} onPress={() => change(history[history.length - 1], 'undo')} style={[styles.icon, !history.length && styles.dim]}><UniversalIcon ios="arrow.uturn.backward" android="undo" size={22} color={colors.systemBlue} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Redo" disabled={!future.length} onPress={() => change(future[future.length - 1], 'redo')} style={[styles.icon, !future.length && styles.dim]}><UniversalIcon ios="arrow.uturn.forward" android="redo" size={22} color={colors.systemBlue} /></Pressable>
         <ToolButton title="Text list" secondary onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
-        <View style={styles.grow}><ToolButton title={'Save (' + edits.length + ')'} disabled={!edits.length} onPress={requestSave} /></View>
+        <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={'Save (' + edits.length + ')'} disabled={!edits.length || !recovery.ready} onPress={requestSave} /></View>
       </View>}
     </View>}
   </KeyboardAvoidingView>;

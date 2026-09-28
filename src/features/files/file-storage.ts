@@ -1,3 +1,4 @@
+import { selectFileAssets } from './file-picker-session';
 import { Directory, File, Paths } from 'expo-file-system';
 import { retainPickerCopy } from '../pdf/pdf-cache';
 
@@ -12,15 +13,14 @@ export function disposeImports(directory: Directory) {
 }
 
 export async function browseFiles(directory: Directory, imagesOnly = false, limit = 1, pdfsOnly = false): Promise<LocalFile[]> {
-  const { getDocumentAsync } = await import('expo-document-picker');
-  const result = await getDocumentAsync({ type: imagesOnly ? 'image/*' : pdfsOnly ? 'application/pdf' : '*/*', multiple: imagesOnly || limit > 1, copyToCacheDirectory: true });
-  if (result.canceled) return [];
+  const assets = await selectFileAssets(imagesOnly ? 'image' : pdfsOnly ? 'pdf' : 'any', limit);
+  if (!assets.length) return [];
   const copies: File[] = [];
   try {
-    if (result.assets.length > limit) throw new Error(`Choose up to ${limit} ${imagesOnly ? 'images' : pdfsOnly ? 'PDFs' : 'file'} at a time.`);
+    if (assets.length > limit) throw new Error(`Choose up to ${limit} ${imagesOnly ? 'images' : pdfsOnly ? 'PDFs' : 'file'} at a time.`);
     directory.create({ intermediates: true, idempotent: true });
     const files: LocalFile[] = [];
-    for (const asset of result.assets) {
+    for (const asset of assets) {
       const name = asset.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-100) || 'file';
       const file = new File(directory, `${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
       copies.push(file);
@@ -33,7 +33,7 @@ export async function browseFiles(directory: Directory, imagesOnly = false, limi
     throw error;
   } finally {
     const pickerRoot = new Directory(Paths.cache, 'DocumentPicker').uri.replace(/\/+$/, '') + '/';
-    for (const asset of result.assets) {
+    for (const asset of assets) {
       if (asset.uri.startsWith(pickerRoot)) { try { const file = new File(asset.uri); if (file.exists) file.delete(); } catch { /* OS cache eviction remains available. */ } }
     }
   }

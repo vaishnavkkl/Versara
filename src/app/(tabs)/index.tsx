@@ -57,8 +57,8 @@ export default function HomeScreen() {
         <View style={styles.grid}>
           {MODULES.filter((_, index) => index % columns === 0).map((first, row) => <View key={first.title} style={styles.row}>
             {MODULES.slice(row * columns, row * columns + columns).map(module => <ModuleCard key={module.title} {...module}
-              detail={module.tone === 'privacy' ? 'Coming soon' : module.tone === 'files' && editedCount ? `${editedCount} saved` : undefined}
-              disabled={module.tone === 'privacy'} variant={useGrid ? 'dashboard' : 'list'} onPress={() => router.navigate(module.href)} />)}
+              detail={module.tone === 'files' && editedCount ? `${editedCount} saved` : undefined}
+              variant={useGrid ? 'dashboard' : 'list'} onPress={() => router.navigate(module.href)} />)}
           </View>)}
         </View>
       </View>

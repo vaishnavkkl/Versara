@@ -9,11 +9,19 @@ public class FileEngineModule: Module {
   private let pdfFolders = PdfFolderAccess()
   private let pdfs = PdfDeviceLibrary()
   private let imageTools = ImageTools()
+  private let privacy = ImagePrivacy()
   private let queue = DispatchQueue(label: "com.versara.fileengine", qos: .userInitiated)
 
   public func definition() -> ModuleDefinition {
     Name("FileEngine")
+    Constant("nativeImagePrivacyVersion") { 1 }
+    Constant("nativeSignatureImageVersion") { 1 }
+    AsyncFunction("scanImagePrivacy") { (id: String, uri: String, promise: Promise) in self.privacy.scan(id, uri: uri, promise: promise) }
+    Function("cancelPrivacyScan") { (id: String) in self.privacy.cancel(id) }
     Constant("nativeImageToolsVersion") { 1 }
+    Constant("nativeImageColorVersion") { 2 }
+    Constant("nativeStrokePatternsVersion") { 1 }
+    Constant("nativeMarkupEditingVersion") { 1 }
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
@@ -22,8 +30,10 @@ public class FileEngineModule: Module {
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
     Constant("nativeImageEditorVersion") { 1 }
+    Constant("nativeImageHistoryVersion") { 1 }
     Constant("nativeImageTextVersion") { 1 }
-    Constant("nativeDeviceSaveVersion") { 1 }
+    Function("cancelImageTextRecognition") { (uri: String) in ImageText.cancelRecognition(uri: uri) }
+    Constant("nativeDeviceSaveVersion") { 2 }
     AsyncFunction("saveToDevice") { (sourceUri: String, name: String, mimeType: String, replaceUri: String, promise: Promise) in
       self.queue.async {
         do { promise.resolve(try DeviceSaver.save(sourceUri: sourceUri, name: name, mimeType: mimeType, replaceUri: replaceUri)) }
@@ -31,10 +41,15 @@ public class FileEngineModule: Module {
       }
     }
     AsyncFunction("recognizeImageText") { (uri: String, promise: Promise) in
-      self.queue.async { autoreleasepool {
-        do { promise.resolve(try ImageText.recognize(uri: uri)) }
-        catch { promise.reject("IMAGE_TEXT_FAILED", error.localizedDescription) }
-      } }
+      do {
+        let operation = try ImageText.prepareRecognition(uri: uri)
+        self.queue.async { autoreleasepool {
+          defer { ImageText.finishRecognition(operation) }
+          do { promise.resolve(try ImageText.recognize(uri: uri, operation: operation)) }
+          catch is CancellationError { promise.reject("IMAGE_TEXT_CANCELLED", "Text recognition was cancelled.") }
+          catch { promise.reject("IMAGE_TEXT_FAILED", error.localizedDescription) }
+        } }
+      } catch { promise.reject("IMAGE_TEXT_BUSY", error.localizedDescription) }
     }
     AsyncFunction("renderImageText") { (options: String, promise: Promise) in
       self.queue.async { autoreleasepool {
@@ -63,6 +78,7 @@ public class FileEngineModule: Module {
       Prop("source") { (view: ImageEditorView, value: String) in view.setSource(value) }
       Prop("edits") { (view: ImageEditorView, value: String) in view.setEdits(value) }
       Prop("aspect") { (view: ImageEditorView, value: String) in view.setAspect(value) }
+      Prop("cropRequest") { (view: ImageEditorView, value: String) in view.setCropRequest(value) }
       OnViewDestroys { (view: ImageEditorView) in view.dispose() }
     }
     AsyncFunction("editImage") { (options: String, promise: Promise) in
@@ -76,6 +92,7 @@ public class FileEngineModule: Module {
     View(ZoomableImageView.self) {
       Events("onLoad", "onError", "onDismiss")
       Prop("source") { (view: ZoomableImageView, value: String) in view.setSource(value) }
+      OnViewDestroys { (view: ZoomableImageView) in view.dispose() }
     }
 
     AsyncFunction("getPdfAccessAsync") { (promise: Promise) in promise.resolve(PdfFolderAccess.status()) }
@@ -99,8 +116,8 @@ public class FileEngineModule: Module {
     AsyncFunction("searchFiles") { (query: String, limit: Int, promise: Promise) in
       self.queue.async { promise.resolve(FileExplorer.search(query: query, limit: max(1, min(limit, 200)))) }
     }
-    OnDestroy { self.imageTools.destroy(); self.pdfs.destroy(); self.pdfFolders.destroy() }
-    OnAppEntersBackground { self.pdfs.cancelAll() }
+    OnDestroy { self.privacy.destroy(); ImageText.cancelAllRecognition(); self.imageTools.destroy(); self.pdfs.destroy(); self.pdfFolders.destroy() }
+    OnAppEntersBackground { self.privacy.cancelAll(); self.pdfs.cancelAll() }
 
     AsyncFunction("getFileAccessAsync") { (promise: Promise) in
       promise.resolve(self.access.status())
@@ -129,6 +146,8 @@ public class FileEngineModule: Module {
       self.queue.async {
         do {
           promise.resolve(try self.library.importFile(uri: uri, kind: kind, destinationUri: destinationUri))
+        } catch FileEngineError.notLocal {
+          promise.reject("FILE_NOT_LOCAL", FileEngineError.notLocal.localizedDescription)
         } catch {
           promise.reject("FILE_IMPORT_FAILED", error.localizedDescription)
         }
@@ -237,48 +256,65 @@ final class DeviceLibrary {
   }
 
   private func export(asset: PHAsset, to destination: URL) throws {
-    let semaphore = DispatchSemaphore(value: 0)
-    var failure: Error?
+    let manager = PHImageManager.default()
     if asset.mediaType == .image {
       let options = PHImageRequestOptions()
-      options.isNetworkAccessAllowed = true
+      options.isNetworkAccessAllowed = false
       options.deliveryMode = .highQualityFormat
-      options.isSynchronous = true
-      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
-        defer { semaphore.signal() }
-        if let error = info?[PHImageErrorKey] as? Error { failure = error; return }
-        guard let data = data else { failure = FileEngineError.missing; return }
-        do { try data.write(to: destination, options: .atomic) } catch { failure = error }
+      let pending = LocalAssetResult<Data>()
+      let request = manager.requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
+        if let data { pending.finish(.success(data)); return }
+        if (info?[PHImageResultIsInCloudKey] as? Bool) == true { pending.finish(.failure(FileEngineError.notLocal)); return }
+        pending.finish(.failure(info?[PHImageErrorKey] as? Error ?? FileEngineError.missing))
       }
+      guard let result = pending.wait() else { manager.cancelImageRequest(request); throw FileEngineError.timedOut }
+      try result.get().write(to: destination, options: .atomic)
     } else {
       let options = PHVideoRequestOptions()
-      options.isNetworkAccessAllowed = true
-      PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-        defer { semaphore.signal() }
-        if let error = info?[PHImageErrorKey] as? Error { failure = error; return }
-        guard let urlAsset = avAsset as? AVURLAsset else { failure = FileEngineError.missing; return }
-        do {
-          if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-          }
-          try FileManager.default.copyItem(at: urlAsset.url, to: destination)
-        } catch { failure = error }
+      options.isNetworkAccessAllowed = false
+      let pending = LocalAssetResult<URL>()
+      let request = manager.requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+        if let local = avAsset as? AVURLAsset { pending.finish(.success(local.url)); return }
+        if (info?[PHImageResultIsInCloudKey] as? Bool) == true { pending.finish(.failure(FileEngineError.notLocal)); return }
+        pending.finish(.failure(info?[PHImageErrorKey] as? Error ?? FileEngineError.missing))
       }
-      _ = semaphore.wait(timeout: .now() + 60)
-      if let failure = failure { throw failure }
-      return
+      guard let result = pending.wait() else { manager.cancelImageRequest(request); throw FileEngineError.timedOut }
+      try FileManager.default.copyItem(at: result.get(), to: destination)
     }
-    _ = semaphore.wait(timeout: .now() + 60)
-    if let failure = failure { throw failure }
+  }
+}
+
+/** A timed-out Photos callback must never create an import after the caller has left. */
+private final class LocalAssetResult<Value> {
+  private let lock = NSLock()
+  private let semaphore = DispatchSemaphore(value: 0)
+  private var completed = false
+  private var result: Result<Value, Error>?
+
+  func finish(_ value: Result<Value, Error>) {
+    lock.lock()
+    guard !completed else { lock.unlock(); return }
+    completed = true; result = value
+    lock.unlock()
+    semaphore.signal()
+  }
+
+  func wait() -> Result<Value, Error>? {
+    let status = semaphore.wait(timeout: .now() + 60)
+    lock.lock(); defer { lock.unlock() }
+    if status == .timedOut { completed = true; result = nil; return nil }
+    return result
   }
 }
 
 enum FileEngineError: LocalizedError {
-  case invalidDestination, missing
+  case invalidDestination, missing, notLocal, timedOut
   var errorDescription: String? {
     switch self {
     case .invalidDestination: return "Could not save this file inside Versara."
     case .missing: return "This file is no longer available."
+    case .notLocal: return "This file is stored in iCloud and is not available on this device. Versara only opens local files. Choose a file already saved on your device."
+    case .timedOut: return "This local file could not be opened in time. Try opening it again."
     }
   }
 }

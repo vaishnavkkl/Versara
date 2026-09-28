@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PickerKind } from './file-picker-session';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
@@ -30,7 +31,7 @@ function formatBytes(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
-export function FileExplorerScreen() {
+export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; selected: ExplorerEntry[]; onSelect: (file: ExplorerEntry) => void } } = {}) {
   const colors = usePalette();
   const available = explorerAvailable();
   const [roots, setRoots] = useState<StorageRoot[]>([]);
@@ -86,19 +87,26 @@ export function FileExplorerScreen() {
   const busy = useRef(false);
   const press = useCallback((entry: ExplorerEntry) => {
     if (entry.directory) { go(entry.path); return; }
+    if (picker) { picker.onSelect(entry); return; }
     if (busy.current) return;
     busy.current = true;
     if (entry.kind === 'image' || entry.kind === 'video' || entry.kind === 'audio') toast(`Opening ${entry.name}…`);
     void openExplorerEntry(entry)
       .catch(cause => showDialog('Could not open file', (cause as Error).message || 'Try again.', undefined, { ios: 'exclamationmark.triangle', android: 'error-outline' }))
       .finally(() => { busy.current = false; });
-  }, [go]);
+  }, [go, picker]);
 
   async function allow() {
     try { await FileEngine?.requestPdfAccessAsync(); } catch (cause) { showDialog('File access', (cause as Error).message); } finally { loadRoots(); }
   }
 
-  const renderItem = useCallback(({ item }: { item: ExplorerEntry }) => <ExplorerRow entry={item} onPress={press} />, [press]);
+  const renderItem = useCallback(({ item }: { item: ExplorerEntry }) => <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+    <View style={{ flex: 1 }}><ExplorerRow entry={item} onPress={press} /></View>
+    {picker && !item.directory && <Pressable accessibilityRole="checkbox" accessibilityLabel={`Select ${item.name}`} accessibilityState={{ checked: picker.selected.some(file => file.path === item.path) }} onPress={() => picker.onSelect(item)} style={styles.back}><UniversalIcon ios={picker.selected.some(file => file.path === item.path) ? 'checkmark.circle.fill' : 'circle'} android={picker.selected.some(file => file.path === item.path) ? 'check-circle' : 'radio-button-unchecked'} size={22} color={colors.systemBlue} /></Pressable>}
+  </View>, [press, picker, colors.systemBlue]);
+
+  const pickerKind = picker?.kind;
+  const items = useMemo(() => listing?.path === path ? listing.items.filter(item => !pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind) : [], [listing, path, pickerKind]);
 
   if (!path) {
     return (
@@ -141,16 +149,15 @@ export function FileExplorerScreen() {
           );
         })}
         {Platform.OS === 'ios' && available && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>iOS keeps each app&apos;s files separate. Downloads from other apps open through Files or the share sheet.</ThemedText>}
-        <Pressable accessibilityRole="button" onPress={() => router.navigate('/edited-files')} style={({ pressed }) => [styles.shortcut, { borderColor: colors.tileBorder, backgroundColor: colors.tileSurface, opacity: pressed ? 0.8 : 1 }]}>
+        {!picker && <Pressable accessibilityRole="button" onPress={() => router.navigate('/edited-files')} style={({ pressed }) => [styles.shortcut, { borderColor: colors.tileBorder, backgroundColor: colors.tileSurface, opacity: pressed ? 0.8 : 1 }]}>
           <UniversalIcon ios="square.and.pencil" android="edit-note" size={22} color={colors.systemBlue} />
           <ThemedText style={[styles.grow, { color: colors.label, fontWeight: '600' }]}>Edited files</ThemedText>
           <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.muted} />
-        </Pressable>
+        </Pressable>}
       </ScrollView>
     );
   }
 
-  const items = listing?.path === path ? listing.items : [];
   return (
     <View style={[styles.fill1, { backgroundColor: colors.systemBackground }]}>
       <View style={[styles.bar, { borderBottomColor: colors.separator }]}>
@@ -181,7 +188,7 @@ export function FileExplorerScreen() {
           windowSize={7}
           removeClippedSubviews={Platform.OS === 'android'}
           refreshControl={<RefreshControl refreshing={loading && items.length > 0} onRefresh={() => { setLoading(true); setReload(value => value + 1); }} />}
-          ListEmptyComponent={<ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>This folder is empty.</ThemedText>}
+          ListEmptyComponent={<ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>{picker ? 'No matching files in this folder.' : 'This folder is empty.'}</ThemedText>}
           ListFooterComponent={listing?.truncated ? <ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>Showing the first 4,000 items.</ThemedText> : null}
         />
       )}

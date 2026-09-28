@@ -1,3 +1,4 @@
+import { selectFileAssets } from './file-picker-session';
 import { Directory, File, Paths } from 'expo-file-system';
 import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 import { FileEngine, type DeviceRecentFile } from '../../../modules/file-engine';
@@ -79,10 +80,15 @@ export async function rememberFile(file: { uri: string; name: string; mimeType?:
 }
 
 export async function importRecentFile(kind: FileKind): Promise<RecentFile | null> {
-  const { getDocumentAsync } = await import('expo-document-picker');
-  const selection = await getDocumentAsync({ type: mimeTypes[kind], multiple: false, copyToCacheDirectory: true });
-  if (selection.canceled) return null;
-  const asset = selection.assets[0];
+  let asset;
+  if (kind === 'image' || kind === 'pdf') asset = (await selectFileAssets(kind, 1))[0];
+  else {
+    const { getDocumentAsync } = await import('expo-document-picker');
+    const selection = await getDocumentAsync({ type: mimeTypes[kind], multiple: false, copyToCacheDirectory: true });
+    if (selection.canceled) return null;
+    asset = selection.assets[0];
+  }
+  if (!asset) return null;
   const root = library();
   const extension = asset.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0] ?? (kind === 'pdf' ? '.pdf' : '');
   const copy = new File(root, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);

@@ -67,6 +67,8 @@ final class PdfOrganizer {
     guard (1...2000).contains(document.pageCount) else {
       throw PdfJobFailure(code: "PDF_PAGE_LIMIT", message: "Choose a PDF with between 1 and 2,000 pages.")
     }
+    do { try PdfIntegrity.requireUnsigned(url) }
+    catch { throw PdfJobFailure(code: "PDF_INTEGRITY_FAILED", message: error.localizedDescription) }
     return document
   }
   func inspect(_ id: String, uris: [String], promise: Promise) {

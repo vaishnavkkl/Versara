@@ -1,5 +1,6 @@
 import { browseFiles, createImportDirectory, disposeImports, type LocalFile } from '../files/file-storage';
-import { File, type Directory } from 'expo-file-system';
+import { File, Directory, Paths } from 'expo-file-system';
+import { documentRoot, rememberFile } from '../files/recent-files';
 
 /** `origin` is the Versara file the tool was opened from, so edits can be saved back over it. */
 export type PdfReturnRoute = '/file-preview' | '/pdf-viewer';
@@ -10,6 +11,19 @@ export type PdfToolSession = InitialSelection & { tool: PdfTool; title: string }
 const sessions = new Map<string, PdfToolSession>();
 export const implementedPdfTools = new Set<string>(['viewer', 'edit_text', 'remove_text', 'text', 'merge', 'split', 'extract', 'delete', 'reorder', 'rotate', 'from_image', ...advancedPdfTools]);
 
+/** Drafts require an original that survives picker/session cache cleanup. */
+export async function retainPdfEditingSource(file: LocalFile) {
+  if (file.uri.startsWith(documentRoot())) return { uri: file.uri, name: file.name };
+  const library = new Directory(Paths.document, 'Versara Library');
+  library.create({ intermediates: true, idempotent: true });
+  const copy = new File(library, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+  try {
+    await new File(file.uri).copy(copy);
+    await rememberFile({ ...file, uri: copy.uri, size: copy.size }, 'pdf');
+    return { uri: copy.uri, name: file.name };
+  } catch (cause) { if (copy.exists) copy.delete(); throw cause; }
+}
+
 export async function pickPdfTool(tool: PdfTool, title: string) {
   const directory = createImportDirectory();
   try {
@@ -17,7 +31,8 @@ export async function pickPdfTool(tool: PdfTool, title: string) {
     const files = await browseFiles(directory, images, images || tool === 'merge' ? 30 : 1, !images);
     if (!files.length) { disposeImports(directory); return null; }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    sessions.set(id, { directory, files, tool, title });
+    const origin = !images && files.length === 1 && ['edit_text', 'text', 'remove_text', 'highlight', 'draw', 'shapes', 'sign'].includes(tool) ? await retainPdfEditingSource(files[0]) : undefined;
+    sessions.set(id, { directory, files, tool, title, origin });
     return id;
   } catch (error) { disposeImports(directory); throw error; }
 }

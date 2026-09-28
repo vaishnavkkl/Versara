@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ScreenHeader } from '@/components/screen-header';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router';
 import { File } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
@@ -25,31 +25,49 @@ import { getGradients, typography as t } from '@/theme/dashboard';
 import { recordToolUse } from '@/features/search/search-history';
 import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
 import { FileEngine } from '../../modules/file-engine';
+import { takePreviewFile } from '@/features/files/preview-handoff';
 
 export default function FilePreviewScreen() {
   const { id, uri: resultUri, name: resultName, revision } = useLocalSearchParams<{ id: string; uri?: string; name?: string; revision?: string }>();
   const colors = usePalette();
   const active = useScreenActive();
-  const [file, setFile] = useState<RecentFile | null>(null);
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const [initialFile] = useState(() => revision ? null : takePreviewFile(id));
+  const handoff = useRef(initialFile);
+  const [file, setFile] = useState<RecentFile | null>(initialFile);
+  const [transitionReady, setTransitionReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialFile);
   const [options, setOptions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [focused, setFocused] = useState(false);
   const [landscape, setLandscape] = useState(false);
   const lock = useRef(false);
   const mounted = useRef(true);
+  // Decode/upload the first image only after the native push/pop animation completes.
+  // The timeout covers direct links/non-animated mounts that do not emit transitionEnd.
+  useLayoutEffect(() => {
+    if (!active) { setTransitionReady(false); return; }
+    const fallback = setTimeout(() => setTransitionReady(true), 1000);
+    const unsubscribe = navigation.addListener('transitionEnd', event => {
+      if (!event.data.closing) { clearTimeout(fallback); setTransitionReady(true); }
+    });
+    return () => { clearTimeout(fallback); unsubscribe(); };
+  }, [active, navigation]);
   useEffect(() => {
     mounted.current = true;
-    if (resultUri) return () => { mounted.current = false; };
+    if (resultUri || !active || !transitionReady) return () => { mounted.current = false; };
     let cancelled = false;
-    void getRecentFile(id).then(async value => {
+    const known = !revision && handoff.current?.id === id ? handoff.current : null;
+    handoff.current = null;
+    void (known ? Promise.resolve(known) : getRecentFile(id)).then(value => {
       if (!value || !new File(value.uri).exists) throw new Error('This file is no longer available. Open it again from your files.');
-      if (!cancelled) setFile(value);
-      await touchRecentFile(value.id);
+      if (!cancelled) { setFile(value); setError(null); }
+      // Updating Recents must not turn a successfully opened image into a preview error.
+      if (!cancelled) void touchRecentFile(value.id).catch(() => undefined);
     }).catch(cause => { if (!cancelled) setError((cause as Error).message || 'Could not open this file.'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; mounted.current = false; };
-  }, [id, resultUri, revision]);
+  }, [active, id, resultUri, revision, transitionReady]);
   function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
   async function action(value: string) {
     if (!file || lock.current) return;
@@ -85,7 +103,7 @@ export default function FilePreviewScreen() {
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} /> : <>
         {file.kind === 'image' || file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
           {landscape && <MediaToolbar side="left" kind={file.kind} busy={busy} landscape onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />}
-          {active ? <MediaPreview key={file.uri} file={file} onClose={close} /> : <View style={styles.screen} />}
+          {active && transitionReady ? <MediaPreview key={`${file.uri}:${revision ?? ''}`} file={file} onClose={close} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
           <MediaToolbar kind={file.kind} busy={busy} landscape={landscape} onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />
         </View> : <>
         {active ? <MediaPreview key={file.uri} file={file} onClose={close} /> : <View style={styles.screen} />}<View style={[styles.footer, { borderColor: colors.separator }]}><ThemedText style={[styles.meta, { color: colors.secondaryLabel }]}>{formatSize(file.size)}</ThemedText><Pressable accessibilityRole="button" accessibilityLabel={`${file.kind} toolbox`} disabled={busy} onPress={() => setOptions(true)} style={[styles.options, getGradients(colors).module]}>{busy ? <AppLoader color={colors.moduleText} /> : <UniversalIcon ios="wrench.and.screwdriver" android="handyman" size={20} color={colors.moduleText} />}<ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>{busy ? 'Preparing...' : 'Toolbox'}</ThemedText></Pressable></View>

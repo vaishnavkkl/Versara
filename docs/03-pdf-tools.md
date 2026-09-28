@@ -13,10 +13,12 @@ The PDF Tool Suite is a major subsystem focused entirely on local, offline docum
 ## Progressive Features (Post-V1)
 - **Editing & Annotation:** Add text, highlight, draw, shapes, signature, watermark, page numbers.
 - **Security:** Password protection, metadata removal, flatten annotations.
-- **OCR:** OCR scanned PDFs, extract text, export extracted text.
+- **OCR:** Recognize scanned PDFs offline, export text, or add a selectable/searchable text layer to original pages. Current English-only recognition and verified-output limits are documented in [the OCR follow-up](33-ocr-and-image-preview-follow-up.md).
 - **Repair:** Detect and attempt safe repair of malformed PDF structures (do not claim repaired unless validated).
 
 ## Security & Implementation Rules
 - Always use native platform PDF libraries (e.g., PDFKit on iOS, PdfRenderer on Android).
 - Password removal is only allowed when technically/legally permitted by the file.
 - Printing should use native iOS/Android mechanisms (no cloud printing).
+
+Image-based signatures, transparent paper cleanup, placement and draft lifetime are described in [Image signatures](35-image-signatures.md).
