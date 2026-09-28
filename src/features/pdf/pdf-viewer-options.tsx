@@ -30,7 +30,7 @@ export function PdfViewerOptions({ visible, name, pageCount, vertical, onClose, 
       title: section.title,
       data: section.tools.filter(tool => implementedPdfTools.has(tool.id)).map(tool => ({ ...tool, subtitle: tool.id === 'merge' ? 'Add more PDFs to this document' : tool.subtitle } as Action)),
     })).filter(section => section.data.length).sort((a, b) => {
-      const order = ['Edit & annotate', 'Organize pages', 'Convert & optimize'];
+      const order = ['Quick tools', 'Edit & annotate', 'Organize pages', 'Convert & optimize', 'Protect & inspect'];
       return order.indexOf(a.title) - order.indexOf(b.title);
     });
     const upcoming = PDF_SECTIONS.flatMap(section => [...section.tools]).filter(tool => !implementedPdfTools.has(tool.id) && tool.id !== 'info').map(tool => ({ ...tool, unavailable: true }));

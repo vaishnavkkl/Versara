@@ -36,7 +36,9 @@ import expo.modules.kotlin.views.ExpoView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.max
@@ -51,7 +53,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   private val onSubmitText by EventDispatcher<Map<String, Any>>()
 
   private class Box(val id: Int, val rect: RectF)
-  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean)
+  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean, val submitOnReturn: Boolean = false)
   private class Mark(val erase: RectF?, val left: Int, val right: Int, val lines: List<String>, val font: String, val size: Float, val color: Int, val x: Float, val y: Float, val underline: Boolean)
   private var marks = emptyList<Mark>()
   private val typefaces = HashMap<String, Typeface>()
@@ -69,7 +71,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   }
 
   private val density = resources.displayMetrics.density
-  private val worker = Executors.newSingleThreadExecutor()
+  private val worker = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(1), ThreadPoolExecutor.DiscardOldestPolicy())
   private val main = Handler(Looper.getMainLooper())
   private val version = AtomicInteger(0)
   private val slop = ViewConfiguration.get(context).scaledTouchSlop
@@ -111,14 +113,15 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     edit.apply {
       background = GradientDrawable().apply { setColor(0x1A1565FF); setStroke(max(1, (1 * density).toInt()), 0xFF1565FF.toInt(), 4 * density, 3 * density) }
       includeFontPadding = false
-      // Enter starts a new line; lines never wrap, matching how the PDF engine writes them.
-      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-      setSingleLine(false)
-      maxLines = 50
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+      setSingleLine(true)
       setHorizontallyScrolling(true)
       setPadding(0, 0, 0, 0)
       gravity = Gravity.START or Gravity.TOP
-      imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
+      imeOptions = EditorInfo.IME_ACTION_DONE
+      setOnEditorActionListener { _, action, _ ->
+        if (action == EditorInfo.IME_ACTION_DONE) { onSubmitText(mapOf("text" to text.toString())); hideKeyboard(); true } else false
+      }
       hint = "Type here"
       setHintTextColor(0x88606070.toInt())
       visibility = View.GONE
@@ -138,13 +141,14 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   }
 
   fun setSource(value: String) {
-    if (value == source) return
+    if (disposed || value == source) return
     source = value
     val ticket = version.incrementAndGet()
     // Live previews arrive several times a second; decode into the bitmap shown before the current one.
     val reuse = spare
     spare = null
     worker.execute {
+      if (disposed || ticket != version.get()) return@execute
       val path = if (value.startsWith("file:")) Uri.parse(value).path else value
       val bitmap = runCatching {
         BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inMutable = true; inBitmap = reuse })
@@ -155,7 +159,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
           image.setImageBitmap(bitmap)
           shown = bitmap
           spare = previous?.takeIf { it !== bitmap && it.isMutable }
-        } else if (!disposed && spare == null) spare = (bitmap ?: reuse)?.takeIf { it.isMutable && it !== shown }
+        } // Stale decoded frames are released without recycling a bitmap RenderThread may own.
       }
     }
   }
@@ -189,11 +193,16 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   fun setTextBox(json: String) {
     val value = runCatching {
       val item = JSONObject(json)
-      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"))
+      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"), item.optBoolean("submitOnReturn"))
     }.getOrDefault(TextBox(false, "", "Helvetica", 16f, 0x101020, false))
     val previous = textBox
     val opening = value.visible && !previous.visible
     textBox = value
+    if (opening || value.submitOnReturn != previous.submitOnReturn) {
+      edit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or (if (value.submitOnReturn) 0 else InputType.TYPE_TEXT_FLAG_MULTI_LINE)
+      edit.setSingleLine(value.submitOnReturn); edit.maxLines = if (value.submitOnReturn) 1 else 50
+      edit.imeOptions = if (value.submitOnReturn) EditorInfo.IME_ACTION_DONE else EditorInfo.IME_FLAG_NO_ENTER_ACTION
+    }
     // Typing echoes the same text back from JS; only restyle when something actually changed.
     if (opening || value.font != previous.font) edit.typeface = typefaceFor(value.font)
     if (opening || value.underline != previous.underline) edit.paintFlags = if (value.underline) edit.paintFlags or Paint.UNDERLINE_TEXT_FLAG else edit.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
@@ -476,8 +485,11 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     animator?.cancel()
     if (edit.hasFocus()) hideKeyboard()
     image.setImageDrawable(null)
+    // Drop displayed references; RenderThread can still own its final frame.
     shown = null; spare = null
+
     worker.shutdownNow()
+    boxes = emptyList(); marks = emptyList(); typefaces.clear()
   }
 
   private inner class PageLayer(context: Context) : ViewGroup(context) {

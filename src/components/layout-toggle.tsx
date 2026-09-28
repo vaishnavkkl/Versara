@@ -24,17 +24,17 @@ export function useLayoutPreference() {
   return [grid, setGrid] as const;
 }
 
-export function LayoutToggle() {
+export function LayoutToggle({ gridAvailable = true }: { gridAvailable?: boolean }) {
   const [grid, setGrid] = useLayoutPreference();
   const colors = usePalette();
-  return <View style={[styles.container, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}>
-    {[false, true].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityLabel={value ? 'Show as grid' : 'Show as list'} accessibilityState={{ selected: grid === value }} onPress={() => setGrid(value)}
-      style={({ pressed }) => [styles.button, { backgroundColor: grid === value ? colors.accentSurface : 'transparent', opacity: pressed ? 0.65 : 1 }]}>
-      <UniversalIcon ios={value ? 'square.grid.2x2' : 'list.bullet'} android={value ? 'grid-view' : 'view-list'} size={18} color={grid === value ? colors.systemBlue : colors.secondaryLabel} />
+  return <View style={[styles.container, { backgroundColor: colors.fieldSurface }]}>
+    {[false, true].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityLabel={value ? 'Show as grid' : 'Show as list'} accessibilityHint={value && !gridAvailable ? 'List layout keeps tools readable at this screen or text size.' : undefined} accessibilityState={{ selected: (grid && gridAvailable) === value, disabled: value && !gridAvailable }} disabled={value && !gridAvailable} onPress={() => setGrid(value)}
+      style={({ pressed }) => [styles.button, { backgroundColor: (grid && gridAvailable) === value ? colors.catalogSurface : 'transparent', opacity: value && !gridAvailable ? 0.35 : pressed ? 0.65 : 1 }]}>
+      <UniversalIcon ios={value ? 'square.grid.2x2' : 'list.bullet'} android={value ? 'grid-view' : 'view-list'} size={18} color={(grid && gridAvailable) === value ? colors.systemBlue : colors.secondaryLabel} />
     </Pressable>)}
   </View>;
 }
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignSelf: 'flex-start', borderRadius: radius.pill, borderWidth: 1, padding: spacing.xs },
-  button: { width: 48, minHeight: 48, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+  container: { flexDirection: 'row', alignSelf: 'flex-start', borderRadius: radius.md, borderCurve: 'continuous', padding: spacing.xs },
+  button: { width: 48, minHeight: 48, borderRadius: radius.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
 });

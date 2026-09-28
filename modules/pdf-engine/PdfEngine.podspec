@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
   s.source = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'PDFKit', 'CoreGraphics', 'ImageIO', 'AVFoundation'
+  s.frameworks = 'PDFKit', 'CoreGraphics', 'ImageIO', 'AVFoundation', 'Vision', 'UniformTypeIdentifiers'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',

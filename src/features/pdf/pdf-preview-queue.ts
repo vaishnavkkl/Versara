@@ -5,7 +5,7 @@ import type { PdfTextObject } from './pdf-edit-canvas';
 export type PagePreview = { imageUri: string; width: number; height: number; pointWidth?: number; pageCount: number; objects: PdfTextObject[]; nestedForms: number; fontFallbacks?: number };
 type Request = { uri: string; page: number; edits: string; generation: number; resolve: (preview: PagePreview | null) => void; reject: (error: unknown) => void };
 
-/** One native page render at a time, with only the newest request allowed to publish. */
+/** One running render and one latest waiting draft. Completed frames can publish while typing. */
 export class PdfPreviewQueue {
   private generation = 0;
   private activeId: string | null = null;
@@ -21,6 +21,15 @@ export class PdfPreviewQueue {
     this.next?.resolve(null);
     this.next = null;
     if (this.activeId) PdfEngine?.cancelTextEdit(this.activeId);
+  }
+
+  release() { this.cancel(); this.cached = null; }
+
+  /** A completed frame that its caller no longer owns must not remain cached. */
+  discard(preview: PagePreview) {
+    if (this.cached?.preview.imageUri === preview.imageUri) this.cached = null;
+    try { const file = new File(preview.imageUri); if (file.exists) file.delete(); }
+    catch { /* Session cleanup retries. */ }
   }
 
   settle() { return this.pending; }

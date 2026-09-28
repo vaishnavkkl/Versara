@@ -7,6 +7,7 @@ export type RecentImagesProps = ViewProps & {
   grid: boolean;
   palette: string;
   disabled: boolean;
+  active?: boolean;
   onOpen: (event: { nativeEvent: { id: string } }) => void;
   onRemove: (event: { nativeEvent: { id: string } }) => void;
 };

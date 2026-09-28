@@ -28,6 +28,7 @@ import { FileEngine } from '../../../modules/file-engine';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { hasNativePdfLibrary, useDevicePdfs } from './use-device-pdfs';
+import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
@@ -96,7 +97,12 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
     return () => { cancelled = true; focused.current = false; clearTimeout(timer); };
   }, [kind, search, revision]));
 
-  function openLibrary(file: RecentFile) { router.push({ pathname: '/file-preview', params: { id: file.id } }); }
+  function openLibrary(file: RecentFile) {
+    // The listing already has the document path. Avoid resolving it again inside
+    // the generic media screen while its slide transition is running.
+    if (file.kind === 'pdf') { openPdfScreen(file); return; }
+    router.push({ pathname: '/file-preview', params: { id: file.id } });
+  }
 
   async function openItem(item: RecentListItem) {
     if (picking.current) return;
@@ -236,7 +242,7 @@ export function RecentFilesScreen({ kind }: { kind: FileKind }) {
       ) : (kind === 'image' || kind === 'pdf' || ((kind === 'video' || kind === 'audio') && hasNativeMediaList)) && RecentImagesView && Platform.OS !== 'web' && files.length > 0 ? (
         <RecentImagesView
           style={styles.nativeList}
-          items={nativeItems} palette={nativePalette} grid={grid} disabled={busy}
+          items={nativeItems} palette={nativePalette} grid={grid} disabled={busy} active={active && !busy}
           onOpen={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item) void openItem(item); }}
           onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item?.source === 'library' && !busy) remove(item); }}
         />

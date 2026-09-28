@@ -25,6 +25,13 @@ final class PdfEngineView: ExpoView {
   private var lastPageRequest = -1
   private var lastZoomRevision = -1
   private var lastSize = CGSize.zero
+  private let scrollThumb = UIView()
+  private let thumbPill = UIView()
+  private weak var observedScroll: UIScrollView?
+  private var scrollObservation: NSKeyValueObservation?
+  private var thumbHide: DispatchWorkItem?
+  private var draggingThumb = false
+  private var thumbStartOffset: CGFloat = 0
   private let badge = UILabel()
   private var badgeHide: DispatchWorkItem?
 
@@ -47,6 +54,20 @@ final class PdfEngineView: ExpoView {
     badge.isAccessibilityElement = false
     badge.isUserInteractionEnabled = false
     addSubview(badge)
+    scrollThumb.alpha = 0
+    scrollThumb.isAccessibilityElement = true
+    scrollThumb.accessibilityLabel = "Scroll PDF pages"
+    thumbPill.backgroundColor = UIColor(red: 0.32, green: 0.47, blue: 0.91, alpha: 0.94)
+    thumbPill.layer.cornerRadius = 7
+    thumbPill.isUserInteractionEnabled = false
+    scrollThumb.addSubview(thumbPill)
+    for y in [19.0, 23.0, 27.0] {
+      let grip = UIView(frame: CGRect(x: 16, y: y, width: 6, height: 1.5))
+      grip.backgroundColor = .white; grip.layer.cornerRadius = 0.75; grip.isUserInteractionEnabled = false
+      scrollThumb.addSubview(grip)
+    }
+    scrollThumb.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(scrubPages(_:))))
+    addSubview(scrollThumb)
     observer = NotificationCenter.default.addObserver(
       forName: .PDFViewPageChanged, object: pdfView, queue: .main
     ) { [weak self] _ in self?.reportPage() }
@@ -58,6 +79,7 @@ final class PdfEngineView: ExpoView {
   override func layoutSubviews() {
     super.layoutSubviews()
     pdfView.frame = bounds
+    updateScrollThumb(reveal: false)
     if bounds.size != lastSize {
       lastSize = bounds.size
       applyZoom()
@@ -171,9 +193,57 @@ final class PdfEngineView: ExpoView {
   /// PDFKit's own scroll view: keep its draggable indicator visible for fast scrolling.
   private func configureScrolling() {
     guard let scroll = pdfView.documentView?.superview as? UIScrollView else { return }
-    scroll.showsVerticalScrollIndicator = true
-    scroll.indicatorStyle = dark ? .white : .black
+    scroll.showsVerticalScrollIndicator = false
     scroll.decelerationRate = .normal
+    if observedScroll !== scroll {
+      scrollObservation?.invalidate()
+      observedScroll = scroll
+      scrollObservation = scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+        self?.updateScrollThumb(reveal: true)
+      }
+    }
+    updateScrollThumb(reveal: false)
+  }
+
+  private func updateScrollThumb(reveal: Bool) {
+    guard vertical, let scroll = observedScroll, scroll.contentSize.height > scroll.bounds.height else {
+      scrollThumb.isHidden = true; return
+    }
+    scrollThumb.isHidden = false
+    let range = max(1, scroll.contentSize.height - scroll.bounds.height)
+    let progress = min(1, max(0, scroll.contentOffset.y / range))
+    let travel = max(0, bounds.height - 72)
+    scrollThumb.frame = CGRect(x: bounds.width - 32, y: 12 + travel * progress, width: 32, height: 48)
+    thumbPill.frame = CGRect(x: 12, y: 2, width: 14, height: 44)
+    if reveal {
+      thumbHide?.cancel(); scrollThumb.layer.removeAllAnimations(); scrollThumb.alpha = 1
+      if !draggingThumb { scheduleThumbHide() }
+    }
+  }
+
+  private func scheduleThumbHide() {
+    thumbHide?.cancel()
+    let hide = DispatchWorkItem { [weak self] in
+      guard let self, !self.draggingThumb else { return }
+      UIView.animate(withDuration: 0.18) { self.scrollThumb.alpha = 0 }
+    }
+    thumbHide = hide
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: hide)
+  }
+
+  @objc private func scrubPages(_ gesture: UIPanGestureRecognizer) {
+    guard let scroll = observedScroll else { return }
+    switch gesture.state {
+    case .began:
+      draggingThumb = true; thumbHide?.cancel(); thumbStartOffset = scroll.contentOffset.y
+    case .changed:
+      let range = max(0, scroll.contentSize.height - scroll.bounds.height)
+      let delta = gesture.translation(in: self).y / max(1, bounds.height - 72) * range
+      scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: min(range, max(0, thumbStartOffset + delta))), animated: false)
+    case .ended, .cancelled, .failed:
+      draggingThumb = false; scheduleThumbHide()
+    default: break
+    }
   }
 
   private func showBadge(index: Int, count: Int) {
@@ -189,6 +259,7 @@ final class PdfEngineView: ExpoView {
   }
 
   deinit {
+    thumbHide?.cancel(); scrollObservation?.invalidate()
     zoomNotification?.cancel()
     badgeHide?.cancel()
     if let observer { NotificationCenter.default.removeObserver(observer) }

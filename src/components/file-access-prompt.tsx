@@ -42,7 +42,7 @@ export function FileAccessPrompt({ ready }: { ready: boolean }) {
           </View>
           <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.moduleText }]}>Allow file access</ThemedText>
           <ThemedText style={[styles.body, { color: colors.moduleDescription }]}>
-            Versara keeps work on this device. Allow access so Image and Video can show recent files you can open quickly.
+            Versara keeps work on this device. Allow access so Image can show recent photos you can open quickly.
           </ThemedText>
           <Pressable accessibilityRole="button" accessibilityState={{ busy }} disabled={busy} onPress={() => { void allow(); }} style={[styles.primary, { backgroundColor: colors.onAccent }]}>
             {busy ? <AppLoader color={colors.moduleEnd} /> : <ThemedText style={[styles.primaryLabel, { color: colors.moduleEnd }]}>Allow access</ThemedText>}

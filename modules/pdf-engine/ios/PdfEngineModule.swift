@@ -6,9 +6,17 @@ public class PdfEngineModule: Module {
   private let organizer = PdfOrganizer()
   private let textEditor = PdfTextEditor()
   private let thumbnails = FileThumbnailer()
+  private let advanced = PdfAdvancedTools()
   public func definition() -> ModuleDefinition {
     Name("PdfEngine")
     Events("onConversionProgress")
+    Constant("nativeAdvancedToolsVersion") { 2 }
+    AsyncFunction("processPdf") { (id: String, request: String, promise: Promise) in
+      self.advanced.run(id, request: request, promise: promise) { [weak self] completed, total in
+        self?.sendEvent("onConversionProgress", ["jobId": id, "completed": completed, "total": total])
+      }
+    }
+    Function("cancelPdfTool") { (id: String) in self.advanced.cancel(id) }
     AsyncFunction("renderFileThumbnail") { (id: String, uri: String, kind: String, page: Int, output: String, promise: Promise) in
       self.thumbnails.render(id, uri: uri, kind: kind, page: page, outputUri: output, promise: promise)
     }
@@ -35,7 +43,8 @@ public class PdfEngineModule: Module {
       }
     }
     Function("cancelPdfJob") { (id: String) in self.organizer.cancel(id) }
-    OnDestroy { self.converter.destroy(); self.organizer.destroy(); self.textEditor.destroy(); self.thumbnails.destroy() }
+    OnDestroy { self.converter.destroy(); self.organizer.destroy(); self.textEditor.destroy(); self.thumbnails.destroy(); self.advanced.destroy() }
+    // Keep the reader as the default for older JavaScript bundles.
     View(PdfEngineView.self) {
       Events("onLoad", "onPageChange", "onZoomChange", "onError")
       Prop("uri") { (view: PdfEngineView, uri: String) in view.source = uri }
@@ -46,6 +55,20 @@ public class PdfEngineModule: Module {
       Prop("zoomRevision") { (view: PdfEngineView, revision: Int) in view.zoomRevision = revision }
       Prop("dark") { (view: PdfEngineView, dark: Bool) in view.dark = dark }
       OnViewDidUpdateProps { (view: PdfEngineView) in view.applyProps() }
+    }
+    View(PdfMarkupView.self) {
+      Events("onMark")
+      Prop("source") { (view: PdfMarkupView, value: String) in view.setSource(value) }
+      Prop("marks") { (view: PdfMarkupView, value: String) in view.setMarks(value) }
+      Prop("mode") { (view: PdfMarkupView, value: String) in view.mode = value }
+      Prop("inkColor") { (view: PdfMarkupView, value: String) in view.inkColor = value }
+      Prop("fillColor") { (view: PdfMarkupView, value: String) in view.fillColor = value }
+      Prop("shapePath") { (view: PdfMarkupView, value: String) in view.shapePath = value }
+      Prop("inkWidth") { (view: PdfMarkupView, value: Double) in view.inkWidth = value }
+      Prop("brush") { (view: PdfMarkupView, value: String) in view.brush = value }
+      Prop("pattern") { (view: PdfMarkupView, value: String) in view.pattern = value }
+      Prop("disabled") { (view: PdfMarkupView, value: Bool) in view.disabled = value }
+      OnViewDestroys { (view: PdfMarkupView) in view.dispose() }
     }
     View(PdfEditCanvasView.self) {
       Events("onSelectObject", "onPlace", "onTextChange", "onSubmitText")

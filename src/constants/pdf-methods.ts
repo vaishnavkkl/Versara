@@ -9,7 +9,7 @@ export type Method = {
   android: ComponentProps<typeof UniversalIcon>['android'];
 };
 export type MethodSection = { title: string; tools: readonly Method[] };
-export const PDF_SECTIONS = [
+const SECTIONS = [
   { title: 'Read & explore', tools: [
     { id: 'viewer', title: 'PDF Viewer', subtitle: 'Read, scroll & zoom', ios: 'doc.text.magnifyingglass', android: 'find-in-page' },
     { id: 'info', title: 'PDF Info', subtitle: 'File details & metadata', ios: 'info.circle', android: 'info-outline' },
@@ -30,7 +30,7 @@ export const PDF_SECTIONS = [
     { id: 'from_image', title: 'Image to PDF', subtitle: 'Combine JPG, PNG or HEIC', ios: 'photo.on.rectangle', android: 'add-photo-alternate' },
   ] },
   { title: 'Edit & annotate', tools: [
-    { id: 'edit_text', title: 'Edit Text', subtitle: 'Change existing PDF text', ios: 'pencil', android: 'edit' },
+    { id: 'edit_text', title: 'Edit PDF', subtitle: 'Change existing PDF text', ios: 'pencil', android: 'edit' },
     { id: 'remove_text', title: 'Remove Text', subtitle: 'Delete selected PDF text', ios: 'eraser', android: 'format-clear' },
     { id: 'text', title: 'Add Text', subtitle: 'Place text on a page', ios: 'textformat', android: 'text-fields' },
     { id: 'highlight', title: 'Highlight', subtitle: 'Mark important passages', ios: 'highlighter', android: 'highlight' },
@@ -49,3 +49,9 @@ export const PDF_SECTIONS = [
     { id: 'repair', title: 'Repair PDF', subtitle: 'Inspect damaged documents', ios: 'wrench.and.screwdriver', android: 'build' },
   ] },
 ] as const satisfies readonly MethodSection[];
+
+export const PDF_QUICK_IDS = ['edit_text', 'ocr', 'remove_text', 'text'];
+export const PDF_SECTIONS: readonly MethodSection[] = [
+  { title: 'Quick tools', tools: PDF_QUICK_IDS.map(id => SECTIONS.flatMap(section => [...section.tools]).find(tool => tool.id === id)!) },
+  ...SECTIONS.map(section => ({ ...section, tools: section.tools.filter(tool => !PDF_QUICK_IDS.includes(tool.id)) })),
+];

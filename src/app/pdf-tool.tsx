@@ -14,8 +14,10 @@ import { OrganizePdf } from '@/features/pdf/organize-pdf';
 import { EditPdfPages } from '@/features/pdf/edit-pdf-pages';
 import { ArrangePdfPages } from '@/features/pdf/arrange-pdf-pages';
 import { ImageToPdf } from '@/features/pdf/image-to-pdf';
+import { AdvancedPdfTool } from '@/features/pdf/advanced-pdf-tool';
 import { disposeImports } from '@/features/files/file-storage';
 import { forgetPdfToolSession, getPdfToolSession } from '@/features/pdf/pdf-tool-session';
+import { recordToolUse } from '@/features/search/search-history';
 
 export default function PdfToolScreen() {
   const { session: id } = useLocalSearchParams<{ session: string }>();
@@ -24,6 +26,7 @@ export default function PdfToolScreen() {
   const mounted = useRef(true);
   const [focused, setFocused] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
+  useEffect(() => { if (session) recordToolUse(`PDF:${session.tool}`); }, [session]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -36,11 +39,11 @@ export default function PdfToolScreen() {
       });
     };
   }, [id, session]);
-  function leave() { Keyboard.dismiss(); if (router.canGoBack()) router.back(); else router.replace('/(tabs)/documents'); }
+  function leave() { Keyboard.dismiss(); if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   function close() {
     if (!unsaved) { leave(); return; }
     Keyboard.dismiss();
-    showDialog('Discard PDF edits?', 'Your text changes to this PDF have not been saved.', [
+    showDialog('Discard PDF edits?', 'Your changes to this PDF have not been saved.', [
       { text: 'Keep editing', style: 'cancel' },
       { text: 'Discard', style: 'destructive', onPress: leave },
     ], { ios: 'exclamationmark.triangle', android: 'warning' });
@@ -62,7 +65,8 @@ export default function PdfToolScreen() {
       : tool === 'merge' || tool === 'split' ? <OrganizePdf operation={tool} initialSelection={session} />
       : tool === 'extract' || tool === 'delete' ? <EditPdfPages operation={tool} initialSelection={session} />
       : tool === 'reorder' || tool === 'rotate' ? <ArrangePdfPages operation={tool} initialSelection={session} />
-      : <ImageToPdf initialSelection={session} />}
+      : tool === 'from_image' ? <ImageToPdf initialSelection={session} />
+      : <AdvancedPdfTool session={session} onUnsavedChange={setUnsaved} />}
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({

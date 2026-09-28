@@ -18,6 +18,7 @@ import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfScreen } from './open-pdf-screen';
+import { PdfDocumentPreview } from './pdf-document-preview';
 import { splitRanges, type SplitMode } from './pdf-ranges';
 
 type Source = LocalFile & { pageCount: number };
@@ -32,6 +33,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
   const [sources, setSources] = useState<Source[]>([]);
+  const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [name, setName] = useState(merge ? 'Merged document' : 'Split document');
   const [splitMode, setSplitMode] = useState<SplitMode>('each');
   const [groupSize, setGroupSize] = useState('10');
@@ -147,6 +149,8 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   function move(index: number, direction: number) { setSources(current => { const next = [...current]; [next[index], next[index + direction]] = [next[index + direction], next[index]]; return next; }); }
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
 
+  if (previewSource) return <PdfDocumentPreview uri={previewSource.uri} count={previewSource.pageCount} onClose={() => setPreviewSource(null)} />;
+
   if (results.length) return <View style={styles.screen}>
     <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Save the PDFs you want to keep to your device, or share them.</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
       <ThemedText numberOfLines={2} style={styles.label}>{merge ? 'Merged document' : `Part ${item.part}`}</ThemedText>
@@ -172,7 +176,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
       </>}
       {!!sources.length && <ThemedText style={styles.label}>{merge ? `Merge order · ${pageCount} pages` : 'Source document'}</ThemedText>}
     </View>} renderItem={({ item, index }) => <View style={[styles.sourceRow, { backgroundColor: colors.accentSurface }]}>
-      <View style={styles.thumb}><FileThumbnail uri={item.uri} kind="pdf" page={0} active={active} /></View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Preview ${item.name}`} disabled={busy} onPress={() => setPreviewSource(item)} style={styles.thumb}><FileThumbnail uri={item.uri} kind="pdf" page={0} active={active} /></Pressable>
       <View style={styles.grow}><ThemedText numberOfLines={2} style={styles.label}>{merge ? `${index + 1}. ` : ''}{item.name}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{item.pageCount} pages · {formatSize(item.size)}{merge ? ' · first page' : ''}</ThemedText></View>
       {merge && ([-1, 1] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={`Move PDF ${index + 1} ${direction < 0 ? 'up' : 'down'}`} disabled={busy || index + direction < 0 || index + direction >= sources.length} style={[styles.iconButton, (busy || index + direction < 0 || index + direction >= sources.length) && styles.disabled]} onPress={() => move(index, direction)}><UniversalIcon ios={direction < 0 ? 'chevron.up' : 'chevron.down'} android={direction < 0 ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={colors.systemBlue} /></Pressable>)}
       <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} disabled={busy} style={styles.iconButton} onPress={() => removeSource(index)}><UniversalIcon ios="xmark" android="close" size={20} color={colors.systemBlue} /></Pressable>

@@ -7,6 +7,17 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
+import android.widget.Toast
+import org.json.JSONObject
 import android.animation.ValueAnimator
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -59,6 +70,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private var descriptor: ParcelFileDescriptor? = null
   private var displayedBitmap: Bitmap? = null
   private var loadedSource = ""
+  private var selecting = false
   private var lastPage = -1
   private var lastPageRevision = -1
   private var lastVertical = true
@@ -80,6 +92,28 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   @Volatile private var disposed = false
   private val image = ZoomImageView(context)
   private val list = ListView(context)
+  private val scrollThumb = PdfScrollThumb(context)
+  private var draggingThumb = false
+  private var thumbStartY = 0f
+  private var thumbStartProgress = 0f
+  private var scrollProgress = 0f
+  private val hideScrollThumb = Runnable {
+    if (!draggingThumb) scrollThumb.animate().alpha(0f).setDuration(180).withEndAction { scrollThumb.visibility = View.INVISIBLE }.start()
+  }
+  private fun updateScrollThumb(reveal: Boolean = false) {
+    if (!vertical || pageCount < 2 || height <= 0) { scrollThumb.visibility = View.INVISIBLE; return }
+    val first = list.getChildAt(0)
+    val fraction = if (first != null && first.height > 0) (-first.top.toFloat() / first.height).coerceIn(0f, 1f) else 0f
+    val extent = if (first != null && first.height > 0) list.height.toFloat() / first.height else 1f
+    scrollProgress = ((list.firstVisiblePosition + fraction) / max(1f, pageCount - extent)).coerceIn(0f, 1f)
+    val travel = max(0f, height - scrollThumb.height - 24 * resources.displayMetrics.density)
+    scrollThumb.translationY = scrollProgress * travel
+    if (reveal) {
+      main.removeCallbacks(hideScrollThumb)
+      scrollThumb.animate().cancel(); scrollThumb.visibility = View.VISIBLE; scrollThumb.alpha = 1f
+      if (!draggingThumb) main.postDelayed(hideScrollThumb, 1000)
+    }
+  }
   private val badge = TextView(context)
   private val hideBadge = Runnable { badge.animate().alpha(0f).setDuration(250).start() }
   private fun showBadge() {
@@ -95,6 +129,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       val row = (convertView as? ZoomImageView) ?: ZoomImageView(context)
       val binding = "${documentVersion.get()}:$position:$width"
       if (row.binding == binding) return row
+      row.clearSelection()
+      row.onRequestText = { px, py -> selectText(row, position, px, py) }
       row.binding = binding
       row.allowScroll = true
       row.setImageDrawable(null)
@@ -120,20 +156,22 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     list.divider = ColorDrawable(Color.TRANSPARENT)
     list.dividerHeight = (8 * resources.displayMetrics.density).toInt()
     list.selector = ColorDrawable(Color.TRANSPARENT)
-    list.isVerticalScrollBarEnabled = true
+    list.isVerticalScrollBarEnabled = false
     list.scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-    // Native draggable thumb for long documents; it appears while flinging and fades when idle.
-    list.isFastScrollEnabled = true
+    // Only our visible thumb captures a scrub gesture; the rest of the edge remains page content.
+    list.isFastScrollEnabled = false
     list.adapter = pages
     list.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-    list.setRecyclerListener { (it as? ZoomImageView)?.let { row -> row.ticket.incrementAndGet(); row.binding = ""; row.setImageDrawable(null) } }
+    list.setRecyclerListener { (it as? ZoomImageView)?.let { row -> row.ticket.incrementAndGet(); row.binding = ""; row.clearSelection(); row.onRequestText = null; row.setImageDrawable(null) } }
     list.setOnScrollListener(object : AbsListView.OnScrollListener {
       override fun onScrollStateChanged(view: AbsListView?, state: Int) {
+        updateScrollThumb(true)
         main.removeCallbacks(hideBadge)
         if (state == AbsListView.OnScrollListener.SCROLL_STATE_IDLE) main.postDelayed(hideBadge, 900) else showBadge()
       }
       override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
         if (!vertical || visible <= 0) return
+        updateScrollThumb(true)
         // The page filling the middle of the screen is the one being read.
         val top = view?.getChildAt(0)
         val current = if (top != null && top.bottom < (view.height / 2) && first + 1 < total) first + 1 else first
@@ -156,6 +194,32 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
     addView(badge)
+    scrollThumb.visibility = View.INVISIBLE
+    scrollThumb.contentDescription = "Drag to scroll PDF pages"
+    scrollThumb.setOnTouchListener { _, event ->
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+          draggingThumb = true; thumbStartY = event.rawY; thumbStartProgress = scrollProgress
+          main.removeCallbacks(hideScrollThumb); scrollThumb.animate().cancel(); scrollThumb.alpha = 1f
+          parent?.requestDisallowInterceptTouchEvent(true)
+          true
+        }
+        MotionEvent.ACTION_MOVE -> {
+          val travel = max(1f, height - scrollThumb.height - 24 * resources.displayMetrics.density)
+          val progress = (thumbStartProgress + (event.rawY - thumbStartY) / travel).coerceIn(0f, 1f)
+          val target = (progress * max(0, pageCount - 1)).toInt()
+          list.setSelectionFromTop(target, 0)
+          updateScrollThumb(true)
+          true
+        }
+        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          draggingThumb = false; parent?.requestDisallowInterceptTouchEvent(false)
+          main.postDelayed(hideScrollThumb, 1000); true
+        }
+        else -> true
+      }
+    }
+    addView(scrollThumb)
     image.onZoomChanged = { zoom ->
       onZoomChange(mapOf("zoom" to zoom.toDouble()))
     }
@@ -170,12 +234,17 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     badge.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
     val badgeLeft = (right - left - badge.measuredWidth) / 2
     badge.layout(badgeLeft, margin, badgeLeft + badge.measuredWidth, margin + badge.measuredHeight)
+    val thumbWidth = (32 * resources.displayMetrics.density).toInt()
+    val thumbHeight = (48 * resources.displayMetrics.density).toInt()
+    scrollThumb.layout(right - left - thumbWidth, margin, right - left, margin + thumbHeight)
+    updateScrollThumb()
     if (changed && loadedSource.isNotEmpty()) { if (vertical) pages.notifyDataSetChanged() else renderPage() }
   }
 
   fun applyProps() {
     if (disposed) return
     setBackgroundColor(if (dark) Color.BLACK else Color.rgb(244, 245, 253))
+    updateScrollThumb()
     list.visibility = if (vertical) View.VISIBLE else View.GONE
     image.visibility = if (vertical) View.GONE else View.VISIBLE
     if (vertical != lastVertical) {
@@ -199,6 +268,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   }
 
   private fun openDocument(uriString: String) {
+    image.clearSelection()
     val version = documentVersion.incrementAndGet()
     renderVersion.incrementAndGet()
     image.setImageDrawable(null)
@@ -222,20 +292,19 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         val fd = descriptor ?: throw java.io.FileNotFoundException()
         renderer = PdfRenderer(fd)
         val count = renderer!!.pageCount
-        // Known page heights keep rows and the fast-scroll thumb stable instead of jumping as pages render.
-        val sizes = HashMap<Int, Double>()
-        for (index in 0 until min(count, 2000)) {
-          if (disposed || version != documentVersion.get()) return@execute
-          renderer!!.openPage(index).use { sizes[index] = it.height.toDouble() / max(1, it.width) }
-        }
         if (count == 0) {
           closeDocument()
           reportError(version, "PDF_EMPTY_DOCUMENT", "This PDF has no readable pages.")
           return@execute
         }
+        // Only measure the opening page. renderRow learns other page sizes on
+        // demand; a long document must not scan thousands of pages before paint.
+        if (disposed || version != documentVersion.get()) return@execute
+        val firstPage = requestedPage.coerceIn(0, count - 1)
+        val firstRatio = renderer!!.openPage(firstPage).use { it.height.toDouble() / max(1, it.width) }
         main.post {
           if (!disposed && version == documentVersion.get()) {
-            ratios.putAll(sizes)
+            ratios[firstPage] = firstRatio
             onLoad(mapOf("pageCount" to count))
             pageCount = count
             pages.notifyDataSetChanged()
@@ -259,6 +328,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   }
 
   private fun renderPage() {
+    image.clearSelection()
+    image.onRequestText = { px, py -> selectText(image, requestedPage, px, py) }
     if (disposed || width <= 0 || height <= 0) return
     val version = documentVersion.get()
     val render = renderVersion.incrementAndGet()
@@ -372,14 +443,44 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     descriptor = null
   }
 
+  private fun selectText(row: ZoomImageView, page: Int, x: Float, y: Float) {
+    if (disposed || selecting) return
+    if (row.selectAt(x, y)) return
+    selecting = true
+    val version = documentVersion.get(); val binding = row.binding; val uri = Uri.parse(source)
+    Toast.makeText(context, "Selecting text...", Toast.LENGTH_SHORT).show()
+    worker.execute {
+      var copy: File? = null
+      try {
+        fun stale() = disposed || version != documentVersion.get() || row.binding != binding
+        if (stale()) return@execute
+        val path = if (uri.scheme == "file" && File(uri.path!!).canonicalPath.startsWith(context.cacheDir.canonicalPath + File.separator)) uri.path!! else {
+          val temp = File.createTempFile("pdf-selection-", ".pdf", context.cacheDir); copy = temp
+          context.contentResolver.openInputStream(uri)!!.use { input -> temp.outputStream().use { output ->
+            val buffer = ByteArray(65536)
+            while (true) { if (stale()) return@execute; val read = input.read(buffer); if (read < 0) break; output.write(buffer, 0, read) }
+          } }; temp.path
+        }
+        val result = JSONObject(NativeTextEditor({ stale() }, { _, _ -> }).run(JSONObject().put("action", "selection").put("path", path).put("page", page).toString(), context.cacheDir.canonicalPath, context.filesDir.canonicalPath))
+        if (result.has("error")) error(result.getString("error"))
+        val items = result.getJSONArray("glyphs")
+        val glyphs = List(items.length()) { index -> val g = items.getJSONObject(index); PdfGlyph(g.getString("text"), RectF(g.getDouble("left").toFloat(), g.getDouble("top").toFloat(), g.getDouble("right").toFloat(), g.getDouble("bottom").toFloat())) }
+        main.post { if (!stale()) { row.glyphs = glyphs; if (!row.selectAt(x, y)) Toast.makeText(context, "No selectable text here. Use Scan Text for a scanned page.", Toast.LENGTH_SHORT).show() } }
+      } catch (error: Exception) { main.post { if (!disposed) Toast.makeText(context, error.message ?: "Text selection unavailable.", Toast.LENGTH_SHORT).show() } }
+      finally { copy?.delete(); main.post { selecting = false } }
+    }
+  }
   fun dispose() {
     if (disposed) return
     disposed = true
+    main.removeCallbacks(hideScrollThumb); scrollThumb.animate().cancel(); draggingThumb = false
     context.applicationContext.unregisterComponentCallbacks(memoryCallbacks)
     main.removeCallbacks(hideBadge)
     bitmapCache.evictAll()
     documentVersion.incrementAndGet()
     renderVersion.incrementAndGet()
+    image.clearSelection(); image.onRequestText = null
+    for (i in 0 until list.childCount) (list.getChildAt(i) as? ZoomImageView)?.let { it.clearSelection(); it.onRequestText = null; it.setImageDrawable(null) }
     image.setImageDrawable(null)
     displayedBitmap = null
     list.adapter = null
@@ -392,8 +493,55 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   }
 }
 
+private data class PdfGlyph(val text: String, val rect: RectF)
+
 // Zoom and pan stay entirely in Android's UI toolkit; no per-frame JS events.
 private class ZoomImageView(context: Context) : ImageView(context) {
+  var glyphs = emptyList<PdfGlyph>()
+  var onRequestText: ((Float, Float) -> Unit)? = null
+  private var selectionStart = -1; private var selectionEnd = -1
+  private var actionMode: ActionMode? = null
+  private var selectingEnd = true
+  private var draggingSelection = false
+  private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x553B82F6 }
+  private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
+  private fun pagePoint(x: Float, y: Float): FloatArray {
+    val inverse = Matrix(); transform.invert(inverse); val p = floatArrayOf(x, y); inverse.mapPoints(p)
+    p[0] /= max(1, drawable?.intrinsicWidth ?: 1); p[1] /= max(1, drawable?.intrinsicHeight ?: 1); return p
+  }
+  private fun glyphAt(x: Float, y: Float): Int = glyphs.indices.filter { glyphs[it].text.isNotBlank() }.minByOrNull { i -> val r = glyphs[i].rect; val dx = max(r.left - x, max(0f, x - r.right)); val dy = max(r.top - y, max(0f, y - r.bottom)); dx * dx + dy * dy } ?: -1
+  fun selectAt(x: Float, y: Float): Boolean {
+    val index = glyphAt(x, y); if (index < 0) return false
+    val rect = RectF(glyphs[index].rect); rect.inset(-.02f, -.01f); if (!rect.contains(x, y)) return false
+    selectionStart = index; selectionEnd = index
+    while (selectionStart > 0 && glyphs[selectionStart - 1].text.isNotBlank()) selectionStart--
+    while (selectionEnd + 1 < glyphs.size && glyphs[selectionEnd + 1].text.isNotBlank()) selectionEnd++
+    if (actionMode == null) actionMode = startActionMode(object : ActionMode.Callback2() {
+      override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean { menu.add(0, 1, 0, "Copy"); menu.add(0, 2, 1, "Select all"); return true }
+      override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
+      override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+        if (item.itemId == 2) { selectionStart = 0; selectionEnd = glyphs.lastIndex; invalidate(); mode.invalidateContentRect(); return true }
+        if (item.itemId == 1 && selectionStart >= 0) {
+          val text = glyphs.subList(min(selectionStart, selectionEnd), max(selectionStart, selectionEnd) + 1).joinToString("") { it.text }
+          (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("PDF text", text)); mode.finish(); return true
+        }; return false
+      }
+      override fun onDestroyActionMode(mode: ActionMode) { actionMode = null; selectionStart = -1; selectionEnd = -1; draggingSelection = false; invalidate() }
+      override fun onGetContentRect(mode: ActionMode, view: View, out: Rect) { if (selectionStart >= 0 && selectionStart < glyphs.size) { val r = displayRect(glyphs[selectionStart].rect); out.set(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()) } else out.set(0, 0, width, height) }
+    }, ActionMode.TYPE_FLOATING)
+    invalidate(); actionMode?.invalidateContentRect(); return true
+  }
+  fun clearSelection() { actionMode?.finish(); glyphs = emptyList(); selectionStart = -1; selectionEnd = -1; draggingSelection = false; invalidate() }
+  private fun displayRect(raw: RectF): RectF {
+    val r = RectF(raw.left * (drawable?.intrinsicWidth ?: 1), raw.top * (drawable?.intrinsicHeight ?: 1), raw.right * (drawable?.intrinsicWidth ?: 1), raw.bottom * (drawable?.intrinsicHeight ?: 1)); transform.mapRect(r); return r
+  }
+  override fun onDraw(canvas: Canvas) {
+    super.onDraw(canvas)
+    if (selectionStart < 0 || selectionEnd < 0) return
+    for (i in min(selectionStart, selectionEnd)..max(selectionStart, selectionEnd)) canvas.drawRect(displayRect(glyphs[i].rect), selectionPaint)
+    val a = displayRect(glyphs[selectionStart].rect); val b = displayRect(glyphs[selectionEnd].rect); val radius = 7 * resources.displayMetrics.density
+    canvas.drawCircle(a.left, a.bottom + radius, radius, handlePaint); canvas.drawCircle(b.right, b.bottom + radius, radius, handlePaint)
+  }
   var binding = ""
   val ticket = AtomicInteger(0)
   var allowScroll = false
@@ -428,6 +576,7 @@ private class ZoomImageView(context: Context) : ImageView(context) {
   })
   private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
     override fun onDown(event: MotionEvent) = true
+    override fun onLongPress(event: MotionEvent) { val p = pagePoint(event.x, event.y); onRequestText?.invoke(p[0], p[1]) }
     override fun onDoubleTap(event: MotionEvent): Boolean {
       animateZoom(if (zoom > 1.1f) 1f else 2.5f, event.x, event.y)
       return true
@@ -472,7 +621,7 @@ private class ZoomImageView(context: Context) : ImageView(context) {
     updateTransform()
   }
   override fun onDetachedFromWindow() {
-    animator?.cancel()
+    animator?.cancel(); actionMode?.finish()
     super.onDetachedFromWindow()
   }
   private fun updateTransform() {
@@ -492,6 +641,20 @@ private class ZoomImageView(context: Context) : ImageView(context) {
     imageMatrix = transform
   }
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (selectionStart >= 0 && selectionEnd >= 0 && event.pointerCount == 1) {
+      if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+        val a = displayRect(glyphs[selectionStart].rect); val b = displayRect(glyphs[selectionEnd].rect); val radius = 30 * resources.displayMetrics.density
+        val da = kotlin.math.hypot(event.x - a.left, event.y - a.bottom); val db = kotlin.math.hypot(event.x - b.right, event.y - b.bottom)
+        draggingSelection = min(da, db) < radius; selectingEnd = db <= da
+        if (!draggingSelection) actionMode?.finish()
+      }
+      if (draggingSelection) {
+        parent?.requestDisallowInterceptTouchEvent(true)
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) { val p = pagePoint(event.x, event.y); val index = glyphAt(p[0], p[1]); if (index >= 0) { if (selectingEnd) selectionEnd = index else selectionStart = index; invalidate(); actionMode?.invalidateContentRect() } }
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) { draggingSelection = false; parent?.requestDisallowInterceptTouchEvent(false) }
+        return true
+      }
+    }
     parent?.requestDisallowInterceptTouchEvent(!allowScroll || zoom > 1.01f || event.pointerCount > 1)
     scaleGesture.onTouchEvent(event)
     taps.onTouchEvent(event)
@@ -524,4 +687,20 @@ private class ZoomImageView(context: Context) : ImageView(context) {
     return true
   }
   override fun performClick(): Boolean { super.performClick(); return true }
+}
+
+/** The hit area moves with the capsule; there is no full-height fast-scroll touch strip. */
+private class PdfScrollThumb(context: Context) : View(context) {
+  private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+  override fun onDraw(canvas: Canvas) {
+    val d = resources.displayMetrics.density
+    paint.color = 0xEE5279E8.toInt()
+    val rect = RectF(width - 20 * d, 2 * d, width - 6 * d, height - 2 * d)
+    canvas.drawRoundRect(rect, 7 * d, 7 * d, paint)
+    paint.color = Color.WHITE; paint.strokeWidth = 1.5f * d; paint.strokeCap = Paint.Cap.ROUND
+    for (offset in -1..1) {
+      val y = height / 2f + offset * 4 * d
+      canvas.drawLine(rect.left + 4 * d, y, rect.right - 4 * d, y, paint)
+    }
+  }
 }

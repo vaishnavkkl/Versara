@@ -1,35 +1,27 @@
 # Development Phases & Priority
 
-The product should be built incrementally focusing on reliability and speed over feature count.
+Current scope: PDF, Image and Privacy. Audio, Video and Device are separate modules; see [scope decision](23-standalone-module-scope.md).
 
-## Phase 1: Foundation (V1 Priority)
-- Expo project, TypeScript, Expo Router, theme system.
-- Tool registry, file abstraction, job system, local SQLite.
-- **Goal:** Deliver a runnable shell with a small vertical slice (Image Picker → Image Compress → Progress → Result → Save/Share).
+## Phase 1: Foundation
+Expo, TypeScript, Expo Router, local file access, accessible themes, history and bounded native jobs. File-first screens and searchable tool catalogs.
 
-## Phase 2: Image Utilities (V1 Priority)
-- Image picker, compression, resize, format conversion, JPG → PDF, metadata removal.
+## Phase 2: Image utilities
+Crop, rotate, flip, resize, compression, conversion, text edits, metadata removal, and image-to-PDF. Native previews and explicit Save/Save As with file naming.
 
-## Phase 3: PDF Core (V1 Priority)
-- Viewer, merge, split, extract, reorder, rotate, compress, print/share. (Exclude DOCX → PDF).
+The remaining image catalog now has native Android/iOS implementations, including batch processing, perspective, borders, blur, sharpening, drawing, watermark and redaction. See [current capabilities and validation limits](27-image-tools-and-file-actions.md). Device profiling and iOS build verification remain release work.
 
-## Phase 4: Screenshot Privacy (V1 Priority)
-- OCR, entity detection, confidence scoring, review UI, permanent image redaction.
+## Phase 3: PDF utilities
+Reader with native selection/copy; edit/add/remove text; OCR; page organization; compression/export; highlight, brush, shapes, signatures and watermark; configurable page numbering with preview; protection, metadata, flatten and repair. Free open-source native processing on Android and iOS, offline.
 
-## Phase 5: Video (V1 Priority)
-- Video target size compression, trim, resolution conversion.
+## Phase 4: Screenshot privacy
+On-device OCR, reviewable entity detection and permanent image redaction. Keep incomplete controls visibly unavailable.
 
-## Phase 6: Network (V1 Priority)
-- Wi-Fi info, ping, DNS, latency, packet loss, Internet speed, diagnosis UI.
+## Release quality work
+- Keep input and Done/Apply actions visible with the keyboard; preserve preview space.
+- Fixed quick actions plus a searchable toolbox, with Edit PDF, Scan Text, Remove Text and Add Text first.
+- Native drawing/zoom, bounded undo history, consistent saved output, clear failure/retry states.
+- Tear down preview canvases and cancel queued work when leaving editors. Profile navigation, RAM and long-document behavior on Android and iOS devices.
+- Lint, TypeScript and relevant native compilation are required. Do not run automated tests or web builds without an explicit request.
 
-## Phase 7: Battery (V1 Priority)
-- Charging state, session rate, drain test. (Adhere to public API parity across iOS/Android).
-
-## Phase 8: Local AI (Post-V1)
-- Model manager, context builder, PDF/network/battery/screenshot explanations. (Only begin after deterministic utilities are stable).
-
-## Signature Workflows
-Eventually build workflows combining multiple tools:
-- *Make this shareable:* Compress → Remove metadata → Redact → Share.
-- *Prepare this PDF:* Merge → Reorder → Compress → Sign → Print.
-- *Fix this upload:* OCR requirements → Resize/Compress/Convert → Export.
+## Later in this app
+Optional local assistance for documents/images only after deterministic tools are stable. Workflows: prepare a PDF (merge, reorder, edit, compress, sign); make an image shareable (resize, metadata removal, privacy review, export).

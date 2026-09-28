@@ -21,6 +21,8 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -107,11 +109,15 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     val open = { if (uri.scheme == "content") requireNotNull(context.contentResolver.openInputStream(uri)) else File(requireNotNull(uri.path)).inputStream() }
     open().use { BitmapFactory.decodeStream(it, null, options) }
     val orientation = try { open().use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
-    val swap = orientation == ExifInterface.ORIENTATION_ROTATE_90 || orientation == ExifInterface.ORIENTATION_ROTATE_270
+    val swap = orientation in 5..8
     if (options.outWidth > 0 && options.outHeight > 0) (if (swap) options.outHeight to options.outWidth else options.outWidth to options.outHeight) else null
   } catch (_: Exception) { null }
 
-  private fun turned() = edits.rotation == 90 || edits.rotation == 270
+  private fun transformedSize(image: Bitmap): Pair<Float, Float> {
+    val radians = Math.toRadians(edits.rotation.toDouble())
+    val c = abs(cos(radians)).toFloat(); val s = abs(sin(radians)).toFloat()
+    return (image.width * c + image.height * s) to (image.width * s + image.height * c)
+  }
 
   /** Width divided by height of the crop in normalised units for the chosen pixel aspect. */
   private fun normalizedRatio(): Float? {
@@ -124,8 +130,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
       "9:16" -> 9f / 16f
       else -> return null
     }
-    val w = if (turned()) image.height else image.width
-    val h = if (turned()) image.width else image.height
+    val (w, h) = transformedSize(image)
     return pixels * h / w
   }
 
@@ -150,6 +155,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     disposed = true
     version.incrementAndGet()
     canvasView.setOnTouchListener(null)
+    // RenderThread may still hold the last frame; release our reference safely.
     bitmap = null
     worker.shutdownNow()
   }
@@ -168,8 +174,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     private fun layoutImage(): Boolean {
       val image = bitmap ?: return false
       val pad = 20 * density
-      val w = (if (turned()) image.height else image.width).toFloat()
-      val h = (if (turned()) image.width else image.height).toFloat()
+      val (w, h) = transformedSize(image)
       val scale = min((width - pad * 2) / w, (height - pad * 2) / h)
       if (scale <= 0f) return false
       val left = (width - w * scale) / 2f
@@ -181,7 +186,7 @@ class ImageEditorView(context: Context, appContext: AppContext) : ExpoView(conte
     override fun onDraw(canvas: Canvas) {
       val image = bitmap ?: return
       if (image.isRecycled || !layoutImage()) return
-      val scale = imageRect.width() / (if (turned()) image.height else image.width)
+      val scale = imageRect.width() / transformedSize(image).first
       canvas.save()
       canvas.translate(imageRect.centerX(), imageRect.centerY())
       canvas.rotate(edits.rotation.toFloat())

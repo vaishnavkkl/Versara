@@ -4,14 +4,14 @@
 Heavy functionality must not run on the React Native JS thread. Create modular native interfaces using Expo Modules API (Swift for iOS, Kotlin for Android).
 
 Suggested modules:
-`pdf-engine`, `media-engine`, `image-engine`, `ocr-engine`, `redaction-engine`, `network-engine`, `battery-engine`, `ai-engine`, `file-engine`, `print-engine`.
+`pdf-engine`, `image-engine`, `ocr-engine`, `redaction-engine`, `file-engine`, `print-engine`. Audio, video, network and battery engines belong to the separate module projects.
 
 Each module should expose a minimal typed API to TypeScript, keeping the JS layer thin.
 
 ## File Access & Memory Safety
 - Use system document/photo pickers.
 - Prefer passing file URIs (paths) to native modules. NEVER use Base64 strings for large files.
-- The application must not crash due to OOM (Out Of Memory) when processing large files (e.g., 500MB videos, 200MB PDFs).
+- The application must not crash due to OOM (Out Of Memory) when processing large files (e.g., large photos and 200MB PDFs).
 - Heavy operations must run asynchronously, never block the JS thread, support cancellation, and clean up temporary files.
 
 ## Storage & Job System
@@ -19,7 +19,6 @@ Use local **SQLite** for:
 - Recent operations & Tool history
 - Favorites & Settings
 - AI conversations
-- Diagnostic sessions
 - Model metadata
 
 **Job System Abstraction:**
@@ -33,3 +32,10 @@ Statuses: `queued`, `processing`, `completed`, `cancelled`, `failed`.
 
 ## Error Handling
 Every native operation must return structured errors (e.g., `PDF_PASSWORD_REQUIRED`, `MEDIA_PROCESSING_FAILED`). User-facing messages must be understandable and actionable.
+
+## Editor lifetime
+- Keep only one native preview render and the latest waiting request; cancel superseded work.
+- Release native canvases when their route loses focus, backgrounding pauses previews, and teardown cancels jobs before removing imported inputs.
+- Close document/page/recognizer resources within the native job. Release image references, animation callbacks and view executors at teardown; do not force garbage collection or recycle bitmaps still owned by RenderThread.
+- No idle polling or verification loop after Save. A one-time output validation is part of saving; returning Home must not schedule another render.
+- Actual RAM reclamation and navigation frame time must be profiled on devices; static checks cannot establish a zero-leak guarantee.

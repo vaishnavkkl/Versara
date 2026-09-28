@@ -15,6 +15,28 @@ function evict() {
     if (entry.done && entry.users === 0) { entries.delete(key); remove(entry.uri); }
   }
 }
+
+/** Only unused thumbnail files are disposable; editor inputs and active jobs are excluded. */
+function unusedThumbnailFiles() {
+  const root = directory();
+  if (!root.exists) return [];
+  const protectedUris = new Set([...entries.values()].filter(entry => entry.users > 0 || !entry.done)
+    .map(entry => entry.uri ?? new File(root, `${entry.id}.jpg`).uri));
+  return root.list().filter((file): file is File => file instanceof File && !protectedUris.has(file.uri));
+}
+export function unusedThumbnailBytes() {
+  return unusedThumbnailFiles().reduce((total, file) => total + (file.size ?? 0), 0);
+}
+export function clearUnusedThumbnails() {
+  let freed = 0;
+  for (const file of unusedThumbnailFiles()) {
+    const size = file.size ?? 0;
+    file.delete();
+    freed += size;
+    for (const [key, entry] of entries) if (entry.done && !entry.users && entry.uri === file.uri) entries.delete(key);
+  }
+  return freed;
+}
 async function drain() {
   if (running) return;
   running = true;

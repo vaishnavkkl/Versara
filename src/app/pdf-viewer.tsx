@@ -8,13 +8,13 @@ import { PdfViewer } from '@/features/pdf/pdf-viewer';
 import { usePalette } from '@/theme/colors';
 
 export default function PdfViewerScreen() {
-  const { uri, name, page } = useLocalSearchParams<{ uri: string; name?: string; page?: string }>();
+  const { uri, name, page, revision } = useLocalSearchParams<{ uri: string; name?: string; page?: string; revision?: string }>();
   const colors = usePalette();
   const [focused, setFocused] = useState(false);
-  function back() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)/documents'); }
+  function back() { if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     {!focused && <ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back}><HelpButton tool="viewer" /></ScreenHeader>}
-    <PdfViewer key={uri} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} />
+    <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} />
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({ screen: { flex: 1 } });

@@ -23,9 +23,18 @@ class FileEngineModule : Module() {
   private val access = FileAccess()
   private val library = DeviceLibrary()
   private val pdfs = PdfDeviceLibrary()
+  private val imageTools = ImageTools()
 
   override fun definition() = ModuleDefinition {
     Name("FileEngine")
+    Constant("nativeImageToolsVersion") { 1 }
+    Constant("nativeImageResizeVersion") { 1 }
+    AsyncFunction("processImage") { id: String, request: String, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) promise.reject("IMAGE_UNAVAILABLE", "The app is not ready.", null)
+      else imageTools.run(context, id, request, promise)
+    }
+    Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
     Constant("nativeImageListVersion") { 2 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
@@ -66,6 +75,7 @@ class FileEngineModule : Module() {
       Prop("grid") { view: RecentImagesView, value: Boolean -> view.setGrid(value) }
       Prop("palette") { view: RecentImagesView, value: String -> view.setPalette(value) }
       Prop("disabled") { view: RecentImagesView, value: Boolean -> view.disabled = value }
+      Prop("active") { view: RecentImagesView, value: Boolean -> view.setActive(value) }
       OnViewDestroys { view: RecentImagesView -> view.dispose() }
     }
     View(NativeVideoView::class) {
@@ -199,7 +209,7 @@ class FileEngineModule : Module() {
       }
     }
 
-    OnDestroy { worker.shutdown(); explorer.shutdown(); pdfs.destroy() }
+    OnDestroy { imageTools.destroy(); worker.shutdown(); explorer.shutdown(); pdfs.destroy() }
     OnActivityEntersBackground { pdfs.cancelAll() }
   }
 }
@@ -213,11 +223,7 @@ internal class FileAccess {
         "video" -> arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
         "audio" -> arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
         "pdf" -> emptyArray() // PDFs use the system document picker; no broad storage grant.
-        else -> arrayOf(
-          Manifest.permission.READ_MEDIA_IMAGES,
-          Manifest.permission.READ_MEDIA_VIDEO,
-          Manifest.permission.READ_MEDIA_AUDIO,
-        )
+        else -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
       }
     }
     return arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)

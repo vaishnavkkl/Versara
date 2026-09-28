@@ -1,6 +1,8 @@
-# Media Tool Suite (Images & Video)
+# Image Tool Suite
 
-Heavy media processing must be done locally via native engines (e.g., AVFoundation, MediaCodec, CoreImage) and never on the React Native JS thread.
+Heavy media processing must be done locally via native engines (e.g., CoreImage and Android image codecs) and never on the React Native JS thread.
+
+The implemented image tools, platform encoder availability, memory limits and file actions are documented in [Image tools and file actions](27-image-tools-and-file-actions.md).
 
 ## Image Utilities
 - **Compression:** Target file size, quality-based, batch compression. Must show before/after preview.
@@ -9,10 +11,8 @@ Heavy media processing must be done locally via native engines (e.g., AVFoundati
 - **Operations:** Crop, rotate, flip, rename, batch processing.
 - **Image → PDF:** Support multiple images, layout options (A4, Letter, fit/fill, margins).
 
-## Video Utilities
-- **Compression:** User selects target size (10MB, 25MB, 50MB, custom) or presets (WhatsApp, Email, High quality).
-- **Information:** Show original size, duration, resolution, frame rate, estimated output, codec.
-- **Additional Tools:** Trim, crop, resolution conversion, frame-rate conversion, extract frame, mute audio. (Video editor features are limited in V1).
+## Separate modules
+Audio and Video are no longer part of this app. Their planned capabilities are tracked in [the separate module scope](23-standalone-module-scope.md).
 
 ## User Experience Rules
 - **Batch Processing:** Support batch operations where technically safe (e.g., compress 10 images at once).

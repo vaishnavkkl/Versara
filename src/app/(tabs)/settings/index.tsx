@@ -1,65 +1,80 @@
 import { useCallback, useState, type ReactNode } from 'react';
-import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { AppState, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
-import { Directory, Paths } from 'expo-file-system';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { AppearanceButtons } from '@/components/appearance-buttons';
 import { LayoutToggle } from '@/components/layout-toggle';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
-import { usePalette } from '@/theme/colors';
-import { brandFont, getGradients, spacing as s, typography as t } from '@/theme/dashboard';
+import { useAppearance, usePalette } from '@/theme/colors';
+import { Host, Switch } from '@expo/ui';
+import { useReducedMotion } from 'react-native-reanimated';
+import { toolColors } from '@/theme/tool-colors';
+import { brandFont, spacing as s, typography as t } from '@/theme/dashboard';
 import { getFileAccessStatus, isFileEngineAvailable, requestFileAccess, type FileAccessStatus } from '@/features/files/file-access';
 import { clearRecentFiles } from '@/features/files/recent-files';
 import { formatSize } from '@/features/files/file-storage';
 import { FileEngine } from '../../../../modules/file-engine';
+import { clearUnusedThumbnails, unusedThumbnailBytes } from '@/features/files/thumbnail-cache';
+import { clearSearchHistory, hydrateSearchHistory, setSearchHistoryEnabled, useSearchHistory } from '@/features/search/search-history';
 
 type Icon = React.ComponentProps<typeof UniversalIcon>;
 const VERSION = Constants.expoConfig?.version ?? '1.0.0';
 const LICENSES = 'Versara is built with free and open-source software, including:\n\n• PDFium (BSD-3-Clause / Apache-2.0)\n• React Native (MIT)\n• Expo SDK (MIT)\n• React Native Reanimated (MIT)\n• Sora typeface (SIL Open Font License)\n• Material Icons (Apache-2.0)';
-const PRIVACY = 'Versara works offline. PDFs, images, videos and audio are processed on this device and are never uploaded.\n\nThere is no account, no analytics and no ads. Your preferences are stored only on this phone.';
+const PRIVACY = 'Versara works offline. PDFs and images are processed on this device and are never uploaded.\n\nThere is no account, no analytics and no ads. Your preferences are stored only on this phone.';
 
 function cacheBytes() {
-  try { return Paths.cache.info().size ?? 0; } catch { return 0; }
+  try { return unusedThumbnailBytes(); } catch { return 0; }
 }
 
 export default function SettingsScreen() {
   const colors = usePalette();
+  const mode = useAppearance(state => state.mode);
+  const reducedMotion = useReducedMotion();
   const [media, setMedia] = useState<FileAccessStatus>('unavailable');
   const [allFiles, setAllFiles] = useState<boolean | null>(null);
   const [cache, setCache] = useState(0);
+  const history = useSearchHistory();
+  const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(() => {
     let active = true;
-    void getFileAccessStatus().then(status => { if (active) setMedia(status); });
-    void FileEngine?.getPdfAccessAsync?.().then(result => { if (active) setAllFiles(result.granted); }).catch(() => {});
-    setTimeout(() => { if (active) setCache(cacheBytes()); }, 0);
-    return () => { active = false; };
+    hydrateSearchHistory();
+    const readPermissions = () => {
+      void getFileAccessStatus().then(status => { if (active) setMedia(status); });
+      void FileEngine?.getPdfAccessAsync?.().then(result => { if (active) setAllFiles(result.granted); }).catch(() => {});
+    };
+    readPermissions();
+    const timer = setTimeout(() => { if (active) setCache(cacheBytes()); }, 0);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') readPermissions(); });
+    return () => { active = false; clearTimeout(timer); subscription.remove(); };
   }, []);
   useFocusEffect(refresh);
 
   function clearCache() {
-    showDialog('Clear cache?', `Frees ${formatSize(cache)} of temporary previews and copies. Your files and edits are not affected.`, [
+    showDialog('Clear unused previews?', 'Removes cached thumbnails that are not in use. Your files, saved edits and open editing sessions stay unchanged. Previews are recreated when needed.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Clear', style: 'destructive', onPress: () => {
         try {
-          for (const item of Paths.cache.list()) { try { item.delete(); } catch { /* In use; cleared next time. */ } }
-          new Directory(Paths.cache, 'versara-thumbnails').create({ intermediates: true, idempotent: true });
+          const freed = clearUnusedThumbnails();
+          toast(freed ? `Freed ${formatSize(freed)}` : 'No unused previews to clear');
+        } catch {
+          toast('Some previews could not be cleared. Try again later.');
         } finally {
           setCache(cacheBytes());
-          toast('Cache cleared');
         }
       } },
     ], { ios: 'trash', android: 'delete-outline' });
   }
 
   function clearRecents() {
-    showDialog('Clear recent files?', 'Removes files from your recent lists. Originals on your device and saved edits stay where they are.', [
+    showDialog('Clear recent files?', 'Removes recent entries and their imported copies in Versara. Original files on your device and saved edits stay where they are.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Clear', style: 'destructive', onPress: () => {
-        void clearRecentFiles().then(count => toast(count ? `Cleared ${count} recent ${count === 1 ? 'file' : 'files'}` : 'No recent files')).catch(() => toast('Could not clear recent files'));
+        setClearing(true);
+        void clearRecentFiles().then(count => toast(count ? `Cleared ${count} recent ${count === 1 ? 'file' : 'files'}` : 'No recent files')).catch(() => toast('Could not clear recent files')).finally(() => setClearing(false));
       } },
     ], { ios: 'clock.arrow.circlepath', android: 'history' });
   }
@@ -69,28 +84,48 @@ export default function SettingsScreen() {
     toast('The welcome tip will show on Home');
   }
 
+  function clearHistory() {
+    showDialog('Clear search history?', 'Removes recent searches and recently used tools from this device. No files are deleted.', [
+      { text: 'Cancel', style: 'cancel' }, { text: 'Clear', style: 'destructive', onPress: () => { clearSearchHistory(); toast('Search history cleared'); } },
+    ]);
+  }
+
+  function toggleHistory() {
+    if (!history.enabled) { setSearchHistoryEnabled(true); return; }
+    showDialog('Turn off search history?', 'Existing search and tool history will be cleared. New activity will not be remembered.', [
+      { text: 'Cancel', style: 'cancel' }, { text: 'Turn off', onPress: () => setSearchHistoryEnabled(false) },
+    ]);
+  }
+
   async function shareApp() {
-    try { await Share.share({ message: 'Try Versara — offline PDF, image, video and audio tools that keep files on your device.' }); } catch { /* Dismissed. */ }
+    try { await Share.share({ message: 'Try Versara — offline PDF and image tools that keep files on your device.' }); } catch { /* Dismissed. */ }
   }
 
   const mediaLabel = media === 'granted' ? 'Allowed' : media === 'unavailable' ? 'Needs new build' : 'Not allowed';
   return (
-    <ScrollView style={[{ backgroundColor: colors.systemBackground }, getGradients(colors).dashboard]} contentContainerStyle={styles.content}>
-      <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Settings</ThemedText>
+    <ScrollView keyboardShouldPersistTaps="handled" style={{ backgroundColor: colors.systemBackground }} contentContainerStyle={styles.content}>
+      <View style={{ gap: s.sm }}><ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Settings</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>Make Versara feel right for you.</ThemedText></View>
 
       <Section title="Appearance">
         <Row icon={{ ios: 'circle.lefthalf.filled', android: 'contrast' }} title="Theme" trailing={<AppearanceButtons compact />} />
         <Row icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} title="Home layout" caption="Grid or list" trailing={<LayoutToggle />} />
+        <Row icon={{ ios: 'figure.walk', android: 'animation' }} title="Motion" caption="Follows your device accessibility preference" value={reducedMotion ? 'Reduced' : 'Standard'} />
+      </Section>
+
+      <Section title="Search & history">
+        <Row icon={{ ios: 'clock', android: 'history' }} title="Remember recent activity" caption="Searches and used tools, stored only on this device" trailing={<Host colorScheme={mode} matchContents><Switch value={history.enabled} onValueChange={toggleHistory} /></Host>} />
+        <Row icon={{ ios: 'trash', android: 'delete-outline' }} title="Clear search history" caption={`${history.queries.length} searches · ${history.tools.length} tools`} disabled={!history.queries.length && !history.tools.length} onPress={clearHistory} />
       </Section>
 
       <Section title="Files & storage">
-        <Row icon={{ ios: 'photo.on.rectangle', android: 'perm-media' }} title="Photos, videos & audio" caption={mediaLabel} disabled={!isFileEngineAvailable() || media === 'granted'} onPress={() => { void requestFileAccess().then(setMedia); }} value={media === 'granted' ? undefined : 'Allow'} />
+        <Row icon={{ ios: 'square.and.pencil', android: 'edit-note' }} title="Edited files" caption="Open, rename, duplicate and export your work" onPress={() => router.push('/edited-files')} />
+        <Row icon={{ ios: 'photo.on.rectangle', android: 'perm-media' }} title="Photo library" caption={mediaLabel} disabled={!isFileEngineAvailable() || media === 'granted'} onPress={() => { void requestFileAccess().then(setMedia); }} value={media === 'granted' || !isFileEngineAvailable() ? undefined : 'Allow'} />
         {Platform.OS === 'android' && allFiles !== null && (
-          <Row icon={{ ios: 'folder', android: 'folder-shared' }} title="All files access" caption={allFiles ? 'Allowed — Files and Search can browse storage' : 'Needed for Files and Search'} disabled={allFiles} onPress={() => { void FileEngine?.requestPdfAccessAsync().finally(refresh); }} value={allFiles ? undefined : 'Allow'} />
+          <Row icon={{ ios: 'folder', android: 'folder-shared' }} title="All files access" caption={allFiles ? 'Allowed — Files and Search can browse storage' : 'Needed for Files and Search'} disabled={allFiles} onPress={() => { void FileEngine?.requestPdfAccessAsync().then(result => setAllFiles(result.granted)).catch(() => toast('Could not open permission settings')); }} value={allFiles ? undefined : 'Allow'} />
         )}
-        <Row icon={{ ios: 'externaldrive', android: 'cleaning-services' }} title="Clear cache" caption={`${formatSize(cache)} of temporary files`} onPress={clearCache} />
-        <Row icon={{ ios: 'clock.arrow.circlepath', android: 'history' }} title="Clear recent files" caption="Empty the recent lists" onPress={clearRecents} />
-        <Row icon={{ ios: 'gearshape.2', android: 'app-settings-alt' }} title="System app settings" caption="Permissions and notifications" onPress={() => { void Linking.openSettings(); }} external />
+        <Row icon={{ ios: 'externaldrive', android: 'cleaning-services' }} title="Clear unused previews" caption={cache ? `${formatSize(cache)} available to clear` : 'No unused previews'} disabled={!cache} onPress={clearCache} />
+        <Row icon={{ ios: 'clock.arrow.circlepath', android: 'history' }} title="Clear recent files" caption={clearing ? 'Clearing…' : 'Remove recent entries and imported copies'} disabled={clearing} onPress={clearRecents} />
+        <Row icon={{ ios: 'gearshape.2', android: 'app-settings-alt' }} title="System app settings" caption="Permissions and notifications" onPress={() => { void Linking.openSettings().catch(() => toast('Could not open system settings')); }} external />
       </Section>
 
       <Section title="Help">
@@ -105,11 +140,11 @@ export default function SettingsScreen() {
         <Row icon={{ ios: 'square.and.arrow.up', android: 'share' }} title="Share Versara" onPress={() => { void shareApp(); }} />
       </Section>
 
-      <View style={[styles.developer, getGradients(colors).module, { backgroundColor: colors.moduleEnd, borderColor: colors.moduleBorder }]}>
-        <View style={styles.devBadge}><UniversalIcon ios="chevron.left.forwardslash.chevron.right" android="code" size={22} color="#FFFFFF" /></View>
-        <ThemedText style={[styles.devTitle, brandFont.display, { color: colors.moduleText }]}>Made by an enthusiast developer</ThemedText>
-        <ThemedText style={[styles.devBody, { color: colors.moduleDescription }]}>Versara is a passion project, built by one developer who loves fast, private, native tools. Every feature runs on your phone, with no servers and no sign-up.</ThemedText>
-        <ThemedText style={[styles.devFoot, { color: colors.moduleDescription }]}>Versara {VERSION} · Crafted with care</ThemedText>
+      <View style={[styles.developer, { backgroundColor: colors.catalogSurface, borderColor: colors.catalogBorder }]}>
+        <View style={[styles.devBadge, { backgroundColor: colors.imageSurface }]}><UniversalIcon ios="chevron.left.forwardslash.chevron.right" android="code" size={22} color={colors.imageInk} /></View>
+        <ThemedText style={[styles.devTitle, brandFont.display, { color: colors.label }]}>Built for your files</ThemedText>
+        <ThemedText style={[styles.devBody, { color: colors.secondaryLabel }]}>PDF and image tools that work on your device. No account, no uploads, and your work stays yours.</ThemedText>
+        <ThemedText style={[styles.devFoot, { color: colors.secondaryLabel }]}>Versara {VERSION} · Crafted with care</ThemedText>
       </View>
     </ScrollView>
   );
@@ -120,7 +155,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <View style={styles.section}>
       <ThemedText style={[styles.heading, { color: colors.secondaryLabel }]}>{title}</ThemedText>
-      <View style={[styles.group, { backgroundColor: colors.tileSurface, borderColor: colors.tileBorder, boxShadow: colors.tileShadow }]}>{children}</View>
+      <View style={[styles.group, { backgroundColor: colors.catalogSurface, borderColor: colors.catalogBorder }]}>{children}</View>
     </View>
   );
 }
@@ -128,8 +163,9 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 type RowProps = { icon: { ios: Icon['ios']; android: Icon['android'] }; title: string; caption?: string; value?: string; trailing?: ReactNode; onPress?: () => void; disabled?: boolean; external?: boolean };
 function Row({ icon, title, caption, value, trailing, onPress, disabled, external }: RowProps) {
   const colors = usePalette();
+  const tint = toolColors(icon.android, colors);
   const content = <>
-    <View style={[styles.icon, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={icon.ios} android={icon.android} size={19} color={colors.systemBlue} /></View>
+    <View style={[styles.icon, { backgroundColor: tint.surface }]}><UniversalIcon ios={icon.ios} android={icon.android} size={19} color={tint.ink} /></View>
     <View style={styles.grow}>
       <ThemedText style={[styles.label, { color: colors.label }]}>{title}</ThemedText>
       {!!caption && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>{caption}</ThemedText>}
@@ -155,7 +191,7 @@ const styles = StyleSheet.create({
   caption: { ...t.caption },
   value: { fontSize: 14, fontWeight: '600' },
   developer: { borderRadius: 24, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, padding: s.xl, gap: s.sm, overflow: 'hidden' },
-  devBadge: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF1F', alignItems: 'center', justifyContent: 'center', marginBottom: s.xs },
+  devBadge: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: s.xs },
   devTitle: { fontSize: 19, lineHeight: 25 },
   devBody: { fontSize: 14, lineHeight: 21 },
   devFoot: { fontSize: 12, lineHeight: 16, marginTop: s.xs, opacity: 0.8 },

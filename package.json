@@ -46,7 +46,8 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "postinstall": "node scripts/patch-router-startup.mjs && node scripts/prepare-pdfium.mjs",
+    "postinstall": "node scripts/patch-router-startup.mjs && node scripts/patch-router-types.mjs && node scripts/prepare-pdfium.mjs && node scripts/prepare-pdf-ocr.mjs",
+    "native:pdf-ocr": "node scripts/prepare-pdf-ocr.mjs",
     "native:pdfium": "node scripts/prepare-pdfium.mjs",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",

@@ -22,14 +22,11 @@ export default function AppTabs() {
           <TabTrigger name="index" href="/(tabs)" asChild>
             <TabButton>Home</TabButton>
           </TabTrigger>
-          <TabTrigger name="documents" href="/(tabs)/documents" asChild>
-            <TabButton>PDF</TabButton>
+          <TabTrigger name="files" href="/(tabs)/files" asChild>
+            <TabButton>Files</TabButton>
           </TabTrigger>
-          <TabTrigger name="image" href="/(tabs)/image" asChild>
-            <TabButton>Image</TabButton>
-          </TabTrigger>
-          <TabTrigger name="video" href="/(tabs)/video" asChild>
-            <TabButton>Video</TabButton>
+          <TabTrigger name="search" href="/(tabs)/search" asChild>
+            <TabButton>Search</TabButton>
           </TabTrigger>
           <TabTrigger name="settings" href="/(tabs)/settings" asChild>
             <TabButton>Settings</TabButton>

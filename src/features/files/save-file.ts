@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import { File } from 'expo-file-system';
-import { showDialog } from '@/components/app-dialog';
+import { promptFileName, showDialog } from '@/components/app-dialog';
 import { withLoading } from '@/components/app-loader';
 import { toast } from '@/components/toast';
 import { FileEngine, type SavedDeviceFile } from '../../../modules/file-engine';
@@ -22,7 +22,7 @@ export function deviceFolderLabel(mimeType: string) {
 }
 
 const MIME_BY_EXTENSION: Record<string, string> = {
-  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', heif: 'image/heif', bmp: 'image/bmp',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', heif: 'image/heif', tiff: 'image/tiff', tif: 'image/tiff', bmp: 'image/bmp',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', '3gp': 'video/3gpp',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', pdf: 'application/pdf',
 };
@@ -48,6 +48,25 @@ export function newFileName(name: string, suffix = 'edited') {
   return `${base} (${suffix} ${stamp})${extension}`;
 }
 
+export async function askNewFileName(suggested: string) {
+  const extension = suggested.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0] ?? '';
+  const baseOf = (value: string) => extension && value.toLowerCase().endsWith(extension.toLowerCase()) ? value.slice(0, -extension.length).trim() : value.trim();
+  const value = await promptFileName(suggested, name => {
+    if (!baseOf(name) || /^\.+$/.test(baseOf(name))) return 'Enter a file name.';
+    if (/[\\/:*?"<>|\x00-\x1f]/.test(name)) return 'Avoid slashes and these characters: : * ? " < > |';
+    if (/[. ]$/.test(baseOf(name))) return 'The name cannot end with a dot or space.';
+    return '';
+  });
+  return value === null ? null : `${baseOf(value)}${extension}`;
+}
+
+export async function askSaveOptions(originName: string, mimeType: string, suggestedName: string) {
+  const mode = await askSaveMode(originName, mimeType);
+  if (!mode) return null;
+  const name = mode === 'new' ? await askNewFileName(suggestedName) : originName;
+  return name === null ? null : { mode, name };
+}
+
 /** Writes to the shared device folder (Downloads/Pictures on Android, Files on iOS). */
 export async function saveToDevice(uri: string, name: string, mimeType: string, replaceUri = ''): Promise<SavedDeviceFile> {
   if (!FileEngine?.nativeDeviceSaveVersion) throw new Error('Install a new development build to save files to your device.');
@@ -58,7 +77,9 @@ export async function saveToDevice(uri: string, name: string, mimeType: string, 
 export async function savePdfResult(result: { uri: string; name: string }, origin?: Origin | null) {
   const mode: SaveMode | null = origin ? await askSaveMode(origin.name, 'application/pdf') : 'new';
   if (!mode) return null;
-  const saved = await withLoading('Saving to your device…', () => saveEditedOutput({ output: result.uri, mimeType: 'application/pdf', kind: 'pdf', mode, origin, name: result.name }));
+  const name = mode === 'new' ? await askNewFileName(result.name) : result.name;
+  if (name === null) return null;
+  const saved = await withLoading('Saving to your device…', () => saveEditedOutput({ output: result.uri, mimeType: 'application/pdf', kind: 'pdf', mode, origin, name }));
   toast(`Saved to ${saved.device.location}`);
   showDialog('PDF saved', `${saved.file.name}\nSaved to ${saved.device.location}\n\nYou can also find it in Edited files on the home screen.`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
   return saved;
@@ -80,8 +101,7 @@ export async function saveEditedOutput(options: { output: string; mimeType: stri
     previous = await findEditedFile(origin.uri).catch(() => null);
     if (sameFormat && origin.uri.startsWith(documentRoot()) && origin.uri !== output) {
       const target = new File(origin.uri);
-      if (target.exists) target.delete();
-      new File(output).move(target);
+      await new File(output).move(target, { overwrite: true });
       uri = origin.uri;
       invalidateThumbnails(uri);
     }

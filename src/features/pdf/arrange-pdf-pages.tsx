@@ -16,7 +16,8 @@ import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, 
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { openPdfScreen } from './open-pdf-screen';
+import { openPdfResult } from './open-pdf-screen';
+import { PdfDocumentPreview } from './pdf-document-preview';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string };
@@ -31,6 +32,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
   const [source, setSource] = useState<Source | null>(null);
+  const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [pages, setPages] = useState<Page[]>([]);
   const [name, setName] = useState('');
   const [moving, setMoving] = useState<number | null>(null);
@@ -40,7 +42,8 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   const [phase, setPhase] = useState('');
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<Output | null>(null);
+  const [result, setResult] = useState<Output | null>(null);
+
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
@@ -143,12 +146,14 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     finally { finish(); }
   }
 
+  if (source && previewPage !== null) return <PdfDocumentPreview uri={source.uri} count={source.pageCount} initialPage={previewPage} onClose={() => setPreviewPage(null)} />;
+
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
     <ThemedText style={styles.body}>{reorder ? 'Your new page order is saved.' : 'Your page rotations are saved.'} All {result.pageCount} pages are included. Your original is unchanged.</ThemedText>
     <ThemedText numberOfLines={3} style={[styles.body, { color: colors.secondaryLabel }]}>{result.name}</ThemedText>
-    <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfScreen(result)} />
+    <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(result, initialSelection?.returnRoute)} />
     <ToolButton title="Save to device" disabled={busy} onPress={saveResult} />
     <ToolButton title="Share" secondary disabled={busy} onPress={exportResult} />
     <ToolButton title="Edit another PDF" secondary disabled={busy} onPress={() => { setResult(null); setSource(null); setPages([]); setMoving(null); setError(''); }} />
@@ -180,7 +185,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
         <View style={styles.actions}>
           <View style={styles.thumb}><FileThumbnail uri={source!.uri} kind="pdf" page={item.original - 1} active={active} /></View>
           <View style={styles.grow}><ThemedText style={styles.label}>{reorder ? `${index + 1}. Original page ${item.original}` : `Page ${item.original}`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? `Position ${index + 1} in the new PDF` : item.rotation === 0 ? 'No change' : item.rotation === 270 ? 'Turn left 90°' : `Turn right ${item.rotation}°`}</ThemedText></View>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Preview original page ${item.original}`} disabled={busy} onPress={() => source && openPdfScreen(source, item.original - 1)} style={styles.icon}><UniversalIcon ios="eye" android="visibility" size={22} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Preview original page ${item.original}`} disabled={busy} onPress={() => setPreviewPage(item.original)} style={styles.icon}><UniversalIcon ios="eye" android="visibility" size={22} color={colors.systemBlue} /></Pressable>
         </View>
         <View style={styles.actions}>
           {reorder ? <>

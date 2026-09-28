@@ -16,7 +16,8 @@ import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, 
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { openPdfScreen } from './open-pdf-screen';
+import { openPdfResult } from './open-pdf-screen';
+import { PdfDocumentPreview } from './pdf-document-preview';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string };
@@ -29,6 +30,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const available = !!PdfEngine?.organizePdfs && !!PdfEngine?.inspectPdfs;
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
   const [source, setSource] = useState<Source | null>(null);
+  const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [rangeText, setRangeText] = useState('');
   const [showRanges, setShowRanges] = useState(false);
@@ -38,7 +40,8 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const [phase, setPhase] = useState('');
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<Output | null>(null);
+  const [result, setResult] = useState<Output | null>(null);
+
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
@@ -141,12 +144,14 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     catch (cause) { fail(cause); }
     finally { finish(); }
   }
+  if (source && previewPage !== null) return <PdfDocumentPreview uri={source.uri} count={source.pageCount} initialPage={previewPage} onClose={() => setPreviewPage(null)} />;
+
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
     <ThemedText style={styles.body}>{result.pageCount} {result.pageCount === 1 ? 'page' : 'pages'} saved in a new PDF. Your original is unchanged.</ThemedText>
     <ThemedText numberOfLines={3} style={[styles.body, { color: colors.secondaryLabel }]}>{result.name}</ThemedText>
-    <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfScreen(result)} />
+    <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(result, initialSelection?.returnRoute)} />
     <ToolButton title="Save to device" disabled={busy} onPress={saveResult} />
     <ToolButton title="Share" secondary disabled={busy} onPress={exportResult} />
     <ToolButton title="Edit another PDF" secondary disabled={busy} onPress={() => { setResult(null); setSource(null); setSelected(new Set()); setError(''); }} />
@@ -179,7 +184,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
             <ThemedText style={styles.caption}>Page {item}</ThemedText>
           </View>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => source && openPdfScreen(source, item - 1)} style={styles.eye}><UniversalIcon ios="eye" android="visibility" size={20} color={colors.systemBlue} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => setPreviewPage(item)} style={styles.eye}><UniversalIcon ios="eye" android="visibility" size={20} color={colors.systemBlue} /></Pressable>
       </View>}
     />
     {(!!source || busy || !!error) && <View style={[styles.footer, { borderColor: colors.separator }]}>

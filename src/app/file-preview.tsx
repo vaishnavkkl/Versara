@@ -22,9 +22,12 @@ import { createImagePdfToolForFile, discardPdfToolSession } from '@/features/pdf
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { usePalette } from '@/theme/colors';
 import { getGradients, typography as t } from '@/theme/dashboard';
+import { recordToolUse } from '@/features/search/search-history';
+import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
+import { FileEngine } from '../../modules/file-engine';
 
 export default function FilePreviewScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, uri: resultUri, name: resultName, revision } = useLocalSearchParams<{ id: string; uri?: string; name?: string; revision?: string }>();
   const colors = usePalette();
   const active = useScreenActive();
   const [file, setFile] = useState<RecentFile | null>(null);
@@ -38,6 +41,7 @@ export default function FilePreviewScreen() {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
+    if (resultUri) return () => { mounted.current = false; };
     let cancelled = false;
     void getRecentFile(id).then(async value => {
       if (!value || !new File(value.uri).exists) throw new Error('This file is no longer available. Open it again from your files.');
@@ -45,13 +49,14 @@ export default function FilePreviewScreen() {
       await touchRecentFile(value.id);
     }).catch(cause => { if (!cancelled) setError((cause as Error).message || 'Could not open this file.'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; mounted.current = false; };
-  }, [id]);
+  }, [id, resultUri, revision]);
   function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
   async function action(value: string) {
     if (!file || lock.current) return;
     setOptions(false);
-    if (value === 'text' || value === 'edit_text') { router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } }); return; }
-    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value] } }); return; }
+    if (file.kind === 'image' && ADVANCED_IMAGE_TOOLS.has(value) && FileEngine?.nativeImageToolsVersion) { router.push({ pathname: '/image-tool', params: { id: file.id, tool: value } }); recordToolUse(`Image:${value}`); return; }
+    if (value === 'text' || value === 'edit_text') { router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } }); recordToolUse(`Image:${value}`); return; }
+    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value] } }); recordToolUse(`Image:${value}`); return; }
     if (value === 'info') { showDialog('File details', `${file.name}\n${formatSize(file.size)}\n${file.mimeType}`, undefined, { ios: 'info.circle', android: 'info-outline' }); return; }
     lock.current = true; setBusy(true); setError(null);
     let session: string | null = null;
@@ -73,12 +78,13 @@ export default function FilePreviewScreen() {
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
-    {!focused && <ScreenHeader variant="close" title={file?.name ?? 'Preview'} onBack={close}><HelpButton tool={file?.kind === 'pdf' ? 'viewer' : undefined} /></ScreenHeader>}
-    {loading ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
-      {error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
-      {!file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer initialDocument={file} onFocusChange={setFocused} /> : <>
+    <Stack.Screen options={{ ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
+    {!focused && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} /></ScreenHeader>}
+    {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
+      {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
+      {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} /> : <>
         {file.kind === 'image' || file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
+          {landscape && <MediaToolbar side="left" kind={file.kind} busy={busy} landscape onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />}
           {active ? <MediaPreview key={file.uri} file={file} onClose={close} /> : <View style={styles.screen} />}
           <MediaToolbar kind={file.kind} busy={busy} landscape={landscape} onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />
         </View> : <>

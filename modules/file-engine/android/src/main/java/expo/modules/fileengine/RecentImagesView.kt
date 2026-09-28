@@ -98,6 +98,15 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private var paletteJson = ""
   private var grid = false
   var disabled = false
+  private var active = true
+  fun setActive(value: Boolean) {
+    if (active == value) return
+    active = value
+    if (value) loadVisible() else {
+      for (index in 0 until list.childCount) (list.getChildAt(index) as? Cell)?.cancel()
+      worker.queue.clear()
+    }
+  }
   private var label = Color.WHITE
   private var secondary = Color.LTGRAY
   private var surface = Color.DKGRAY
@@ -310,6 +319,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     }
 
     fun load() {
+      if (!active) return
       val current = item ?: return
       val key = wanted ?: return
       if (loaded == key || disposed || worker.isShutdown) return

@@ -63,3 +63,13 @@ export async function removeEditedFile(file: EditedFile) {
   notify();
 }
 export const editedFileExists = (file: EditedFile) => { try { return new File(file.uri).exists; } catch { return false; } };
+
+/** Names are library metadata; stable internal paths keep open readers valid. */
+export async function renameEditedFile(file: EditedFile, name: string) {
+  const database = await db();
+  await database.withExclusiveTransactionAsync(async transaction => {
+    await transaction.runAsync('UPDATE edited_files SET name = ?, modified = ? WHERE id = ?', name, Date.now(), file.id);
+    await transaction.runAsync('UPDATE recent_files SET name = ? WHERE uri = ?', name, storedUri(file.uri));
+  });
+  notify();
+}

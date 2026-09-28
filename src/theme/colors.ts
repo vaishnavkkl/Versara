@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 export const palettes = {
   dark: {
+    destructive: '#FF6961',
     label: '#FFFFFF', secondaryLabel: '#A1A1A6', separator: '#262626',
     systemBackground: '#000000', secondarySystemBackground: '#111111',
     systemBlue: '#FFFFFF', accent: '#2C2C2E', accentSurface: '#1C1C1E',
@@ -19,8 +20,13 @@ export const palettes = {
     moduleBorder: '#2C2C2E', moduleHighlight: '#3A3A3C', moduleText: '#FFFFFF', moduleDescription: '#A1A1A6',
     moduleIconSurface: '#FFFFFF12', moduleIconBorder: '#FFFFFF26', moduleShadow: '0 6px 16px rgba(0, 0, 0, 0.35)',
     tileSurface: '#101010', tileBorder: '#1F1F1F', tileShadow: '0 1px 2px rgba(0, 0, 0, 0.4)', tileTint: '2E',
+    catalogSurface: '#17181C', catalogPressed: '#22242A', catalogBorder: '#2A2D35',
+    sheetBackground: '#101114', fieldSurface: '#202228', scrim: '#00000080',
+    pdfInk: '#FFADA6', pdfSurface: '#382321', imageInk: '#89D5B0', imageSurface: '#1E3028',
+    filesInk: '#A7C7FF', filesSurface: '#202E44', privacyInk: '#C8B9F3', privacySurface: '#302A40',
   },
   light: {
+    destructive: '#BE123C',
     label: '#101643', secondaryLabel: '#555D83', separator: '#DADFF4',
     systemBackground: '#F4F5FD', secondarySystemBackground: '#FFFFFF',
     systemBlue: '#1A1953', accent: '#1A1953', accentSurface: '#E6E5F4',
@@ -37,6 +43,10 @@ export const palettes = {
     moduleBorder: '#353391', moduleHighlight: '#5E5BC2', moduleText: '#FFFFFF', moduleDescription: '#D0D9F1',
     moduleIconSurface: '#FFFFFF14', moduleIconBorder: '#FFFFFF2E', moduleShadow: '0 6px 16px rgba(18, 34, 82, 0.14)',
     tileSurface: '#FFFFFF', tileBorder: '#E8EAF3', tileShadow: '0 6px 18px rgba(26, 25, 83, 0.08)', tileTint: '24',
+    catalogSurface: '#FFFFFF', catalogPressed: '#F0F2F8', catalogBorder: '#E2E5ED',
+    sheetBackground: '#F6F7FA', fieldSurface: '#EDEFF5', scrim: '#0B102966',
+    pdfInk: '#B94338', pdfSurface: '#FCECE8', imageInk: '#216B4B', imageSurface: '#E7F4EC',
+    filesInk: '#315FAA', filesSurface: '#EAF0FC', privacyInk: '#6F4E9B', privacySurface: '#F0EAF8',
   },
 } as const;
 export type Palette = { [Key in keyof typeof palettes.dark]: string };

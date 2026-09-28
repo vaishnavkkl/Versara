@@ -36,7 +36,7 @@ export async function openExplorerEntry(entry: ExplorerEntry) {
     }
     // Share targets need an app-owned copy; external paths are not exposed through the share provider.
     const copy = new File(Paths.cache, `share-${Date.now()}-${entry.name}`);
-    new File(entry.uri).copy(copy);
+    await new File(entry.uri).copy(copy);
     await shareFile({ uri: copy.uri, mimeType: entry.mimeType || undefined });
   } finally {
     opening = false;

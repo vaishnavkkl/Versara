@@ -9,9 +9,9 @@ The application must be fundamentally **utility-first**, working entirely on-dev
 - AI is an optional supporting capability, not the core reason for the app.
 
 ## Product Positioning
-**Offline mobile utility toolbox for documents, media, privacy, networking and device diagnostics.**
+**Offline mobile toolbox for PDFs, images and screenshot privacy.**
 
-- Primary value proposition: Complete everyday file and device tasks directly on the phone.
+- Primary value proposition: Complete everyday document and image tasks directly on the phone.
 - Secondary value proposition: Private/on-device processing for sensitive files.
 - AI value proposition: Ask the local AI to explain a result or document.
 
@@ -21,7 +21,7 @@ Every tool must follow:
 
 - Optimize for minimum number of taps.
 - Hide technical complexities (e.g., show "Target size: 25 MB" instead of bitrate/codec settings) while offering Advanced modes separately.
-- Core tools must work completely offline. Network tests require internet, but the UI must clearly distinguish "Offline" vs "Needs Internet".
+- Core tools must work completely offline.
 
 ## Differentiation Strategy
 Differentiate through:
@@ -32,6 +32,9 @@ Differentiate through:
 5. Batch processing
 6. Exact target-size controls
 7. Privacy/redaction
-8. Device diagnostics explained in plain language
+8. Clear previews before saving
 9. Optional local AI
 10. Consistent UX across every tool
+
+## Scope decision - September 2026
+Audio, Video and Device (including network and battery diagnostics) will be developed as separate modules outside this app's current delivery plan. Do not list them on the dashboard, in search, or in the tool catalog. Versara currently focuses on PDF, Image and Privacy. Existing general file-browser compatibility does not imply an editing module is available.

@@ -8,30 +8,31 @@ const ITEM_WIDTH = 68;
 
 const PageThumb = memo(function PageThumb({ uri, index, selected, onSelect }: { uri: string; index: number; selected: boolean; onSelect: (page: number) => void }) {
   const colors = usePalette();
-  return <Pressable accessibilityRole="button" accessibilityLabel={`Page ${index + 1}`} accessibilityState={{ selected }} onPress={() => onSelect(index)} style={styles.item}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={`Page ${index + 1}`} accessibilityState={{ selected }} onPress={() => onSelect(index)} style={[styles.item, { height: 86 }] }>
     <View style={[styles.thumbnail, { borderColor: selected ? colors.systemBlue : 'transparent' }]}><FileThumbnail uri={uri} kind="pdf" page={index} /></View>
     <ThemedText style={[styles.number, { color: selected ? colors.systemBlue : colors.secondaryLabel, fontWeight: selected ? '700' : '400' }]}>{index + 1}</ThemedText>
   </Pressable>;
 });
 
-export function PdfPageStrip({ uri, count, page, onSelect }: { uri: string; count: number; page: number; onSelect: (page: number) => void }) {
+export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1 }) {
   const colors = usePalette();
   const list = useRef<FlatList<number>>(null);
   const select = useRef(onSelect);
   useEffect(() => { select.current = onSelect; });
   const stableSelect = useCallback((value: number) => select.current(value), []);
-  const pages = useMemo(() => Array.from({ length: count }, (_, index) => index), [count]);
+  const pages = useMemo(() => Array.from({ length: count }, (_, index) => index).filter(index => parity === undefined || index % 2 === parity), [count, parity]);
   // Fast scrolling in the reader changes the page many times a second; follow it once it settles.
   useEffect(() => {
-    if (page >= count) return;
-    const timer = setTimeout(() => list.current?.scrollToIndex({ index: page, animated: true, viewPosition: 0.5 }), 160);
+    if (page >= count || !pages.length) return;
+    const index = Math.min(pages.length - 1, parity === undefined ? page : Math.floor(page / 2));
+    const timer = setTimeout(() => list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 }), 160);
     return () => clearTimeout(timer);
-  }, [page, count]);
+  }, [page, count, parity, pages.length]);
   const renderItem = useCallback<ListRenderItem<number>>(({ item }) => <PageThumb uri={uri} index={item} selected={item === page} onSelect={stableSelect} />, [uri, page, stableSelect]);
-  return <View style={[styles.strip, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
-    <FlatList ref={list} horizontal data={pages} keyExtractor={String} initialNumToRender={8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
-      removeClippedSubviews showsHorizontalScrollIndicator={false} renderItem={renderItem} getItemLayout={getItemLayout} />
+  return <View style={[vertical ? styles.sideStrip : styles.strip, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
+    <FlatList ref={list} horizontal={!vertical} data={pages} keyExtractor={String} initialNumToRender={vertical ? 3 : 8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
+      removeClippedSubviews showsHorizontalScrollIndicator={false} renderItem={renderItem} getItemLayout={vertical ? (_, index) => ({ length: 86, offset: 86 * index, index }) : getItemLayout} />
   </View>;
 }
 const getItemLayout = (_: unknown, index: number) => ({ length: ITEM_WIDTH, offset: ITEM_WIDTH * index, index });
-const styles = StyleSheet.create({ strip: { height: 94, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth }, item: { width: ITEM_WIDTH, alignItems: 'center', gap: 2 }, thumbnail: { width: 48, height: 62, borderRadius: 9, borderWidth: 2, padding: 1, overflow: 'hidden' }, number: { fontSize: 11, lineHeight: 16 } });
+const styles = StyleSheet.create({ sideStrip: { width: 68, paddingVertical: 4, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth }, strip: { height: 94, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth }, item: { width: ITEM_WIDTH, alignItems: 'center', gap: 2 }, thumbnail: { width: 48, height: 62, borderRadius: 9, borderWidth: 2, padding: 1, overflow: 'hidden' }, number: { fontSize: 11, lineHeight: 16 } });

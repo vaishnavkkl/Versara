@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import UIKit
+import ImageIO
 
 /// Standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) as iOS faces.
 func versaraFont(_ name: String, _ size: CGFloat) -> UIFont {
@@ -26,18 +27,21 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   let onSubmitText = EventDispatcher()
 
   private struct Box { let id: Int; let rect: CGRect }
-  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false }
+  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false; var submitOnReturn = false }
 
   private let scroll = UIScrollView()
   private let page = UIView()
   private let imageView = UIImageView()
   private let overlay = EditOverlay()
-  // Multi-line: Return starts a new line and lines never wrap, matching how the PDF engine writes them.
+  // The keyboard Done action commits the on-page text.
   private let field = UITextView()
   private let placeholder = UILabel()
   private var lineHeight: CGFloat = 16
   private var fieldFont = UIFont.systemFont(ofSize: 16)
   private let handle = UIView()
+  private var pendingSource: String?
+  private var decoding = false
+  private var disposed = false
   private let worker = DispatchQueue(label: "com.versara.pdf.edit-canvas", qos: .userInitiated)
   private var source = ""
   private var ticket = 0
@@ -77,7 +81,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     field.textContainer.lineFragmentPadding = 0
     field.textContainer.lineBreakMode = .byClipping
     field.textContainer.widthTracksTextView = true
-    field.returnKeyType = .default
+    field.returnKeyType = .done
     field.autocapitalizationType = .sentences
     placeholder.text = "Type here"
     placeholder.textColor = UIColor.gray.withAlphaComponent(0.6)
@@ -110,16 +114,22 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   }
 
   func setSource(_ value: String) {
-    guard value != source else { return }
-    source = value
-    ticket += 1
-    let current = ticket
+    guard !disposed, value != source else { return }
+    source = value; ticket += 1; pendingSource = value; decodeNext()
+  }
+  private func decodeNext() {
+    guard !disposed, !decoding, let value = pendingSource else { return }
+    pendingSource = nil; decoding = true; let current = ticket
     worker.async { [weak self] in
-      let url = URL(string: value)
-      let image = url.flatMap { $0.isFileURL ? UIImage(contentsOfFile: $0.path) : nil } ?? UIImage(contentsOfFile: value)
-      DispatchQueue.main.async {
-        guard let self, current == self.ticket, let image else { return }
-        self.imageView.image = image
+      let image: UIImage? = autoreleasepool {
+        let url = URL(string: value).flatMap { $0.isFileURL ? $0 : nil } ?? URL(fileURLWithPath: value)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let cg = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }; self.decoding = false
+        if !self.disposed && current == self.ticket { self.imageView.image = image }
+        self.decodeNext()
       }
     }
   }
@@ -200,10 +210,12 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       next.size = number(item["size"]) ?? 16
       next.color = item["color"] as? Int ?? 0x101020
       next.underline = item["underline"] as? Bool ?? false
+      next.submitOnReturn = item["submitOnReturn"] as? Bool ?? false
     }
     let previous = textBox
     let opening = next.visible && !previous.visible
     textBox = next
+    field.returnKeyType = next.submitOnReturn ? .done : .default
     let restyle = opening || next.color != previous.color || next.underline != previous.underline || next.font != previous.font || next.size != previous.size
     if restyle { styleField() }
     if field.text != next.text || restyle {
@@ -357,6 +369,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     layoutField()
   }
   func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+    if textBox.submitOnReturn && text == "\n" { onSubmitText(["text": textView.text ?? ""]); textView.resignFirstResponder(); return false }
     let next = (textView.text as NSString).replacingCharacters(in: range, with: text)
     return next.count <= 4000 && next.components(separatedBy: "\n").count <= 50
   }
@@ -365,6 +378,9 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   }
 
   func dispose() {
+    disposed = true; pendingSource = nil
+    scroll.layer.removeAllAnimations(); scroll.delegate = nil
+    boxes = []; overlay.rects = []; overlay.marks = []
     ticket += 1
     if field.isFirstResponder { field.resignFirstResponder() }
     imageView.image = nil

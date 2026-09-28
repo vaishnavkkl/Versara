@@ -159,8 +159,14 @@ internal object ImageProcessing {
           if (cropped != bitmap) { bitmap.recycle(); bitmap = cropped }
         }
       }
-      if (scale < 0.999f) {
-        val resized = Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).roundToInt()), max(1, (bitmap.height * scale).roundToInt()), true)
+      val outputWidth = options.optInt("width", max(1, (bitmap.width * scale).roundToInt()))
+      val outputHeight = options.optInt("height", max(1, (bitmap.height * scale).roundToInt()))
+      if (options.has("width") || options.has("height")) {
+        val budget = if (lowMemory(context)) 3_000_000 else 6_000_000
+        require(outputWidth in 1..8192 && outputHeight in 1..8192 && outputWidth.toLong() * outputHeight <= budget) { "Choose smaller output dimensions for this device." }
+      }
+      if (outputWidth != bitmap.width || outputHeight != bitmap.height) {
+        val resized = Bitmap.createScaledBitmap(bitmap, outputWidth, outputHeight, true)
         if (resized != bitmap) { bitmap.recycle(); bitmap = resized }
       }
       if (!edits.identityColor) {

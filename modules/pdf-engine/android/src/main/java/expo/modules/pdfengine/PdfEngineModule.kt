@@ -8,9 +8,19 @@ class PdfEngineModule : Module() {
   private val organizer = PdfOrganizer()
   private val textEditor = PdfTextEditor()
   private val thumbnails = FileThumbnailer()
+  private val advanced = PdfAdvancedTools()
   override fun definition() = ModuleDefinition {
     Name("PdfEngine")
     Events("onConversionProgress")
+    Constant("nativeAdvancedToolsVersion") { 2 }
+    AsyncFunction("processPdf") { id: String, request: String, promise: expo.modules.kotlin.Promise ->
+      val context = appContext.reactContext
+      if (context == null) promise.reject("PDF_UNAVAILABLE", "The app is not ready.", null)
+      else advanced.run(context, id, request, promise) { completed, total ->
+        sendEvent("onConversionProgress", mapOf("jobId" to id, "completed" to completed, "total" to total))
+      }
+    }
+    Function("cancelPdfTool") { id: String -> advanced.cancel(id) }
     AsyncFunction("renderFileThumbnail") { id: String, uri: String, kind: String, page: Int, output: String, promise: expo.modules.kotlin.Promise ->
       val context = appContext.reactContext
       if (context == null) promise.reject("THUMBNAIL_UNAVAILABLE", "Preview unavailable.", null)
@@ -46,7 +56,8 @@ class PdfEngineModule : Module() {
       }
     }
     Function("cancelPdfJob") { id: String -> organizer.cancel(id) }
-    OnDestroy { converter.destroy(); organizer.destroy(); textEditor.destroy(); thumbnails.destroy() }
+    OnDestroy { converter.destroy(); organizer.destroy(); textEditor.destroy(); thumbnails.destroy(); advanced.destroy() }
+    // Keep the reader as the default for older JavaScript bundles.
     View(PdfEngineView::class) {
       Events("onLoad", "onPageChange", "onZoomChange", "onError")
       Prop("uri") { view: PdfEngineView, uri: String -> view.source = uri }
@@ -58,6 +69,20 @@ class PdfEngineModule : Module() {
       Prop("dark") { view: PdfEngineView, dark: Boolean -> view.dark = dark }
       OnViewDidUpdateProps { view: PdfEngineView -> view.applyProps() }
       OnViewDestroys { view: PdfEngineView -> view.dispose() }
+    }
+    View(PdfMarkupView::class) {
+      Events("onMark")
+      Prop("source") { view: PdfMarkupView, value: String -> view.setSource(value) }
+      Prop("marks") { view: PdfMarkupView, value: String -> view.setMarks(value) }
+      Prop("mode") { view: PdfMarkupView, value: String -> view.mode = value }
+      Prop("inkColor") { view: PdfMarkupView, value: String -> view.inkColor = value }
+      Prop("fillColor") { view: PdfMarkupView, value: String -> view.fillColor = value }
+      Prop("shapePath") { view: PdfMarkupView, value: String -> view.shapePath = value }
+      Prop("inkWidth") { view: PdfMarkupView, value: Double -> view.inkWidth = value }
+      Prop("brush") { view: PdfMarkupView, value: String -> view.brush = value }
+      Prop("pattern") { view: PdfMarkupView, value: String -> view.pattern = value }
+      Prop("disabled") { view: PdfMarkupView, value: Boolean -> view.disabled = value }
+      OnViewDestroys { view: PdfMarkupView -> view.dispose() }
     }
     View(PdfEditCanvasView::class) {
       Events("onSelectObject", "onPlace", "onTextChange", "onSubmitText")

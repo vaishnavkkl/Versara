@@ -1,5 +1,8 @@
+import { EditorOption } from '@/components/editor-option';
+import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
+import { DEFAULT_RESIZE, ImageResizeControls, resolveResize } from './image-resize-controls';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { BackHandler, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { router, Stack } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -9,13 +12,14 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { ScreenHeader } from '@/components/screen-header';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
+import { toolColors } from '@/theme/tool-colors';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import ImageEditorView, { hasNativeImageEditor, type ImageCrop } from '../../../modules/file-engine/src/ImageEditorView';
 import { FileEngine } from '../../../modules/file-engine';
-import { getRecentFile, type RecentFile } from './recent-files';
-import { askSaveMode, newFileName, saveEditedOutput } from './save-file';
+import { type RecentFile } from './recent-files';
+import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
 import { formatSize, shareFile } from './file-storage';
 
 export type EditorTab = 'crop' | 'rotate' | 'adjust' | 'filters' | 'resize' | 'export';
@@ -35,14 +39,14 @@ const ASPECTS = [
   { id: '4:3', label: '4:3' }, { id: '3:4', label: '3:4' }, { id: '16:9', label: '16:9' }, { id: '9:16', label: '9:16' },
 ];
 const FILTERS = [{ id: 'none', label: 'None' }, { id: 'mono', label: 'Mono' }, { id: 'sepia', label: 'Sepia' }, { id: 'vivid', label: 'Vivid' }, { id: 'fade', label: 'Fade' }, { id: 'cool', label: 'Cool' }];
-const SCALES = [1, 0.75, 0.5, 0.25];
-const FORMATS = Platform.OS === 'android' ? ['jpeg', 'png', 'webp'] as const : ['jpeg', 'png'] as const;
-type Format = (typeof FORMATS)[number];
-const EXTENSIONS: Record<Format, string> = { jpeg: '.jpg', png: '.png', webp: '.webp' } as Record<Format, string>;
+type Format = 'jpeg' | 'png' | 'webp' | 'heic' | 'tiff';
+const EXTENSIONS: Record<Format, string> = { jpeg: '.jpg', png: '.png', webp: '.webp', heic: '.heic', tiff: '.tiff' };
 const outputDirectory = () => new Directory(Paths.document, 'Versara Images');
 
 /** Controls in React; decoding, preview, crop handles and export all run natively. */
 export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; initialTab?: EditorTab }) {
+  const workspace = useImageWorkspace(id);
+  const [formats, setFormats] = useState<Format[]>(Platform.OS === 'android' ? ['jpeg','png','webp'] : ['jpeg','png']);
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
   const active = useScreenActive();
@@ -53,24 +57,31 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   const [aspect, setAspect] = useState(initialTab === 'crop' ? 'free' : 'none');
   const [crop, setCrop] = useState<ImageCrop | null>(null);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
-  const [scale, setScale] = useState(1);
+  const [resize, setResize] = useState(DEFAULT_RESIZE);
+  const resizeChanged = resize.mode === 'pixels' || resize.percent !== '100';
   const [format, setFormat] = useState<Format>('jpeg');
   const [quality, setQuality] = useState(initialTab === 'export' ? 80 : 92);
   const [busy, setBusy] = useState(false);
   const [landscape, setLandscape] = useState(false);
-  const { width } = useWindowDimensions();
+  const { width, height: windowHeight, fontScale } = useWindowDimensions();
   const sideWidth = Math.round(Math.min(440, Math.max(300, width * 0.4)));
   const mounted = useRef(true);
 
   useEffect(() => {
     mounted.current = true;
-    void getRecentFile(id).then(value => {
+    void workspace.resolve().then(async value => {
       if (!mounted.current) return;
       if (!value || !new File(value.uri).exists) setError('This image is no longer available. Open it again from your files.');
-      else setFile(value);
-    });
+      else {
+        setFile(value);
+        if (FileEngine?.nativeImageToolsVersion) {
+          const info = await FileEngine.processImage(`formats-${Date.now()}`, JSON.stringify({ action: 'info', uri: value.uri }));
+          if (mounted.current && Array.isArray(info.formats)) setFormats(info.formats.filter((format: string) => format in EXTENSIONS) as Format[]);
+        }
+      }
+    }).catch(cause => { if (mounted.current) setError((cause as Error).message); });
     return () => { mounted.current = false; };
-  }, [id]);
+  }, [id, workspace]);
 
   const closeRef = useRef(() => {});
   useEffect(() => {
@@ -79,24 +90,35 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   }, []);
 
   const update = (next: Partial<Edits>) => setEdits(current => ({ ...current, ...next }));
-  const changed = JSON.stringify(edits) !== JSON.stringify(NEUTRAL) || !!crop || scale < 1 || format !== 'jpeg' || quality !== 92;
-  const turned = edits.rotation === 90 || edits.rotation === 270;
-  const outputSize = size ? {
-    width: Math.max(1, Math.round((turned ? size.height : size.width) * (crop?.width ?? 1) * scale)),
-    height: Math.max(1, Math.round((turned ? size.width : size.height) * (crop?.height ?? 1) * scale)),
-  } : null;
+  const changed = JSON.stringify(edits) !== JSON.stringify(NEUTRAL) || !!crop || resizeChanged || format !== 'jpeg' || quality !== 92;
+  const radians = edits.rotation * Math.PI / 180;
+  const cosine = Math.abs(Math.cos(radians)), sine = Math.abs(Math.sin(radians));
+  const straighten = ((edits.rotation + 45) % 90) - 45;
+  const resizeSource = size ? {
+    width: Math.max(1, Math.round((size.width * cosine + size.height * sine) * (crop?.width ?? 1))),
+    height: Math.max(1, Math.round((size.width * sine + size.height * cosine) * (crop?.height ?? 1))),
+  } : undefined;
 
   function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
   function requestClose() {
-    if (!changed || busy) { close(); return; }
+    if (busy) return;
+    if (!changed && !workspace.changed) { close(); return; }
     showDialog('Discard edits?', 'Your changes to this image have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: close }], { ios: 'photo', android: 'image' });
   }
   useEffect(() => { closeRef.current = requestClose; });
 
   async function save() {
     if (!file || busy || !FileEngine) return;
-    const mode = await askSaveMode(file.name, file.mimeType.includes('*') ? 'image/jpeg' : file.mimeType);
-    if (!mode || !mounted.current) return;
+    Keyboard.dismiss();
+    let dimensions: ReturnType<typeof resolveResize>;
+    if (resizeChanged || tab === 'resize') {
+      if (!FileEngine.nativeImageResizeVersion) { setError('Install a new development build to save custom image sizes.'); return; }
+      try { dimensions = resolveResize(resizeSource, resize); if (!dimensions) throw new Error('Wait for the image dimensions to load.'); }
+      catch (cause) { setError((cause as Error).message); return; }
+    }
+    const options = await askSaveOptions(file.name, file.mimeType.includes('*') ? 'image/jpeg' : file.mimeType, newFileName(file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '') + EXTENSIONS[format]));
+    if (!options || !mounted.current) return;
+    const { mode } = options;
     setBusy(true); setError(null);
     const base = file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) || 'Image';
     const stamp = new Date().toISOString().replace(/[T:.]/g, '-').replace(/Z$/, '');
@@ -107,8 +129,8 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
       const output = new File(directory, name);
       const engine = FileEngine;
       const { result, saved } = await withLoading('Saving your image…', async () => {
-        const rendered = await engine.editImage(JSON.stringify({ uri: file.uri, outputUri: output.uri, edits, crop, scale, format, quality }));
-        const stored = await saveEditedOutput({ output: rendered.uri, mimeType: rendered.mimeType, kind: 'image', mode, origin: file, name: newFileName(file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '') + EXTENSIONS[format]) });
+        const rendered = await engine.editImage(JSON.stringify({ uri: file.uri, outputUri: output.uri, edits, crop, ...dimensions, format, quality }));
+        const stored = await saveEditedOutput({ output: rendered.uri, mimeType: rendered.mimeType, kind: 'image', mode, origin: workspace.origin ?? file, name: options.name });
         return { result: rendered, saved: stored };
       });
       toast(`Saved to ${saved.device.location}`);
@@ -126,10 +148,18 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     }
   }
 
-  const chip = (selected: boolean, label: string, onPress: () => void, key = label) => <Pressable key={key} accessibilityRole="button" accessibilityState={{ selected, disabled: busy }} disabled={busy} onPress={onPress}
-    style={[styles.chip, { backgroundColor: selected ? colors.systemBlue : colors.accentSurface }]}>
-    <ThemedText style={[styles.chipText, { color: selected ? colors.systemBackground : colors.systemBlue }]}>{label}</ThemedText>
-  </Pressable>;
+  async function applyToWorkspace() {
+    if (!file || !FileEngine || busy) throw new Error('Wait for the image to finish loading.');
+    if (!changed) return;
+    const dimensions = resizeChanged ? resolveResize(resizeSource, resize) : undefined;
+    if (resizeChanged && !dimensions) throw new Error('Wait for the image dimensions to load.');
+    Keyboard.dismiss(); setBusy(true);
+    try {
+      const result = await workspace.render(outputUri => FileEngine!.editImage(JSON.stringify({ uri: file.uri, outputUri, edits, crop, ...dimensions, format: 'png', quality: 100 })));
+      workspace.accept(result, file);
+    } finally { if (mounted.current) setBusy(false); }
+  }
+  const chip = (selected: boolean, label: string, onPress: () => void, key = label) => <EditorOption key={key} label={label} selected={selected} disabled={busy} onPress={onPress} />;
   const slider = (label: string, value: number, min: number, max: number, onChange: (value: number) => void, format = (v: number) => `${Math.round(v * 100)}`) => <View key={label} style={styles.sliderRow}>
     <ThemedText style={styles.sliderLabel}>{label}</ThemedText>
     <View style={styles.grow}><Host colorScheme={mode} seedColor={colors.accent} matchContents={{ vertical: true }}><Slider value={value} min={min} max={max} onValueChange={onChange} disabled={busy} /></Host></View>
@@ -148,6 +178,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
       {chip(edits.flipV, 'Flip vertical', () => update({ flipV: !edits.flipV }))}
       {chip(false, 'Reset', () => update({ rotation: 0, flipH: false, flipV: false }))}
     </>)}
+    {tab === 'rotate' && !!FileEngine?.nativeImageToolsVersion && slider('Straighten', straighten, -44, 44, value => update({ rotation: (edits.rotation - straighten + Math.round(value) + 360) % 360 }), value => `${Math.round(value)} deg`)}
     {tab === 'adjust' && <>
       {slider('Brightness', edits.brightness, -0.5, 0.5, value => update({ brightness: value }), v => `${Math.round(v * 200)}`)}
       {slider('Contrast', edits.contrast, 0.5, 1.5, value => update({ contrast: value }), v => `${Math.round((v - 1) * 200)}`)}
@@ -157,28 +188,29 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     </>}
     {tab === 'filters' && chipRow(<>{FILTERS.map(item => chip(edits.filter === item.id, item.label, () => update({ filter: item.id }), item.id))}</>)}
     {tab === 'resize' && <>
-      {chipRow(<>{SCALES.map(value => chip(scale === value, `${Math.round(value * 100)}%`, () => setScale(value), String(value)))}</>)}
-      <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>{outputSize ? `Output about ${outputSize.width} × ${outputSize.height} px. Very large photos are limited to 4096 px on the longest side.` : 'Reading image size…'}</ThemedText>
+      <ImageResizeControls source={resizeSource} value={resize} disabled={busy} onChange={setResize} />
+      <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Dimensions include your crop and rotation. Unlock proportions to stretch to an exact size.</ThemedText>
     </>}
     {tab === 'export' && <>
-      {chipRow(<>{FORMATS.map(value => chip(format === value, value.toUpperCase(), () => setFormat(value), value))}</>)}
-      {format !== 'png' && slider('Quality', quality, 40, 100, value => setQuality(Math.round(value)), v => `${Math.round(v)}`)}
+      {chipRow(<>{formats.map(value => chip(format === value, value.toUpperCase(), () => setFormat(value), value))}</>)}
+      {!['png', 'tiff'].includes(format) && slider('Quality', quality, 40, 100, value => setQuality(Math.round(value)), v => `${Math.round(v)}`)}
       <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Saving creates a new image without location or camera details. Lower quality makes smaller files.</ThemedText>
     </>}
   </View>;
 
-  const tabs = <ScrollView horizontal={!landscape} showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false} contentContainerStyle={landscape ? styles.tabColumn : styles.tabRow}>
-    {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} onPress={() => { setTab(item.id); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={styles.tab}>
-      <View style={[styles.tabIcon, { backgroundColor: tab === item.id ? colors.systemBlue : colors.accentSurface }]}>
-        <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : colors.systemBlue} />
+  const tabs = <View style={landscape ? styles.tabColumn : [styles.tabRow, { flexDirection: 'row', flexWrap: 'wrap' }]}>
+    {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} onPress={() => { setTab(item.id); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={[styles.tab, !landscape && { width: fontScale >= 1.4 ? '31%' : '15.5%' }]}>
+      <View style={[styles.tabIcon, { backgroundColor: tab === item.id ? toolColors(item.id, colors).ink : toolColors(item.id, colors).surface }]}>
+        <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : toolColors(item.id, colors).ink} />
       </View>
       <ThemedText style={styles.tabLabel}>{item.title}</ThemedText>
     </Pressable>)}
-  </ScrollView>;
+  </View>;
 
-  return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
+  return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
     <ScreenHeader title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}>
+      <ImageWorkspaceTools id={id} current={tab} disabled={!file || busy} onApply={applyToWorkspace} />
       <Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait view' : 'Switch to landscape view'} onPress={() => setLandscape(value => !value)} style={styles.headerButton}>
         <UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.systemBlue} />
       </Pressable>
@@ -190,16 +222,16 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     {!hasNativeImageEditor || !ImageEditorView ? <View style={styles.center}><ThemedText style={styles.note}>Install a new development build to edit images.</ThemedText></View>
       : !file ? <View style={styles.center}>{!error && <AppLoader />}</View>
       : <View style={[styles.grow, landscape && styles.row]}>
-        <View style={[styles.grow, { backgroundColor: '#000' }]}>
+        <View style={[styles.grow, { backgroundColor: colors.secondarySystemBackground }]}>
           {active && <ImageEditorView style={styles.grow} source={file.uri} edits={JSON.stringify(edits)} aspect={aspect}
             onLoad={({ nativeEvent }) => setSize(nativeEvent)} onError={({ nativeEvent }) => setError(nativeEvent.message)}
             onCropChange={({ nativeEvent }) => setCrop(nativeEvent.width ? nativeEvent as ImageCrop : null)} />}
         </View>
         <View style={[landscape ? [styles.side, { width: sideWidth }] : styles.bottom, { borderColor: colors.separator }]}>
-          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{panel}{tabs}</>}
+          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <><ScrollView style={{ maxHeight: windowHeight * 0.4, flexGrow: 0 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets keyboardDismissMode="on-drag">{panel}</ScrollView>{tabs}</>}
         </View>
       </View>}
-  </View>;
+  </KeyboardAvoidingView>;
 }
 
 const styles = StyleSheet.create({

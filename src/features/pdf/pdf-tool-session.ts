@@ -2,11 +2,13 @@ import { browseFiles, createImportDirectory, disposeImports, type LocalFile } fr
 import { File, type Directory } from 'expo-file-system';
 
 /** `origin` is the Versara file the tool was opened from, so edits can be saved back over it. */
-export type InitialSelection = { directory: Directory; files: LocalFile[]; origin?: { uri: string; name: string }; initialPage?: number };
-export type PdfTool = 'viewer' | 'edit_text' | 'remove_text' | 'text' | 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate' | 'from_image';
+export type PdfReturnRoute = '/file-preview' | '/pdf-viewer';
+export type InitialSelection = { directory: Directory; files: LocalFile[]; origin?: { uri: string; name: string }; initialPage?: number; returnRoute?: PdfReturnRoute };
+export const advancedPdfTools = new Set<string>(['info', 'duplicate', 'insert', 'compress', 'to_image', 'highlight', 'draw', 'shapes', 'sign', 'watermark', 'numbers', 'protect', 'metadata', 'flatten', 'ocr', 'extract_text', 'repair']);
+export type PdfTool = 'viewer' | 'edit_text' | 'remove_text' | 'text' | 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate' | 'from_image' | 'info' | 'duplicate' | 'insert' | 'compress' | 'to_image' | 'highlight' | 'draw' | 'shapes' | 'sign' | 'watermark' | 'numbers' | 'protect' | 'metadata' | 'flatten' | 'ocr' | 'extract_text' | 'repair';
 export type PdfToolSession = InitialSelection & { tool: PdfTool; title: string };
 const sessions = new Map<string, PdfToolSession>();
-export const implementedPdfTools = new Set<string>(['viewer', 'edit_text', 'remove_text', 'text', 'merge', 'split', 'extract', 'delete', 'reorder', 'rotate', 'from_image']);
+export const implementedPdfTools = new Set<string>(['viewer', 'edit_text', 'remove_text', 'text', 'merge', 'split', 'extract', 'delete', 'reorder', 'rotate', 'from_image', ...advancedPdfTools]);
 
 export async function pickPdfTool(tool: PdfTool, title: string) {
   const directory = createImportDirectory();
@@ -21,7 +23,7 @@ export async function pickPdfTool(tool: PdfTool, title: string) {
 }
 
 /** Give a tool its own input lifetime while the reader keeps the current PDF open. */
-export async function createPdfToolForDocument(tool: PdfTool, title: string, document: { uri: string; name: string }, initialPage = 0) {
+export async function createPdfToolForDocument(tool: PdfTool, title: string, document: { uri: string; name: string }, initialPage = 0, returnRoute?: PdfReturnRoute) {
   if (tool === 'from_image') return pickPdfTool(tool, title);
   const directory = createImportDirectory();
   try {
@@ -29,7 +31,7 @@ export async function createPdfToolForDocument(tool: PdfTool, title: string, doc
     const file = new File(directory, 'source.pdf');
     await new File(document.uri).copy(file);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    sessions.set(id, { directory, tool, title, initialPage, origin: { uri: document.uri, name: document.name }, files: [{ uri: file.uri, name: document.name, mimeType: 'application/pdf', size: file.size }] });
+    sessions.set(id, { directory, tool, title, initialPage, returnRoute, origin: { uri: document.uri, name: document.name }, files: [{ uri: file.uri, name: document.name, mimeType: 'application/pdf', size: file.size }] });
     return id;
   } catch (error) { disposeImports(directory); throw error; }
 }

@@ -6,8 +6,11 @@ plugins {
 group = 'expo.modules.pdfengine'
 version = '0.1.0'
 
+repositories { maven { url 'https://jitpack.io' } }
+
 dependencies {
   implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+  implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
 }
 
 android {

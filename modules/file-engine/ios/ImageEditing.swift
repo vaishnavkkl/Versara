@@ -99,13 +99,23 @@ enum ImageEditing {
       if !rect.isEmpty { image = image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY)) }
     }
     let scale = min(max(options["scale"] as? Double ?? 1, 0.05), 1)
-    if scale < 0.999 {
+    var exactBounds: CGRect?
+    if options["width"] != nil || options["height"] != nil {
+      let width = (options["width"] as? NSNumber)?.doubleValue ?? (image.extent.width * scale).rounded()
+      let height = (options["height"] as? NSNumber)?.doubleValue ?? (image.extent.height * scale).rounded()
+      let budget = lowMemory ? 3_000_000.0 : 6_000_000.0
+      guard width.isFinite, height.isFinite, width >= 1, height >= 1, width <= 8192, height <= 8192, width * height <= budget else { throw EditError.invalid("Choose smaller output dimensions for this device.") }
+      image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+      image = image.transformed(by: CGAffineTransform(scaleX: width / image.extent.width, y: height / image.extent.height))
+      exactBounds = CGRect(x: 0, y: 0, width: width, height: height)
+    } else if scale < 0.999 {
       image = image.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1])
       image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
     }
-    guard let rendered = context.createCGImage(image, from: image.extent.integral) else { throw EditError.invalid("Could not render the edited image.") }
+    guard let rendered = context.createCGImage(image, from: exactBounds ?? image.extent.integral) else { throw EditError.invalid("Could not render the edited image.") }
     let format = options["format"] as? String ?? "jpeg"
-    let type: UTType = format == "png" ? .png : .jpeg
+    let types: [String: UTType] = ["jpeg": .jpeg, "png": .png, "heic": .heic, "tiff": .tiff, "webp": .webP]
+    guard let type = types[format], (CGImageDestinationCopyTypeIdentifiers() as! [String]).contains(type.identifier) else { throw EditError.invalid("This export format is unavailable on this device.") }
     let quality = Double(min(max(options["quality"] as? Int ?? 90, 10), 100)) / 100
     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
     guard let writer = CGImageDestinationCreateWithURL(destination as CFURL, type.identifier as CFString, 1, nil) else { throw EditError.invalid("Could not create the image file.") }
@@ -115,7 +125,7 @@ enum ImageEditing {
       throw EditError.invalid("Could not encode the image.")
     }
     let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-    return ["uri": output, "width": rendered.width, "height": rendered.height, "size": size, "mimeType": type == .png ? "image/png" : "image/jpeg"]
+    return ["uri": output, "width": rendered.width, "height": rendered.height, "size": size, "mimeType": type.preferredMIMEType ?? "image/\(format)"]
   }
 
   enum EditError: LocalizedError {
@@ -137,6 +147,9 @@ final class ImageEditorView: ExpoView {
   private var edits = ImageEdits()
   private var aspect = "none"
   private var renderTicket = 0
+  private var disposed = false
+  private var rendering = false
+  private var pendingRender = false
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -150,7 +163,7 @@ final class ImageEditorView: ExpoView {
   }
 
   func setSource(_ value: String) {
-    guard value != source else { return }
+    guard !disposed, value != source else { return }
     source = value
     let uri = value
     let lowMemory = ProcessInfo.processInfo.physicalMemory <= 2 * 1024 * 1024 * 1024
@@ -160,7 +173,7 @@ final class ImageEditorView: ExpoView {
       let image = ImageEditing.load(uri: uri, maxPixels: target)
       let size = ImageEditing.originalSize(uri: uri)
       DispatchQueue.main.async {
-        guard let self, uri == self.source else { return }
+        guard let self, !self.disposed, uri == self.source else { return }
         guard let image else { self.onError(["message": "This image format cannot be edited on your device."]); return }
         self.base = CIImage(cgImage: image)
         self.render()
@@ -185,24 +198,39 @@ final class ImageEditorView: ExpoView {
   }
 
   private func render() {
-    guard let base else { return }
-    renderTicket += 1
-    let ticket = renderTicket
-    let edits = self.edits
+    guard !disposed else { return }
+    renderTicket += 1; pendingRender = true; renderLatest()
+  }
+  private func renderLatest() {
+    guard !disposed, !rendering, pendingRender, let base else { return }
+    rendering = true; pendingRender = false
+    let ticket = renderTicket, edits = self.edits
     queue.async { [weak self] in
-      let output = ImageEditing.apply(edits, to: base)
-      guard let cg = ImageEditing.context.createCGImage(output, from: output.extent) else { return }
-      DispatchQueue.main.async {
-        guard let self, ticket == self.renderTicket else { return }
-        self.imageView.image = UIImage(cgImage: cg)
-        self.setNeedsLayout()
+      let cg: CGImage? = autoreleasepool {
+        let output = ImageEditing.apply(edits, to: base)
+        return ImageEditing.context.createCGImage(output, from: output.extent)
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }; self.rendering = false
+        if !self.disposed && ticket == self.renderTicket, let cg {
+          self.imageView.image = UIImage(cgImage: cg); self.setNeedsLayout()
+        }
+        self.renderLatest()
       }
     }
+  }
+  func dispose() {
+    disposed = true; renderTicket += 1; pendingRender = false
+    base = nil; imageView.image = nil; overlay.onChange = nil
+    layer.removeAllAnimations()
+    queue.async { ImageEditing.context.clearCaches() }
   }
 
   private func pixelSize() -> CGSize? {
     guard let base else { return nil }
-    return edits.turned ? CGSize(width: base.extent.height, height: base.extent.width) : base.extent.size
+    let radians = CGFloat(edits.rotation) * .pi / 180
+    let c = abs(cos(radians)), s = abs(sin(radians))
+    return CGSize(width: base.extent.width * c + base.extent.height * s, height: base.extent.width * s + base.extent.height * c)
   }
 
   private func ratio() -> CGFloat? {

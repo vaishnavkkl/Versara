@@ -18,6 +18,21 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   let onOpen = EventDispatcher()
   let onRemove = EventDispatcher()
   var disabled = false
+  private var active = true
+  func setActive(_ value: Bool) {
+    guard active != value else { return }
+    active = value
+    if value {
+      for path in list.indexPathsForVisibleItems {
+        if path.item < items.count, let cell = list.cellForItem(at: path) as? RecentImageCell {
+          load(items[path.item], into: cell)
+        }
+      }
+    } else {
+      list.visibleCells.compactMap { $0 as? RecentImageCell }.forEach { $0.cancelLoad() }
+      worker.cancelAllOperations()
+    }
+  }
   private var items: [RecentImage] = []
   private var grid = false
   private var label = UIColor.label
@@ -118,6 +133,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   }
 
   private func load(_ item: RecentImage, into cell: RecentImageCell) {
+    guard active else { return }
     let size = grid ? gridPixels : listPixels
     let key = "\(item.uri)|\(item.kind ?? "image")|\(size)" as NSString
     if let image = cache.object(forKey: key) { cell.image.image = image; return }

@@ -8,10 +8,15 @@ public class FileEngineModule: Module {
   private let library = DeviceLibrary()
   private let pdfFolders = PdfFolderAccess()
   private let pdfs = PdfDeviceLibrary()
+  private let imageTools = ImageTools()
   private let queue = DispatchQueue(label: "com.versara.fileengine", qos: .userInitiated)
 
   public func definition() -> ModuleDefinition {
     Name("FileEngine")
+    Constant("nativeImageToolsVersion") { 1 }
+    Constant("nativeImageResizeVersion") { 1 }
+    AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
+    Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
     Constant("nativeImageListVersion") { 2 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
@@ -26,18 +31,18 @@ public class FileEngineModule: Module {
       }
     }
     AsyncFunction("recognizeImageText") { (uri: String, promise: Promise) in
-      self.queue.async {
+      self.queue.async { autoreleasepool {
         do { promise.resolve(try ImageText.recognize(uri: uri)) }
         catch { promise.reject("IMAGE_TEXT_FAILED", error.localizedDescription) }
-      }
+      } }
     }
     AsyncFunction("renderImageText") { (options: String, promise: Promise) in
-      self.queue.async {
+      self.queue.async { autoreleasepool {
         do {
           let values = (try JSONSerialization.jsonObject(with: Data(options.utf8))) as? [String: Any] ?? [:]
           promise.resolve(try ImageText.render(values))
         } catch { promise.reject("IMAGE_TEXT_FAILED", error.localizedDescription) }
-      }
+      } }
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView.self) {
@@ -46,6 +51,7 @@ public class FileEngineModule: Module {
       Prop("grid") { (view: RecentImagesView, value: Bool) in view.setGrid(value) }
       Prop("palette") { (view: RecentImagesView, value: String) in view.setPalette(value) }
       Prop("disabled") { (view: RecentImagesView, value: Bool) in view.disabled = value }
+      Prop("active") { (view: RecentImagesView, value: Bool) in view.setActive(value) }
     }
     View(NativeVideoView.self) {
       Events("onLoad", "onError")
@@ -57,14 +63,15 @@ public class FileEngineModule: Module {
       Prop("source") { (view: ImageEditorView, value: String) in view.setSource(value) }
       Prop("edits") { (view: ImageEditorView, value: String) in view.setEdits(value) }
       Prop("aspect") { (view: ImageEditorView, value: String) in view.setAspect(value) }
+      OnViewDestroys { (view: ImageEditorView) in view.dispose() }
     }
     AsyncFunction("editImage") { (options: String, promise: Promise) in
-      self.queue.async {
+      self.queue.async { autoreleasepool {
         do {
           let values = (try JSONSerialization.jsonObject(with: Data(options.utf8))) as? [String: Any] ?? [:]
           promise.resolve(try ImageEditing.export(values))
         } catch { promise.reject("IMAGE_EDIT_FAILED", error.localizedDescription) }
-      }
+      } }
     }
     View(ZoomableImageView.self) {
       Events("onLoad", "onError", "onDismiss")
@@ -92,7 +99,7 @@ public class FileEngineModule: Module {
     AsyncFunction("searchFiles") { (query: String, limit: Int, promise: Promise) in
       self.queue.async { promise.resolve(FileExplorer.search(query: query, limit: max(1, min(limit, 200)))) }
     }
-    OnDestroy { self.pdfs.destroy(); self.pdfFolders.destroy() }
+    OnDestroy { self.imageTools.destroy(); self.pdfs.destroy(); self.pdfFolders.destroy() }
     OnAppEntersBackground { self.pdfs.cancelAll() }
 
     AsyncFunction("getFileAccessAsync") { (promise: Promise) in

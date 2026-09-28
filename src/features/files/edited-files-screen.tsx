@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
@@ -6,12 +6,17 @@ import { FileThumbnail } from '@/components/file-thumbnail';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { showDialog } from '@/components/app-dialog';
+import { promptFileName, showDialog } from '@/components/app-dialog';
 import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { editedFileExists, listEditedFiles, removeEditedFile, subscribeEditedFiles, type EditedFile } from './edited-files';
-import { formatSize, shareFile } from './file-storage';
+import { editedFileExists, listEditedFiles, removeEditedFile, renameEditedFile, recordEditedFile, subscribeEditedFiles, type EditedFile } from './edited-files';
+import { formatSize, shareNamedFile } from './file-storage';
+import { Directory, File, Paths } from 'expo-file-system';
+import { askNewFileName, saveToDevice } from './save-file';
+import { createPdfToolForDocument, discardPdfToolSession } from '../pdf/pdf-tool-session';
+import { ToolboxSheet } from '@/components/toolbox-sheet';
+import { toast } from '@/components/toast';
 import { rememberFile, type FileKind } from './recent-files';
 
 type Filter = 'all' | FileKind;
@@ -26,29 +31,41 @@ export function EditedFilesScreen() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    listEditedFiles(search, filter === 'all' ? undefined : filter)
-      .then(value => { setItems(value); setError(''); })
-      .catch(() => setError('Could not load your edited files.'));
-  }, [search, filter]);
+  const [menu, setMenu] = useState<EditedFile | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const locked = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
+    if (!active) return;
+    let current = true;
+    let version = 0;
+    const load = () => {
+      const request = ++version;
+      void listEditedFiles(search, filter === 'all' ? undefined : filter)
+        .then(value => { if (current && request === version) { setItems(value); setError(''); } })
+        .catch(() => { if (current && request === version) setError('Could not load your edited files.'); });
+    };
     const timer = setTimeout(load, search ? 200 : 0);
-    return () => clearTimeout(timer);
-  }, [load, search]);
-  useEffect(() => subscribeEditedFiles(load), [load]);
+    const unsubscribe = subscribeEditedFiles(load);
+    return () => { current = false; clearTimeout(timer); unsubscribe(); };
+  }, [search, filter, active]);
 
   async function open(file: EditedFile) {
+    if (locked.current) return;
     if (!editedFileExists(file)) {
       showDialog('File not found', `${file.name} is no longer in Versara. A copy may still be in ${file.location}.`, [
         { text: 'Keep', style: 'cancel' }, { text: 'Remove from list', style: 'destructive', onPress: () => { void removeEditedFile(file); } },
       ], { ios: 'exclamationmark.triangle', android: 'error-outline' });
       return;
     }
+    locked.current = true; setBusy(true);
     try {
       const recent = await rememberFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size }, file.kind);
-      router.push({ pathname: '/file-preview', params: { id: recent.id } });
-    } catch (cause) { setError((cause as Error).message || 'Could not open this file.'); }
+      if (mounted.current) router.push({ pathname: '/file-preview', params: { id: recent.id } });
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not open this file.'); }
+    finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
   function remove(file: EditedFile) {
     showDialog('Remove from Edited files?', `${file.name} stays on your device in ${file.location}.`, [
@@ -56,14 +73,65 @@ export function EditedFilesScreen() {
     ], { ios: 'trash', android: 'delete-outline' });
   }
 
+  async function action(id: string) {
+    const file = menu;
+    if (!file || locked.current) return;
+    if (id === 'remove') { remove(file); return; }
+    if (!editedFileExists(file)) { await open(file); return; }
+    if (id === 'open') { await open(file); return; }
+    locked.current = true; setBusy(true);
+    try {
+      if (id === 'edit') {
+        if (file.kind === 'pdf') {
+          const session = await createPdfToolForDocument('edit_text', 'Edit PDF', file);
+          if (!session) return;
+          if (mounted.current) router.push({ pathname: '/pdf-tool', params: { session } });
+          else discardPdfToolSession(session);
+        } else {
+          const recent = await rememberFile(file, file.kind);
+          if (mounted.current) router.push({ pathname: '/image-editor', params: { id: recent.id } });
+        }
+      } else if (id === 'rename') {
+        const extension = file.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0] ?? '';
+        const name = await promptFileName(file.name, value => !value.trim() || /[\\/:*?"<>|\x00-\x1f]/.test(value) || /^\.+$/.test(value) ? 'Enter a valid file name.' : '', { title: 'Rename in Versara', message: 'Changes the name here. Existing copies in device folders keep their names.', action: 'Rename' });
+        if (name && mounted.current) await renameEditedFile(file, name.toLowerCase().endsWith(extension.toLowerCase()) ? name : name + extension);
+      } else if (id === 'duplicate') {
+        const name = await askNewFileName(file.name.replace(/(\.[^.]+)$/, ' - copy$1'));
+        if (!name || !mounted.current) return;
+        const folder = new Directory(Paths.document, 'Versara Copies'); folder.create({ intermediates: true, idempotent: true });
+        const copy = new File(folder, `${Date.now()}-${Math.random().toString(36).slice(2)}${name.match(/\.[^.]+$/)?.[0] ?? ''}`);
+        try { await new File(file.uri).copy(copy); await recordEditedFile({ uri: copy.uri, name, kind: file.kind, mimeType: file.mimeType, size: copy.size, deviceUri: '', location: 'Versara - app storage' }); }
+        catch (cause) { if (copy.exists) copy.delete(); throw cause; }
+        toast('Copy added to Edited files');
+      } else if (id === 'save') {
+        const saved = await saveToDevice(file.uri, file.name, file.mimeType);
+        await recordEditedFile({ ...file, deviceUri: saved.uri, location: saved.location });
+        toast(`Saved to ${saved.location}`);
+      } else if (id === 'share') {
+        await shareNamedFile(file);
+      } else if (id === 'info') showDialog('File details', `${file.name}\n${file.mimeType}\n${formatSize(file.size)}\nModified ${dateLabel(file.modified)}\n${file.location}`);
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not complete this action.'); }
+    finally { locked.current = false; if (mounted.current) setBusy(false); }
+  }
+  const actions = [{ title: 'File actions', data: [
+    { id: 'open', title: 'Open', subtitle: '', ios: 'doc', android: 'open-in-new' },
+    { id: 'edit', title: 'Edit', subtitle: '', ios: 'square.and.pencil', android: 'edit' },
+    { id: 'rename', title: 'Rename', subtitle: '', ios: 'pencil', android: 'drive-file-rename-outline' },
+    { id: 'duplicate', title: 'Duplicate', subtitle: '', ios: 'doc.on.doc', android: 'file-copy' },
+    { id: 'save', title: 'Save to device', subtitle: '', ios: 'square.and.arrow.down', android: 'save-alt' },
+    { id: 'share', title: 'Share', subtitle: '', ios: 'square.and.arrow.up', android: 'share' },
+    { id: 'info', title: 'Details', subtitle: '', ios: 'info.circle', android: 'info-outline' },
+    { id: 'remove', title: 'Remove from list', subtitle: '', ios: 'trash', android: 'delete-outline' },
+  ] }] satisfies import('@/components/tool-grid').ToolSection[];
+
   return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <ScreenHeader title="Edited files" onBack={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }} />
     <View style={styles.controls}>
       <TextInput accessibilityLabel="Search edited files" placeholder="Search edited files" placeholderTextColor={colors.secondaryLabel} value={search} onChangeText={setSearch}
-        style={[styles.search, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+        style={[styles.search, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
       <View style={styles.filters}>
         {FILTERS.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ selected: filter === item.id }} onPress={() => setFilter(item.id)}
-          style={[styles.chip, { backgroundColor: filter === item.id ? colors.systemBlue : colors.accentSurface }]}>
+          style={[styles.chip, { backgroundColor: filter === item.id ? colors.systemBlue : colors.fieldSurface }]}>
           <ThemedText style={[styles.chipText, { color: filter === item.id ? colors.systemBackground : colors.systemBlue }]}>{item.label}</ThemedText>
         </Pressable>)}
       </View>
@@ -76,23 +144,17 @@ export function EditedFilesScreen() {
         <ThemedText style={styles.heading}>{search ? 'No matching files' : 'No edited files yet'}</ThemedText>
         <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Files you save from the PDF and image editors appear here.</ThemedText>
       </View>}
-      renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} onPress={() => { void open(item); }}
-        style={({ pressed }) => [styles.row, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator, opacity: pressed ? 0.7 : 1 }]}>
+      renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void open(item); }}
+        style={({ pressed }) => [styles.row, { backgroundColor: colors.catalogSurface, borderColor: colors.separator, opacity: pressed ? 0.7 : 1 }]}>
         <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} active={active} /></View>
         <View style={styles.meta}>
           <ThemedText numberOfLines={2} style={styles.name}>{item.name}</ThemedText>
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{dateLabel(item.modified)} · {formatSize(item.size)}</ThemedText>
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{item.location}</ThemedText>
         </View>
-        <View style={styles.actions}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name} from Edited files`} onPress={() => remove(item)} hitSlop={6} style={styles.icon}>
-            <UniversalIcon ios="xmark" android="close" size={18} color={colors.secondaryLabel} />
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Share ${item.name}`} onPress={() => { if (editedFileExists(item)) void shareFile({ uri: item.uri, mimeType: item.mimeType }).catch(() => {}); else void open(item); }} hitSlop={6} style={styles.icon}>
-            <UniversalIcon ios="square.and.arrow.up" android="share" size={20} color={colors.systemBlue} />
-          </Pressable>
-        </View>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Actions for ${item.name}`} disabled={busy} onPress={() => { setMenu(item); setMenuOpen(true); }} style={styles.icon}><UniversalIcon ios="ellipsis" android="more-horiz" size={24} color={colors.label} /></Pressable>
       </Pressable>} />}
+    <ToolboxSheet visible={menuOpen && active} title="File actions" subtitle={menu?.name ?? 'Edited file'} sections={actions} footer={<View />} onClose={() => setMenuOpen(false)} onAction={id => void action(id)} />
   </View>;
 }
 
@@ -114,5 +176,5 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: '600' },
   caption: { fontSize: 12, lineHeight: 16 },
   actions: { alignSelf: 'stretch', justifyContent: 'space-between', alignItems: 'center' },
-  icon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  icon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
 });

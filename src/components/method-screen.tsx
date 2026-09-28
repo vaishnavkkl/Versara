@@ -3,7 +3,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { HelpButton } from './help-button';
 import { LayoutToggle, useLayoutPreference } from './layout-toggle';
 import { ModuleCard } from './module-card';
@@ -15,7 +15,9 @@ type Props = { title: string; subtitle: string; sections: readonly MethodSection
 export function MethodScreen({ title, subtitle, sections, upcomingSections = [] }: Props) {
   const colors = usePalette();
   const [grid] = useLayoutPreference();
-  const columns = grid ? 3 : 1;
+  const { width, fontScale } = useWindowDimensions();
+  const useGrid = grid && width >= 360 && fontScale < 1.4;
+  const columns = useGrid ? 2 : 1;
   const [query, setQuery] = useState('');
   const [picking, setPicking] = useState<string | null>(null);
   const [showUpcoming, setShowUpcoming] = useState(false);
@@ -69,7 +71,7 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
             <Pressable accessibilityRole="button" accessibilityLabel="Back to dashboard" onPress={() => router.navigate('/(tabs)')} style={({ pressed }) => [styles.back, { opacity: pressed ? 0.6 : 1 }]}><UniversalIcon ios="chevron.left" android="arrow-back" size={20} color={colors.systemBlue} />{title !== 'PDF' && <ThemedText style={{ color: colors.systemBlue }}>Toolbox</ThemedText>}</Pressable>
             {title === 'PDF' && <ThemedText accessibilityRole="header" style={styles.compactTitle}>PDF</ThemedText>}
             <HelpButton />
-            <LayoutToggle />
+            <LayoutToggle gridAvailable={width >= 360 && fontScale < 1.4} />
           </View>
           {title !== 'PDF' && <View style={styles.heading}><ThemedText accessibilityRole="header" style={styles.title}>{title}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{subtitle}</ThemedText></View>}
 
@@ -84,8 +86,8 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
               <ThemedText accessibilityRole="header" style={styles.sectionTitle}>{section.title}</ThemedText>
               {section.tools.filter((_, index) => index % columns === 0).map((first, row) => (
                 <View key={first.id} style={styles.row}>
-                  {section.tools.slice(row * columns, row * columns + columns).map(tool => <ModuleCard key={tool.id} variant={grid ? 'compact' : 'list'} loading={picking === tool.id} disabled={!!picking} detail={(title === 'PDF' && implementedPdfTools.has(tool.id)) || (title === 'Image' && tool.id === 'pdf') ? undefined : 'Coming soon'} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android} onPress={() => openTool(tool)} />)}
-                  {grid && [1, 2].map(column => !section.tools[row * columns + column] && <View key={column} style={styles.spacer} />)}
+                  {section.tools.slice(row * columns, row * columns + columns).map(tool => <ModuleCard key={tool.id} variant={useGrid ? 'compact' : 'list'} tone={title === 'PDF' ? 'pdf' : title === 'Image' ? 'image' : 'privacy'} loading={picking === tool.id} disabled={!!picking || !((title === 'PDF' && implementedPdfTools.has(tool.id)) || (title === 'Image' && tool.id === 'pdf'))} detail={(title === 'PDF' && implementedPdfTools.has(tool.id)) || (title === 'Image' && tool.id === 'pdf') ? undefined : 'Coming soon'} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android} onPress={() => openTool(tool)} />)}
+                  {useGrid && !section.tools[row * columns + 1] && <View style={styles.spacer} />}
                 </View>
               ))}
             </View>

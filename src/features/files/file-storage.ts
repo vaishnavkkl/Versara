@@ -46,3 +46,19 @@ export async function shareFile(file: { uri: string; mimeType?: string }) {
   if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is unavailable on this device.');
   await Sharing.shareAsync(file.uri, { mimeType: file.mimeType, dialogTitle: 'Save or share file', ...(file.mimeType === 'application/pdf' ? { UTI: 'com.adobe.pdf' } : {}) });
 }
+
+/** Keep named attachments after the Android chooser returns: receivers read them later. */
+export async function shareNamedFile(file: LocalFile) {
+  const root = new Directory(Paths.cache, 'versara-share');
+  root.create({ intermediates: true, idempotent: true });
+  const entries = root.list().filter((entry): entry is Directory => entry instanceof Directory)
+    .sort((a, b) => b.name.localeCompare(a.name));
+  // Eight recent attachments at most. Avoid copying exceptionally large files into the cache.
+  for (const entry of entries.slice(7)) { try { entry.delete(); } catch { /* OS cache eviction remains available. */ } }
+  if (file.size > 32 * 1024 * 1024) return shareFile(file);
+  const folder = new Directory(root, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  folder.create();
+  const attachment = new File(folder, file.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_'));
+  try { await new File(file.uri).copy(attachment); await shareFile({ uri: attachment.uri, mimeType: file.mimeType }); }
+  catch (cause) { if (folder.exists) folder.delete(); throw cause; }
+}

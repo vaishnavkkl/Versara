@@ -7,6 +7,9 @@ export type PdfRange = { start: number; end: number };
 export type PdfRotation = { page: number; degrees: number };
 export type PdfOrganizeOptions = { jobId: string; operation: 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate'; uris: string[]; outputUris: string[]; ranges: PdfRange[]; pages?: number[]; rotations?: PdfRotation[] };
 declare class PdfEngine extends NativeModule<{ onConversionProgress: (event: ConversionProgress) => void }> {
+  readonly nativeAdvancedToolsVersion?: number;
+  processPdf(jobId: string, request: string): Promise<string>;
+  cancelPdfTool(jobId: string): void;
   renderFileThumbnail(jobId: string, uri: string, kind: string, page: number, outputUri: string): Promise<string>;
   cancelThumbnail(jobId: string): void;
   editPdfText(jobId: string, request: string): Promise<string>;

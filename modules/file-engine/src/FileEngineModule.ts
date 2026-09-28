@@ -44,6 +44,10 @@ export type ExplorerEntry = {
 export type DirectoryListing = { path: string; parent: string | null; items: ExplorerEntry[]; truncated: boolean };
 
 declare class FileEngine extends NativeModule {
+  readonly nativeImageToolsVersion?: number;
+  readonly nativeImageResizeVersion?: number;
+  processImage(id: string, request: string): Promise<Record<string, unknown>>;
+  cancelImageJob(id: string): void;
   readonly nativeExplorerVersion?: number;
   getStorageRoots(): Promise<StorageRoot[]>;
   listDirectory(path: string, showHidden: boolean): Promise<DirectoryListing>;

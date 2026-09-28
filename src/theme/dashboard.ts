@@ -16,7 +16,19 @@ export const typography = {
   moduleTitle: { fontSize: 18, lineHeight: 24, fontWeight: '600', letterSpacing: -0.3 },
   heading: { fontSize: 21, lineHeight: 28, fontWeight: '600', letterSpacing: -0.5 },
   title: { fontSize: 34, lineHeight: 40, fontWeight: '700', letterSpacing: -1.2 },
+  workspaceTitle: { fontSize: 28, lineHeight: 36, fontWeight: '600', letterSpacing: -0.8 },
+  catalogTitle: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.2 },
+  catalogDescription: { fontSize: 13, lineHeight: 19, fontWeight: '400' },
+  tabLabel: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
 } as const;
+
+export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 152, touchTarget: 48 } as const;
+export const motion = { feedback: 120, tab: { duration: 400, dampingRatio: 1 } } as const;
+export type ModuleTone = 'pdf' | 'image' | 'files' | 'privacy' | 'default';
+export function moduleColors(colors: Palette, tone: ModuleTone) {
+  if (tone === 'default') return { ink: colors.systemBlue, surface: colors.accentSurface };
+  return { ink: colors[`${tone}Ink`], surface: colors[`${tone}Surface`] };
+}
 
 // RN 0.86 uses the experimental name; react-native-web uses the CSS name.
 export function gradient(value: string): ViewStyle {

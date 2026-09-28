@@ -26,13 +26,6 @@ export default function TabsLayout() {
         <Tabs.Screen name="files/index" />
         <Tabs.Screen name="search/index" />
         <Tabs.Screen name="settings/index" />
-        <Tabs.Screen name="documents/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="image/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="video/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="media/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="device/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="privacy/index" options={{ href: null, lazy: true }} />
-        <Tabs.Screen name="audio/index" options={{ href: null, lazy: true }} />
       </Tabs>
     </SafeAreaView>
   );

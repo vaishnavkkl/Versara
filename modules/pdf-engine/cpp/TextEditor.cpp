@@ -36,7 +36,7 @@ static void require(bool ok, const char* message, const char* code = "PDF_EDIT_F
 }
 struct Document {
   FPDF_DOCUMENT value;
-  explicit Document(const std::string& path) : value(FPDF_LoadDocument(path.c_str(), nullptr)) {
+  explicit Document(const std::string& path, const std::string& password = "") : value(FPDF_LoadDocument(path.c_str(), password.empty() ? nullptr : password.c_str())) {
     require(value != nullptr, "This PDF cannot be opened. Choose an unlocked, valid PDF.", "PDF_INVALID_DOCUMENT");
   }
   ~Document() { FPDF_CloseDocument(value); }
@@ -215,6 +215,45 @@ static void indentMatrix(FS_MATRIX& m, double indent) {
 }
 // IDs refer to the unmodified source page. Resolve all handles before removals.
 /** Returns how many replacements switched to a standard font because the embedded one lacked characters. */
+// The same vector marks are used on Android and iOS. Coordinates are in the
+// visible, rotated crop box, so the saved PDF matches the native drawing canvas.
+static void applyMark(FPDF_PAGE page, const Json& mark) {
+  const auto points = mark.at("points");
+  require(points.is_array() && points.size() >= 2 && points.size() <= 4096, "Invalid drawing.");
+  auto point = [&](const Json& p) {
+    const double x = p.at(0), y = p.at(1); double px, py;
+    require(std::isfinite(x) && std::isfinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1, "Invalid drawing point.");
+    FPDF_DeviceToPage(page, 0, 0, 100000, 100000, 0, int(x * 100000), int(y * 100000), &px, &py);
+    return std::make_pair(float(px), float(py));
+  };
+  const auto first = point(points[0]);
+  auto path = FPDFPageObj_CreateNewPath(first.first, first.second);
+  require(path != nullptr, "Could not create shape.");
+  std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> owned(path, FPDFPageObj_Destroy);
+  for (size_t i = 1; i < points.size(); ++i) { const auto p = point(points[i]); require(FPDFPath_LineTo(path, p.first, p.second), "Could not draw shape."); }
+  const auto shape = mark.value("shape", std::string("draw"));
+  const bool closed = shape == "polygon" || shape == "highlight";
+  if (closed) FPDFPath_Close(path);
+  const bool highlight = shape == "highlight" || shape == "highlight-brush";
+  auto rgb = [](const std::string& color) { require(color.size() == 7 && color[0] == '#', "Invalid colour."); return std::stoul(color.substr(1), nullptr, 16); };
+  const auto color = rgb(mark.value("color", std::string("#1D4ED8")));
+  const auto fill = mark.value("fillColor", std::string(""));
+  const auto inside = fill.empty() ? color : rgb(fill);
+  const auto brush = mark.value("brush", std::string("pen"));
+  const auto alpha = highlight || brush == "highlighter" ? 77 : brush == "pencil" ? 170 : brush == "marker" ? 210 : 255;
+  FPDFPageObj_SetStrokeColor(path, (color >> 16) & 255, (color >> 8) & 255, color & 255, alpha);
+  FPDFPageObj_SetFillColor(path, (inside >> 16) & 255, (inside >> 8) & 255, inside & 255, highlight ? 77 : 255);
+  FPDFPageObj_SetStrokeWidth(path, float(std::clamp(mark.value("width", .005), .001, .08) * FPDF_GetPageWidthF(page)));
+  FPDFPageObj_SetLineCap(path, FPDF_LINECAP_ROUND); FPDFPageObj_SetLineJoin(path, FPDF_LINEJOIN_ROUND);
+  const auto pattern = mark.value("pattern", std::string("solid"));
+  const auto unit = float(std::clamp(mark.value("width", .005), .001, .08) * FPDF_GetPageWidthF(page));
+  if (pattern == "dotted" || pattern == "dashed") {
+    const float dash[] = { unit * (pattern == "dotted" ? .1f : 4.f), unit * (pattern == "dotted" ? 2.4f : 2.f) };
+    FPDFPageObj_SetDashArray(path, dash, 2, 0);
+  }
+  FPDFPath_SetDrawMode(path, closed && (highlight || !fill.empty()) ? FPDF_FILLMODE_WINDING : FPDF_FILLMODE_NONE, shape != "highlight");
+  FPDFPage_InsertObject(page, owned.release());
+}
 static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& commands,
                   const std::function<void()>& check) {
   if (std::none_of(commands.begin(), commands.end(), [pageNumber](const auto& command) { return command.at("page").template get<int>() == pageNumber; })) return 0;
@@ -224,7 +263,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
   std::map<int, std::string> originalText;
   { TextPage original(page);
     for (const auto& command : commands) {
-      if (command.at("page").get<int>() != pageNumber || command.at("kind") == "add") continue;
+      if (command.at("page").get<int>() != pageNumber || command.at("kind") == "add" || command.at("kind") == "mark" || command.at("kind") == "number") continue;
       const int id = command.at("objectId");
       require(objects.count(id) != 0, "The selected text changed. Reopen this page.", "PDF_STALE_TEXT");
       originalText[id] = textOf(objects.at(id), original.value);
@@ -233,9 +272,25 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
   Verification verification;
   std::set<int> touched;
   bool changed = false;
-  for (const auto& command : commands) {
+  for (auto command : commands) {
     check();
     if (command.at("page").get<int>() != pageNumber) continue;
+    if (command.at("kind") == "mark") { applyMark(page, command); changed = true; continue; }
+    if (command.at("kind") == "number") {
+      const float size = command.value("size", 11.0f), margin = command.value("margin", 24.0f);
+      require(std::isfinite(size) && size >= 4 && size <= 72 && std::isfinite(margin) && margin >= 0 && margin <= 144, "Choose a valid size and margin.");
+      const auto text = command.at("text").get<std::string>();
+      auto object = newText(doc, command.value("font", std::string("Helvetica")), size);
+      std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> owned(object, FPDFPageObj_Destroy);
+      setText(object, text);
+      float l = 0, b = 0, r = 0, t = 0; FPDFPageObj_GetBounds(object, &l, &b, &r, &t);
+      const auto position = command.value("position", std::string("bottom-center"));
+      const float w = FPDF_GetPageWidthF(page), h = FPDF_GetPageHeightF(page), tw = r - l;
+      require(tw + margin * 2 < w && (t - b) + margin * 2 < h, "The number label does not fit this page. Reduce its size or margins.");
+      const float px = (position.find("left") != std::string::npos ? margin : position.find("right") != std::string::npos ? w - margin - tw : (w - tw) / 2) - l;
+      const float py = position.find("top") != std::string::npos ? margin + t : position.find("middle") != std::string::npos ? (h + t + b) / 2 : h - margin + b;
+      command["kind"] = "add"; command["x"] = px / w; command["y"] = py / h;
+    }
     const auto kind = command.at("kind").get<std::string>();
     require(kind == "add" || kind == "replace" || kind == "delete", "Unknown text operation.");
     const bool underlined = command.value("underline", false);
@@ -257,7 +312,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
       indentMatrix(matrix, indent);
       const auto color = command.value("color", 0x101020u);
       writeLines(page, lines, matrix, size, nullptr, [&] { return newText(doc, font, size); },
-                 (color >> 16) & 255, (color >> 8) & 255, color & 255, 255, underlined, verification);
+                 (color >> 16) & 255, (color >> 8) & 255, color & 255, unsigned(std::clamp(command.value("opacity", 1.0), .05, 1.0) * 255), underlined, verification);
     } else {
       const int id = command.at("objectId");
       require(objects.count(id) && touched.insert(id).second, "The selected text changed. Reopen this page.", "PDF_STALE_TEXT");
@@ -368,14 +423,39 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     std::call_once(initialized, [] { FPDF_InitLibrary(); });
     const auto options = Json::parse(request);
     const auto input = childPath(options.at("path"), cacheRoot, true);
-    Document document(input.string());
+    Document document(input.string(), options.value("inputPassword", std::string("")));
+    const bool annotationJob = options.value("nativeEditor", false);
     const auto doc = document.value;
-    require(FPDF_GetSecurityHandlerRevision(doc) == -1, "Choose an unrestricted PDF to edit.", "PDF_PROTECTED");
-    require(FPDF_GetSignatureCount(doc) == 0, "This PDF is digitally signed. Editing would invalidate its signature. Choose an unsigned copy.", "PDF_SIGNED");
+    const auto commands = options.value("edits", Json::array());
+    if (options.at("action") == "selection") {
+      require((FPDF_GetDocPermissions(doc) & 16) != 0, "Copying is restricted for this PDF.");
+      const int number = options.at("page");
+      require(number >= 0 && number < FPDF_GetPageCount(doc), "Choose an existing page.");
+      Page page(doc, number); TextPage text(page.value); Json glyphs = Json::array();
+      const int count = FPDFText_CountChars(text.value);
+      require(count <= 20000, "This page contains too much text to select on this device.");
+      for (int i = 0; i < count; ++i) {
+        check(); const auto code = FPDFText_GetUnicode(text.value, i);
+        if (code == 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) continue;
+        const std::string value = std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t>{}.to_bytes(char32_t(code));
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(text.value, i, &l, &r, &b, &t)) continue;
+        int x1, y1, x2, y2;
+        FPDF_PageToDevice(page.value, 0, 0, 100000, 100000, 0, l, t, &x1, &y1);
+        FPDF_PageToDevice(page.value, 0, 0, 100000, 100000, 0, r, b, &x2, &y2);
+        glyphs.push_back({{"text", value}, {"left", std::min(x1, x2) / 100000.0}, {"top", std::min(y1, y2) / 100000.0}, {"right", std::max(x1, x2) / 100000.0}, {"bottom", std::max(y1, y2) / 100000.0}});
+      }
+      return Json{{"glyphs", glyphs}}.dump();
+    }
+    const bool readOnlyPreview = options.at("action") == "preview" && !options.value("includeObjects", true) && commands.is_array() && commands.empty();
+    if (!readOnlyPreview) {
+      if (annotationJob) require((FPDF_GetDocPermissions(doc) & 0x418) == 0x418, "This PDF restricts editing or extraction. Use an unrestricted copy.", "PDF_PROTECTED");
+      else require(FPDF_GetSecurityHandlerRevision(doc) == -1, "Choose an unrestricted PDF to edit.", "PDF_PROTECTED");
+      require(FPDF_GetSignatureCount(doc) == 0, "This PDF is digitally signed. Editing would invalidate its signature. Choose an unsigned copy.", "PDF_SIGNED");
+    }
     const int count = FPDF_GetPageCount(doc);
     require(count >= 1 && count <= 2000, "Choose a PDF with 1 to 2,000 pages.");
-    const auto commands = options.value("edits", Json::array());
-    require(commands.is_array() && commands.size() <= 500, "Save up to 500 text changes at a time.");
+    require(commands.is_array() && commands.size() <= 2000, "Save up to 2,000 changes at a time.");
     for (const auto& command : commands) require(command.at("page").get<int>() >= 0 && command.at("page").get<int>() < count, "Invalid page number.");
     if (options.at("action") == "preview") {
       const int number = options.at("page");
@@ -387,7 +467,7 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
       const int width = std::max(1, int(pageWidth * scale)), height = std::max(1, int(pageHeight * scale));
       Json objects = Json::array();
       int nested = 0;
-      { TextPage text(page.value);
+      if (options.value("includeObjects", true)) { TextPage text(page.value);
         const int objectCount = FPDFPage_CountObjects(page.value);
         require(objectCount <= 20000, "This page is too complex for text editing.");
         for (int i = 0; i < objectCount; ++i) {
@@ -400,7 +480,8 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
           float size = 12; FPDFTextObj_GetFontSize(object, &size);
           FS_MATRIX matrix;
           if (FPDFPageObj_GetMatrix(object, &matrix) && matrixScale(matrix) > 0) size *= matrixScale(matrix);
-          objects.push_back({{"id", i}, {"text", value}, {"size", size}, {"editable", editable(object)}, {"bounds", bounds(page.value, object, width, height)}});
+          unsigned r = 16, g = 16, b = 32, a = 255; FPDFPageObj_GetFillColor(object, &r, &g, &b, &a);
+          objects.push_back({{"font", similarFont(FPDFTextObj_GetFont(object))}, {"color", (r << 16) | (g << 8) | b}, {"id", i}, {"text", value}, {"size", size}, {"editable", editable(object)}, {"bounds", bounds(page.value, object, width, height)}});
           require(objects.size() <= 2000, "This page contains too many text fragments to edit on a phone.");
         }
       }
@@ -435,7 +516,7 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     for (int number : changed) { check(); Page page(doc, number); apply(doc, page.value, number, commands, check); progress(++completed, int(changed.size()) + 1); }
     check();
     { Writer writer(temporary, cancelled);
-      const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL);
+      const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL | (annotationJob ? FPDF_REMOVE_SECURITY : 0));
       check(); require(saved && writer.finish(), "Could not save the PDF. Check free storage.");
     }
     { Document verify(temporary.string()); require(FPDF_GetPageCount(verify.value) == count, "The saved PDF did not pass verification."); }
