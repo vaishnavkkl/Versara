@@ -10,8 +10,8 @@ export async function openPrivacyTool(mode: PrivacyMode, options: { replace?: bo
   const file = await getRecentFile(options.id);
   if (!file || (options.current && !options.current())) return false;
   if (mode === 'scan' || mode === 'pdf_scan') {
-    if (file.kind !== (mode === 'pdf_scan' ? 'pdf' : 'image')) throw new Error('Choose the correct file type for this tool.');
-    navigate({ pathname: '/privacy-tool', params: { mode, id: file.id } }); return true;
+    if ((mode === 'pdf_scan' && file.kind !== 'pdf') || (mode === 'scan' && file.kind !== 'pdf' && file.kind !== 'image')) throw new Error('Choose the correct file type for this tool.');
+    navigate({ pathname: '/privacy-tool', params: { mode: file.kind === 'pdf' ? 'pdf_scan' : 'scan', id: file.id } }); return true;
   }
   if (mode === 'remove_text') {
     if (file.kind !== 'pdf') throw new Error('Choose a PDF for this tool.');

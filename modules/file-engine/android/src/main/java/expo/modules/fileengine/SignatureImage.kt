@@ -27,6 +27,8 @@ internal object SignatureImage {
     val bitmap = try { decoded.copy(Bitmap.Config.ARGB_8888, true) ?: error("Could not prepare the signature.") } finally { decoded.recycle() }
     var committed = false
     try {
+      // JPEG decodes are opaque. ARGB_8888 alone does not enable alpha writes.
+      bitmap.setHasAlpha(true)
       val w = bitmap.width; val h = bitmap.height
       require(w in 1..1024 && h in 1..1024) { "Signature image is too large." }
       DataOutputStream(raw.outputStream().buffered()).use { stream ->

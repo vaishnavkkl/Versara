@@ -9,7 +9,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppLoader } from '@/components/app-loader';
 import { ColorSwatches } from '@/components/color-swatches';
-import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
+import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, TextStyleMenu, type TextStyle } from '@/components/text-style-controls';
 import { PdfEditCanvas, type PdfTextObject } from './pdf-edit-canvas';
 import NativeEditCanvas from '../../../modules/pdf-engine/src/PdfEditCanvasView';
 import { useInitialFiles } from './use-initial-files';
@@ -414,7 +414,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       <PdfPreviewToolbar page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)}>
         {(keyboardOpen || !toolbar.atBottom) && toolActions}
       </PdfPreviewToolbar>
-      <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={nativeTextBox ? 'Type on the page. Drag the blue handle to move text.' : adding ? 'Tap to place text. Pinch to zoom.' : 'Pinch to zoom. Tap text to edit.'}>
+      <PdfPreviewStage actions={(selected || placement) && <TextStyleMenu style={textStyle} onChange={next => { invalidateDraft(); setTextStyle(next); }} disabled={busy} allowOriginal={!!selected} />} status={draftIssue ? 'Preview paused' : previewStatus} hint={nativeTextBox ? 'Type on the page. Drag the blue handle to move text.' : adding ? 'Tap to place text. Pinch to zoom.' : 'Pinch to zoom. Tap text to edit.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
         pageLayout={JSON.stringify({ width: preview.width, height: preview.height, pointWidth: preview.pointWidth ?? 0 })}
         objects={objectsJson} selectedId={selected?.id ?? -1} adding={adding} disabled={busy} placement={placement ? JSON.stringify(placement) : ''}

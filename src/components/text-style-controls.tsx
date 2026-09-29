@@ -1,5 +1,6 @@
-import React, { memo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import React, { memo } from 'react';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { EditorMenu } from './editor-menu';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
@@ -33,6 +34,17 @@ export function styleFromFont(font: string | undefined, underline = false): Text
   };
 }
 
+/** Quick text choices share exactly the same style state as the full controls. */
+export function TextStyleMenu({ style, onChange, disabled, allowOriginal = false }: {
+  style: TextStyle; onChange: (style: TextStyle) => void; disabled?: boolean; allowOriginal?: boolean;
+}) {
+  return <EditorMenu label="Text style" disabled={disabled} items={[
+    ...FAMILIES.filter(item => allowOriginal || item.id !== 'original').map(item => ({ id: item.id, label: item.label, selected: style.family === item.id,
+      onPress: () => onChange({ ...style, family: item.id, ...(item.id === 'original' ? { bold: false, italic: false } : {}) }) })),
+    ...(['bold', 'italic', 'underline'] as const).map(key => ({ id: key, label: key[0].toUpperCase() + key.slice(1), selected: style[key], disabled: key !== 'underline' && style.family === 'original', onPress: () => onChange({ ...style, [key]: !style[key] }) })),
+  ]} />;
+}
+
 type Props = {
   style: TextStyle;
   onChange: (style: TextStyle) => void;
@@ -52,7 +64,6 @@ type Props = {
 /** Font family, bold, italic, underline, size and indent for the native text editors. */
 export const TextStyleControls = memo(function TextStyleControls({ style, onChange, size, onSizeChange, sizeUnit, minSize, maxSize, indent, indentStep = 18, onIndentChange, allowOriginal = false, disabled = false }: Props) {
   const colors = usePalette();
-  const [open, setOpen] = useState(false);
   const family = FAMILIES.find(item => item.id === style.family) ?? FAMILIES[1];
   const original = style.family === 'original';
   const step = (factor: number) => {
@@ -74,26 +85,14 @@ export const TextStyleControls = memo(function TextStyleControls({ style, onChan
   </Pressable>;
   return <View style={styles.stack}>
     <View style={[styles.row, styles.wrap]}>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Font, ${family.label}`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)}
-        style={[styles.fontButton, { backgroundColor: colors.accentSurface }]}>
-        <UniversalIcon ios="textformat" android="font-download" size={20} color={colors.systemBlue} />
-        <ThemedText style={[styles.label, { color: colors.systemBlue }]}>{family.short}</ThemedText>
-        <UniversalIcon ios={open ? 'chevron.up' : 'chevron.down'} android={open ? 'expand-less' : 'expand-more'} size={18} color={colors.systemBlue} />
-      </Pressable>
+      <EditorMenu label={family.short} disabled={disabled} items={FAMILIES.filter(item => allowOriginal || item.id !== 'original').map(item => ({
+        id: item.id, label: item.label, selected: item.id === style.family,
+        onPress: () => onChange({ ...style, family: item.id, ...(item.id === 'original' ? { bold: false, italic: false } : {}) }),
+      }))} />
       {toggle('bold', 'Bold', 'bold', 'format-bold', original)}
       {toggle('italic', 'Italic', 'italic', 'format-italic', original)}
       {toggle('underline', 'Underline', 'underline', 'format-underlined')}
     </View>
-    {open && <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.row}>
-      {FAMILIES.filter(item => allowOriginal || item.id !== 'original').map(item => {
-        const selected = item.id === style.family;
-        return <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ selected, disabled }} disabled={disabled}
-          onPress={() => { onChange({ ...style, family: item.id, ...(item.id === 'original' ? { bold: false, italic: false } : {}) }); setOpen(false); }}
-          style={[styles.chip, { backgroundColor: selected ? colors.systemBlue : colors.accentSurface }]}>
-          <ThemedText style={[styles.label, { color: selected ? colors.systemBackground : colors.systemBlue, fontFamily: item.id === 'serif' ? 'serif' : item.id === 'mono' ? 'monospace' : undefined }]}>{item.label}</ThemedText>
-        </Pressable>;
-      })}
-    </ScrollView>}
     {original && <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Choose Arial, Times New Roman or Courier New to use bold and italic.</ThemedText>}
     <View style={[styles.row, styles.wrap]}>
       <View style={styles.row}>
@@ -116,11 +115,11 @@ const styles = StyleSheet.create({
   stack: { gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   wrap: { flexWrap: 'wrap', columnGap: 12 },
-  fontButton: { minHeight: 44, borderRadius: 22, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  fontButton: { minHeight: 52, borderRadius: 22, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
   chip: { minHeight: 40, borderRadius: 20, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
-  square: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  square: { width: 52, height: 52, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   label: { fontSize: 14, fontWeight: '600' },
-  size: { width: 64, minHeight: 44, borderRadius: 12, textAlign: 'center', fontSize: 16, fontVariant: ['tabular-nums'] },
+  size: { width: 64, minHeight: 52, borderRadius: 12, textAlign: 'center', fontSize: 16, fontVariant: ['tabular-nums'] },
   note: { fontSize: 12, lineHeight: 16 },
   dim: { opacity: 0.4 },
 });

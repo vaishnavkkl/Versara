@@ -42,12 +42,13 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
 }
 
 /** The canvas always gets the remaining height; controls stay outside its viewport. */
-export function PdfPreviewStage({ children, hint, status, onFit }: { children: ReactNode; hint: string; status?: string; onFit?: () => void }) {
+export function PdfPreviewStage({ children, hint, status, onFit, actions }: { children: ReactNode; actions?: ReactNode; hint: string; status?: string; onFit?: () => void }) {
   const colors = usePalette();
   return <>
     <View style={styles.viewport}>
       {children}
-      {onFit && <Pressable accessibilityRole="button" accessibilityLabel="Fit PDF page" onPress={onFit} style={[styles.fit, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fit-screen" size={21} color={colors.systemBlue} /></Pressable>}
+      {actions && <View pointerEvents="box-none" style={{ position: 'absolute', right: 10, top: 10, maxWidth: '85%', alignItems: 'flex-end', gap: 8 }}>{actions}</View>}
+      {onFit && <Pressable accessibilityRole="button" accessibilityLabel="Fit PDF page" onPress={onFit} style={[styles.fit, actions ? { top: undefined, bottom: 10 } : undefined, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fit-screen" size={21} color={colors.systemBlue} /></Pressable>}
     </View>
     <View style={styles.caption}>
       <ThemedText numberOfLines={2} style={[styles.hint, styles.grow, { color: colors.secondaryLabel }]}>{hint}</ThemedText>

@@ -1,6 +1,4 @@
-import { Pressable, View } from 'react-native';
-import Svg, { Polygon, Polyline } from 'react-native-svg';
-import { usePalette } from '@/theme/colors';
+import { EditorMenu } from '@/components/editor-menu';
 
 const regular = (count: number, inner = 1): [number, number][] => Array.from({ length: count }, (_, i) => {
   const angle = i * Math.PI * 2 / count - Math.PI / 2, r = i % 2 ? inner : 1;
@@ -26,12 +24,7 @@ export const SHAPES: { id: string; label: string; points: [number, number][]; op
   { id: 'double-arrow', label: 'Double arrow', points: [[0,.5],[.3,0],[.3,.3],[.7,.3],[.7,0],[1,.5],[.7,1],[.7,.7],[.3,.7],[.3,1]] },
   { id: 'heart', label: 'Heart', points: [[.5,1],[.05,.5],[0,.25],[.1,.05],[.3,0],[.5,.2],[.7,0],[.9,.05],[1,.25],[.95,.5]] },
 ];
-export function ShapePicker({ value, onChange, disabled }: { value: string; onChange: (id: string) => void; disabled: boolean }) {
-  const colors = usePalette();
-  return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>{SHAPES.map(shape => {
-    const Element = shape.open ? Polyline : Polygon;
-    return <Pressable key={shape.id} accessibilityRole="button" accessibilityLabel={shape.label} accessibilityState={{ selected: shape.id === value, disabled }} disabled={disabled} onPress={() => onChange(shape.id)} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: value === shape.id ? colors.systemBlue : colors.accentSurface }}>
-      <Svg width={28} height={28} viewBox="-0.1 -0.1 1.2 1.2"><Element points={shape.points.map(point => point.join(',')).join(' ')} fill="none" stroke={value === shape.id ? colors.systemBackground : colors.systemBlue} strokeWidth={0.07} strokeLinejoin="round" /></Svg>
-    </Pressable>;
-  })}</View>;
+export function ShapePicker({ value, onChange, disabled, compact = false }: { value: string; onChange: (id: string) => void; disabled: boolean; compact?: boolean }) {
+  return <EditorMenu label={`Shape: ${SHAPES.find(shape => shape.id === value)?.label ?? 'Rectangle'}`} compact={compact} icon={{ ios: 'square.on.circle', android: 'category' }} disabled={disabled}
+    items={SHAPES.map(shape => ({ id: shape.id, label: shape.label, selected: shape.id === value, onPress: () => onChange(shape.id) }))} />;
 }

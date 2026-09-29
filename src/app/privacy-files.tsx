@@ -22,6 +22,6 @@ export default function PrivacyFilesRoute() {
   const kind = tool.id === 'remove_text' || tool.id === 'pdf_scan' ? 'pdf' : 'image';
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={{ flex: 1, backgroundColor: colors.systemBackground }}>
     <Stack.Screen options={{ headerShown: false, animation: 'none' }} />
-    <RecentFilesScreen kind={kind} onSelect={select} selectionTitle={kind === 'pdf' ? 'Choose PDF' : 'Choose image'} />
+    <RecentFilesScreen kind={kind} includePdfs={tool.id === 'scan'} onSelect={select} selectionTitle={tool.id === 'scan' ? 'PDFs and images' : kind === 'pdf' ? 'Choose PDF' : 'Choose image'} />
   </SafeAreaView>;
 }

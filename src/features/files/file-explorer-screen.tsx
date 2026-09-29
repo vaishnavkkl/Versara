@@ -7,6 +7,7 @@ import { showDialog } from '@/components/app-dialog';
 import { ThemedText } from '@/components/themed-text';
 import { toast } from '@/components/toast';
 import { UniversalIcon } from '@/components/universal-icon';
+import { EditorMenu } from '@/components/editor-menu';
 import { usePalette } from '@/theme/colors';
 import { getGradients, gradient, spacing as s, typography as t } from '@/theme/dashboard';
 import { FileEngine, type DirectoryListing, type ExplorerEntry, type StorageRoot } from '../../../modules/file-engine';
@@ -15,6 +16,8 @@ import { explorerAvailable, openExplorerEntry } from './explorer';
 
 const LISTING_CACHE = 24;
 const listings = new Map<string, DirectoryListing>();
+type SortField = 'name' | 'modified' | 'size' | 'type';
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function remember(listing: DirectoryListing) {
   listings.delete(listing.path);
   listings.set(listing.path, listing);
@@ -40,6 +43,8 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [ascending, setAscending] = useState(true);
   const allowed = roots.some(root => root.allowed);
 
   const loadRoots = useCallback(() => {
@@ -107,6 +112,15 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
 
   const pickerKind = picker?.kind;
   const items = useMemo(() => listing?.path === path ? listing.items.filter(item => !pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind) : [], [listing, path, pickerKind]);
+  const sortedItems = useMemo(() => [...items].sort((a, b) => {
+    if (a.directory !== b.directory) return a.directory ? -1 : 1;
+    let comparison = sortField === 'modified' ? a.modified - b.modified
+      : sortField === 'size' ? a.size - b.size
+        : sortField === 'type' ? collator.compare(a.directory ? 'Folder' : a.kind, b.directory ? 'Folder' : b.kind) || collator.compare(a.name, b.name)
+          : collator.compare(a.name, b.name);
+    if (!ascending) comparison *= -1;
+    return comparison || collator.compare(a.name, b.name);
+  }), [items, sortField, ascending]);
 
   if (!path) {
     return (
@@ -168,6 +182,15 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           <ThemedText numberOfLines={1} style={[styles.folder, { color: colors.label }]}>{crumbs[crumbs.length - 1] ?? 'Folder'}</ThemedText>
           <ThemedText numberOfLines={1} ellipsizeMode="head" style={[styles.caption, { color: colors.secondaryLabel }]}>{crumbs.join(' › ')}</ThemedText>
         </View>
+        <EditorMenu compact icon={{ ios: 'arrow.up.arrow.down', android: 'sort' }} label={`Sort by ${{ name: 'name', modified: 'date modified', size: 'size', type: 'type' }[sortField]}`} items={[
+          { id: 'name', label: 'Name', selected: sortField === 'name', onPress: () => setSortField('name') },
+          { id: 'modified', label: 'Date modified', selected: sortField === 'modified', onPress: () => setSortField('modified') },
+          { id: 'size', label: 'Size', selected: sortField === 'size', onPress: () => setSortField('size') },
+          { id: 'type', label: 'Type', selected: sortField === 'type', onPress: () => setSortField('type') },
+        ]} />
+        <Pressable accessibilityRole="button" accessibilityLabel={ascending ? 'Sort ascending' : 'Sort descending'} onPress={() => setAscending(value => !value)} style={styles.back}>
+          <UniversalIcon ios={ascending ? 'arrow.up' : 'arrow.down'} android={ascending ? 'arrow-upward' : 'arrow-downward'} size={20} color={colors.systemBlue} />
+        </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Close folder" onPress={() => go(null)} hitSlop={8} style={styles.back}>
           <UniversalIcon ios="house" android="home" size={22} color={colors.label} />
         </Pressable>
@@ -179,7 +202,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
         </View>
       ) : (
         <FlatList
-          data={items}
+          data={sortedItems}
           keyExtractor={item => item.path}
           renderItem={renderItem}
           contentContainerStyle={styles.list}

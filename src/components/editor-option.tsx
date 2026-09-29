@@ -25,8 +25,8 @@ export function EditorOption({ label, selected = false, disabled = false, onPres
   const symbol = icon ?? optionIcon(label);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }]}>
-    {symbol && <UniversalIcon {...symbol} size={20} color={tint.ink} />}
-    <ThemedText style={{ fontSize: compact ? 10 : 13, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
+    {symbol && <UniversalIcon {...symbol} size={22} color={tint.ink} />}
+    <ThemedText style={{ fontSize: compact ? 13 : 15, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
   </Pressable>;
 }
-const styles = StyleSheet.create({ compact: { minWidth: 44, paddingHorizontal: 5, paddingVertical: 4, flexDirection: 'column', gap: 1 }, option: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ compact: { minWidth: 56, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'column', gap: 4 }, option: { minHeight: 52, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' } });

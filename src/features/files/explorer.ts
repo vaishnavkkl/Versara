@@ -1,9 +1,8 @@
 import { router } from 'expo-router';
-import { File, Paths } from 'expo-file-system';
 import { FileEngine, type ExplorerEntry, type ExplorerKind } from '../../../modules/file-engine';
 import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
 import { importDeviceRecent } from './recent-files';
-import { shareFile } from './file-storage';
+import { toast } from '@/components/toast';
 import type { UniversalIcon } from '@/components/universal-icon';
 
 export const explorerAvailable = () => !!FileEngine?.nativeExplorerVersion;
@@ -34,10 +33,7 @@ export async function openExplorerEntry(entry: ExplorerEntry) {
       router.push({ pathname: '/file-preview', params: { id: file.id } });
       return;
     }
-    // Share targets need an app-owned copy; external paths are not exposed through the share provider.
-    const copy = new File(Paths.cache, `share-${Date.now()}-${entry.name}`);
-    await new File(entry.uri).copy(copy);
-    await shareFile({ uri: copy.uri, mimeType: entry.mimeType || undefined });
+    toast(`${entry.name} isn't supported in Versara yet.`);
   } finally {
     opening = false;
   }

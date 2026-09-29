@@ -10,7 +10,7 @@ import { ScreenHeader } from '@/components/screen-header';
 import { showDialog } from '@/components/app-dialog';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ColorSwatches } from '@/components/color-swatches';
-import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
+import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, TextStyleMenu, type TextStyle } from '@/components/text-style-controls';
 import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
 import { toast } from '@/components/toast';
 import { usePalette } from '@/theme/colors';
@@ -282,6 +282,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           onPlace={({ nativeEvent }) => place(nativeEvent)}
           onTextChange={({ nativeEvent }) => setText(nativeEvent.text)}
           onSubmitText={({ nativeEvent }) => apply(nativeEvent.text)} />}
+        {boxOpen && <View style={{ position: 'absolute', top: 10, right: 10, maxWidth: '85%' }}><TextStyleMenu style={textStyle} onChange={setTextStyle} disabled={busy} /></View>}
       </View>
       {!keyboardOpen && <ThemedText numberOfLines={2} style={[styles.hint, { color: colors.secondaryLabel }]}>
         {boxOpen ? adding ? 'Type on the image. Drag the blue handle to move it. Tap the top checkmark to apply.' : 'Your changes appear live on the image. Tap the top checkmark to apply.' : addOnly ? 'Tap where the new text should start. Pinch to zoom.' : analysis.lines.length ? 'Tap any outlined text to change it. Pinch to zoom.' : 'No text was found in this image. Use Add text to write new text instead.'}

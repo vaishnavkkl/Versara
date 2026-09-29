@@ -5,8 +5,8 @@ type PrivacyTool = Method & { id: PrivacyMode; keywords: string };
 
 export const PRIVACY_TOOLS = [
   {
-    id: 'scan', title: 'Privacy Review', subtitle: 'Review possible sensitive English text.',
-    keywords: 'scan screenshot photo image private sensitive personal email phone address account OCR',
+    id: 'scan', title: 'Privacy Review', subtitle: 'Review private text in PDFs and images.',
+    keywords: 'pdf scan screenshot photo image private sensitive personal email phone address account OCR',
     ios: 'text.viewfinder', android: 'document-scanner',
   },
   {

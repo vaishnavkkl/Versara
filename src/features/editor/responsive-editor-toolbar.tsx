@@ -57,9 +57,9 @@ export const responsiveToolbarStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   probes: { position: 'absolute', opacity: 0, left: 0, top: 0, alignItems: 'flex-start' },
   probe: { alignSelf: 'flex-start', flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
-  compactProbe: { minWidth: 44, paddingHorizontal: 5, borderWidth: StyleSheet.hairlineWidth },
+  compactProbe: { minWidth: 56, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth },
   buttonProbe: { flexDirection: 'row', gap: 7, paddingHorizontal: spacing.md },
-  symbol: { width: 20, height: 20 },
-  compactText: { fontSize: 10 },
+  symbol: { width: 22, height: 22 },
+  compactText: { fontSize: 13 },
   buttonText: { ...typography.label, textAlign: 'center' },
 });

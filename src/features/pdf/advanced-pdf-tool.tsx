@@ -10,7 +10,8 @@ import { ColorSwatches, hexColor } from '@/components/color-swatches';
 import { DEFAULT_TEXT_STYLE, fontName, TextStyleControls } from '@/components/text-style-controls';
 import { UniversalIcon } from '@/components/universal-icon';
 import { EditorOption } from '@/components/editor-option';
-import { BrushControls } from './brush-controls';
+import { EditorMenu } from '@/components/editor-menu';
+import { BrushControls, BRUSHES } from './brush-controls';
 import { useMarkHistory, isMarkHistorySnapshot } from './use-mark-history';
 import { SHAPES, ShapePicker } from './shape-picker';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
@@ -175,7 +176,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     }
   }, [source.uri, directory]);
   const inspect = useCallback(async () => {
-    const result = await process({ operation: 'info' }, 'Reading document details…');
+    const result = await process({ operation: 'info' }, 'Reading document detailsâ€¦');
     if (mounted.current && result?.info) { setInfo(result.info); setPosition(String(result.info.pageCount)); setPage(value => Math.min(value, result.info!.pageCount)); }
   }, [process]);
   useEffect(() => { if (!active || !available || initialized.current) return; initialized.current = true; void inspect(); }, [active, available, inspect]);
@@ -183,7 +184,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     if (!active || !markup || !info || busy || results.length || preview?.page === page || previewAttempt.current === page) return;
     previewAttempt.current = page;
     const output = new File(directory, `markup-${uid()}.png`);
-    void process({ nativeEditor: true, action: 'preview', includeObjects: false, page: page - 1, imageUri: output.uri, edits: [] }, 'Preparing page…').then(result => {
+    void process({ nativeEditor: true, action: 'preview', includeObjects: false, page: page - 1, imageUri: output.uri, edits: [] }, 'Preparing pageâ€¦').then(result => {
       if (!mounted.current || !result?.outputs?.length) return;
       setPreview(previous => { if (previous) { try { new File(previous.uri).delete(); } catch { /* Session teardown retries. */ } } return { uri: output.uri, page, width: result.outputs![0].width ?? 1, height: result.outputs![0].height ?? 1 }; });
     });
@@ -241,7 +242,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
   }
   async function estimateSize() {
-    const result = await process({ operation: 'estimate', quality }, 'Estimating from sample pages…');
+    const result = await process({ operation: 'estimate', quality }, 'Estimating from sample pagesâ€¦');
     if (mounted.current && result?.estimatedSize != null) setEstimate({ quality, size: result.estimatedSize });
   }
   function numberCommands() {
@@ -293,7 +294,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       const selected = markup ? [...new Set(marks.map(mark => mark.page))].sort((a, b) => a - b) : pageRange(ranges, info.pageCount);
       if (markup && !marks.length) throw new Error('Add a mark to the page first.');
       if (tool === 'to_image' && selected.length > 100) throw new Error('Export up to 100 pages at a time.');
-      if (tool === 'protect' && (password !== confirmation || !/^[\x20-\x7e]{6,64}$/.test(password))) throw new Error('Enter matching passwords with 6–64 English letters, numbers or symbols.');
+      if (tool === 'protect' && (password !== confirmation || !/^[\x20-\x7e]{6,64}$/.test(password))) throw new Error('Enter matching passwords with 6â€“64 English letters, numbers or symbols.');
       if (tool === 'watermark' && !/^[\x20-\x7e]{1,100}$/.test(text.trim())) throw new Error('Enter a label with up to 100 English letters, numbers or symbols.');
       if (tool === 'insert' && (!/^\d+$/.test(position) || Number(position) > info.pageCount)) throw new Error(`Choose an insertion position from 0 to ${info.pageCount}.`);
       if (tool === 'numbers' && (!/^\d+$/.test(startNumber) || Number(startNumber) > 1_000_000)) throw new Error('Start numbering between 0 and 1,000,000.');
@@ -313,7 +314,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         names[index] = candidate;
         return new File(outputDirectory, candidate).uri;
       });
-      const result = await process({ ...(markup || tool === 'numbers' || tool === 'watermark' ? { nativeEditor: true, action: 'save', outputUri: outputUris[0], edits: markup ? marks.map(mark => ({ ...mark, page: mark.page - 1, shape: mark.kind, kind: mark.kind === 'image' ? 'image' : 'mark' })) : numbered } : {}), operation: tool, outputUris, pages: selected, quality, format, ocrFormat, skipExistingText, position: Number(position), insertUri: insert?.uri ?? '', text: text.trim(), startNumber: Number(startNumber), password, marks }, 'Processing on your device…');
+      const result = await process({ ...(markup || tool === 'numbers' || tool === 'watermark' ? { nativeEditor: true, action: 'save', outputUri: outputUris[0], edits: markup ? marks.map(mark => ({ ...mark, page: mark.page - 1, shape: mark.kind, kind: mark.kind === 'image' ? 'image' : 'mark' })) : numbered } : {}), operation: tool, outputUris, pages: selected, quality, format, ocrFormat, skipExistingText, position: Number(position), insertUri: insert?.uri ?? '', text: text.trim(), startNumber: Number(startNumber), password, marks }, 'Processing on your deviceâ€¦');
       if (!result?.outputs) return;
       const outputs = result.outputs.map((output, i) => ({ ...output, name: names[i] }));
       if (extension === 'pdf') await rememberPdfResults(outputs).catch(() => {});
@@ -349,7 +350,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   }
   function deleteOutput(output: Output) {
     if (locked.current || savedOutputs.current.has(output.uri)) return;
-    showDialog('Delete this output?', `Delete “${output.name}” from Versara? Your original PDF stays unchanged.`, [
+    showDialog('Delete this output?', `Delete â€œ${output.name}â€ from Versara? Your original PDF stays unchanged.`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => {
         if (!mounted.current || locked.current) return;
@@ -390,21 +391,31 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.secondarySystemBackground, borderColor: colors.borderHighlight }];
   const field = (label: string, value: string, setter: (value: string) => void, numeric = false, secure = false) => <View style={styles.field}><ThemedText style={styles.label}>{label}</ThemedText><TextInput accessibilityLabel={label} editable={!busy} value={value} onChangeText={setter} keyboardType={numeric ? 'number-pad' : 'default'} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={secure ? 64 : 100} style={inputStyle} /></View>;
   const choices = (items: { id: string; label: string; icon?: OptionIcon }[], selected: string, choose: (value: string) => void) => <View style={styles.choices}>{items.map(item => <EditorOption key={item.id} label={item.label} icon={item.icon} selected={selected === item.id} disabled={busy} onPress={() => choose(item.id)} />)}</View>;
-  const status = <>{busy && <View style={styles.status}><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Please wait…'}{progress > 0 ? ` ${Math.round(progress * 100)}%` : ''}</ThemedText>{job.current && <ToolButton title="Cancel" secondary onPress={() => { if (signatureJob.current) FileEngine?.cancelImageJob(signatureJob.current); if (job.current) { PdfEngine?.cancelPdfTool(job.current); PdfEngine?.cancelTextEdit(job.current); } }} />}</View>}{!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}{!!recovery.error && <ThemedText accessibilityRole="alert">{recovery.error}</ThemedText>}{!!notice && <ThemedText accessibilityLiveRegion="polite">{notice}</ThemedText>}</>;
+  const status = <>{busy && <View style={styles.status}><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Please waitâ€¦'}{progress > 0 ? ` ${Math.round(progress * 100)}%` : ''}</ThemedText>{job.current && <ToolButton title="Cancel" secondary onPress={() => { if (signatureJob.current) FileEngine?.cancelImageJob(signatureJob.current); if (job.current) { PdfEngine?.cancelPdfTool(job.current); PdfEngine?.cancelTextEdit(job.current); } }} />}</View>}{!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}{!!recovery.error && <ThemedText accessibilityRole="alert">{recovery.error}</ThemedText>}{!!notice && <ThemedText accessibilityLiveRegion="polite">{notice}</ThemedText>}</>;
   if (!available) return <View style={styles.content}><ThemedText>Install a new development build to use these native PDF tools on this device.</ThemedText></View>;
-  if (results.length) return <ScrollView contentContainerStyle={styles.content}>{status}<ThemedText style={styles.heading}>{tool === 'repair' ? 'Rewritten and validated' : 'Your files are ready'}</ThemedText>{tool === 'compress' && <ThemedText>Original {formatSize(source.size)} · Result {formatSize(results[0].size)}{results[0].size >= source.size ? ' — no size reduction for this document.' : ` — ${Math.round((1 - results[0].size / source.size) * 100)}% smaller.`}</ThemedText>}{results.map(output => <View key={output.uri} style={[styles.result, { backgroundColor: colors.secondarySystemBackground }]}><ThemedText style={styles.label}>{output.name}</ThemedText><ThemedText>{formatSize(output.size)}</ThemedText>{output.name.endsWith('.pdf') && tool !== 'protect' && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}{tool === 'protect' && <ThemedText>Use the password you set when opening this file in a password-capable PDF reader.</ThemedText>}<View style={styles.choices}><ToolButton title="Save to device" disabled={busy} onPress={() => void save(output)} /><ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>{!savedOutputs.current.has(output.uri) && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}</View>)}<ToolButton title="Run again" secondary disabled={busy} onPress={() => { setResults([]); setTextPreview(''); setNotice(''); }} />{!!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}</ScrollView>;
+  if (results.length) return <ScrollView contentContainerStyle={styles.content}>{status}<ThemedText style={styles.heading}>{tool === 'repair' ? 'Rewritten and validated' : 'Your files are ready'}</ThemedText>{tool === 'compress' && <ThemedText>Original {formatSize(source.size)} Â· Result {formatSize(results[0].size)}{results[0].size >= source.size ? ' â€” no size reduction for this document.' : ` â€” ${Math.round((1 - results[0].size / source.size) * 100)}% smaller.`}</ThemedText>}{results.map(output => <View key={output.uri} style={[styles.result, { backgroundColor: colors.secondarySystemBackground }]}><ThemedText style={styles.label}>{output.name}</ThemedText><ThemedText>{formatSize(output.size)}</ThemedText>{output.name.endsWith('.pdf') && tool !== 'protect' && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}{tool === 'protect' && <ThemedText>Use the password you set when opening this file in a password-capable PDF reader.</ThemedText>}<View style={styles.choices}><ToolButton title="Save to device" disabled={busy} onPress={() => void save(output)} /><ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>{!savedOutputs.current.has(output.uri) && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}</View>)}<ToolButton title="Run again" secondary disabled={busy} onPress={() => { setResults([]); setTextPreview(''); setNotice(''); }} />{!!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}</ScrollView>;
   if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;
   if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
-  if (tool === 'info') return <ScrollView contentContainerStyle={styles.content}>{status}<ToolButton title="Preview PDF" secondary onPress={() => setShowSourcePreview(true)} /><ThemedText style={styles.heading}>{source.name}</ThemedText>{Object.entries({ Pages: info.pageCount, Size: formatSize(info.size), 'First page': `${Math.round(info.width)} × ${Math.round(info.height)} pt`, 'PDF version': info.version, Encrypted: info.encrypted ? 'Yes' : 'No', Title: info.title || '—', Author: info.author || '—', Subject: info.subject || '—', Creator: info.creator || '—', Producer: info.producer || '—' }).map(([key, value]) => <View key={key} style={styles.field}><ThemedText style={{ color: colors.secondaryLabel }}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView>;
+  if (tool === 'info') return <ScrollView contentContainerStyle={styles.content}>{status}<ToolButton title="Preview PDF" secondary onPress={() => setShowSourcePreview(true)} /><ThemedText style={styles.heading}>{source.name}</ThemedText>{Object.entries({ Pages: info.pageCount, Size: formatSize(info.size), 'First page': `${Math.round(info.width)} Ã— ${Math.round(info.height)} pt`, 'PDF version': info.version, Encrypted: info.encrypted ? 'Yes' : 'No', Title: info.title || 'â€”', Author: info.author || 'â€”', Subject: info.subject || 'â€”', Creator: info.creator || 'â€”', Producer: info.producer || 'â€”' }).map(([key, value]) => <View key={key} style={styles.field}><ThemedText style={{ color: colors.secondaryLabel }}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView>;
   const settingsAction = <EditorOption label="Settings" compact accessibilityLabel="Show or hide tool settings" selected={optionsOpen} onPress={() => { Keyboard.dismiss(); setOptionsOpen(value => !value); }} />;
   const toolActions = <View style={responsiveToolbarStyles.tools}>
     {markup ? <>
-      <EditorOption label="Style" compact accessibilityLabel="Show or hide stroke style and colour" selected={showStyle} disabled={busy || selectedMark?.kind === 'image'} onPress={() => setShowStyle(value => !value)} />
-      <EditorOption label="Select" compact accessibilityLabel="Select and resize marks" selected={selecting} disabled={busy} onPress={() => { setErasing(false); setSelectedId(undefined); setSelecting(value => !value); }} />
-      {tool === 'highlight' && <EditorOption label={brush ? 'Brush' : 'Area'} compact accessibilityLabel={brush ? 'Brush mode. Switch to area highlight' : 'Area mode. Switch to brush highlight'} disabled={busy} onPress={() => { setBrush(value => !value); setSelecting(false); }} />}
+      {(tool === 'draw' || tool === 'sign' || tool === 'highlight') && <EditorMenu compact label={`Brush: ${BRUSHES.find(item => item.id === brushType)?.label ?? 'Pen'}`} icon={{ ios: 'paintbrush.pointed', android: 'brush' }} disabled={busy || selectedMark?.kind === 'image'} items={BRUSHES.map(item => ({ id: item.id, label: item.label, selected: brushType === item.id, onPress: () => { setErasing(false); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); if (tool === 'highlight') setBrush(true); } }))} />}
+      {tool === 'shapes' && <ShapePicker compact value={shape} onChange={setShape} disabled={busy} />}
+      <EditorMenu compact label={selecting ? 'Select and resize' : tool === 'sign' ? 'Draw signature' : 'Draw'} icon={{ ios: 'cursorarrow', android: 'select-all' }} disabled={busy} items={[
+        { id: 'draw', label: tool === 'sign' ? 'Draw signature' : 'Draw', selected: !selecting, onPress: () => { setSelecting(false); setErasing(false); setSelectedId(undefined); } },
+        { id: 'select', label: 'Select and resize', selected: selecting, onPress: () => { setSelecting(true); setErasing(false); } },
+      ]} />
+      <EditorMenu compact label="Tools" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} items={[
+        { id: 'draw', label: tool === 'sign' ? 'Draw signature' : 'Draw', selected: !selecting && !erasing, onPress: () => { setSelecting(false); setErasing(false); setSelectedId(undefined); } },
+        { id: 'style', label: showStyle ? 'Hide style and colour controls' : 'Show style and colour controls', selected: showStyle, disabled: selectedMark?.kind === 'image', onPress: () => setShowStyle(value => !value) },
+        ...['solid', 'dashed', 'dotted'].map(value => ({ id: `pattern-${value}`, label: `${value[0].toUpperCase()}${value.slice(1)} stroke`, selected: pattern === value, disabled: value !== 'solid' && !PdfEngine?.nativeStrokePatternsVersion, onPress: () => { setPattern(value); styleSelection({ pattern: value }); } })),
+        ...(tool === 'highlight' ? [{ id: 'area', label: 'Area highlight', selected: !brush, onPress: () => { setBrush(false); setSelecting(false); setErasing(false); } }, { id: 'brush', label: 'Brush highlight', selected: brush, onPress: () => { setBrush(true); setSelecting(false); setErasing(false); } }] : []),
+        ...(markupEditing ? [{ id: 'erase', label: 'Stroke eraser', selected: erasing, onPress: () => { setErasing(value => !value); setSelecting(false); } }] : []),
+      ]} />
     </> : settingsAction}
   </View>;
-  const pageControls = <PdfPreviewToolbar page={page} count={info.pageCount} disabled={busy} onPageChange={target => numberPreview ? void previewNumbers(target) : setPage(target)}>{!toolbar.atBottom && toolActions}</PdfPreviewToolbar>;
+  const pageControls = <PdfPreviewToolbar page={page} count={info.pageCount} disabled={busy} onPageChange={target => numberPreview ? void previewNumbers(target) : setPage(target)}>{markup || !toolbar.atBottom ? toolActions : undefined}</PdfPreviewToolbar>;
   if (markup) return <View style={styles.markup}>
     {toolbar.measurements}
     {pageControls}
@@ -416,8 +427,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       <EditorOption label="Delete" disabled={busy} onPress={() => { history.remove(selectedMark.id!); setSelectedId(undefined); }} />
     </View>}
     {showStyle && selectedMark?.kind !== 'image' && <ScrollView style={{ maxHeight: '36%', flexGrow: 0 }} contentContainerStyle={{ gap: 10, padding: 12 }} keyboardShouldPersistTaps="handled">
-      {(tool === 'draw' || tool === 'sign' || tool === 'highlight' && brush) && <BrushControls patternsAvailable={!!PdfEngine?.nativeStrokePatternsVersion} brush={brushType} pattern={pattern} disabled={busy} editingAvailable={markupEditing} opacity={inkOpacity} onOpacity={value => { setInkOpacity(value); styleSelection({ opacity: value }); }} erasing={erasing} onEraser={() => { setErasing(value => !value); setSelecting(false); }} onBrush={(value, width, opacity) => { setErasing(false); setBrushType(value); setInkWidth(width); setInkOpacity(opacity); styleSelection({ brush: value, width, opacity }); }} onPattern={value => { setPattern(value); styleSelection({ pattern: value }); }} />}
-      {tool === 'shapes' && <ShapePicker value={shape} onChange={setShape} disabled={busy} />}
+      {(tool === 'draw' || tool === 'sign' || tool === 'highlight' && brush) && <BrushControls showSelectors={false} patternsAvailable={!!PdfEngine?.nativeStrokePatternsVersion} brush={brushType} pattern={pattern} disabled={busy} editingAvailable={markupEditing} opacity={inkOpacity} onOpacity={value => { setInkOpacity(value); styleSelection({ opacity: value }); }} erasing={erasing} onEraser={() => { setErasing(value => !value); setSelecting(false); }} onBrush={(value, width, opacity) => { setErasing(false); setBrushType(value); setInkWidth(width); setInkOpacity(opacity); styleSelection({ brush: value, width, opacity }); }} onPattern={value => { setPattern(value); styleSelection({ pattern: value }); }} />}
       <ThemedText style={styles.label}>{tool === 'shapes' ? 'Border colour' : 'Ink colour'}</ThemedText>
       <ColorSwatches value={parseInt(inkColor.slice(1), 16)} onChange={value => { const color = hexColor(value ?? 0); setInkColor(color); styleSelection({ color }); }} disabled={busy} />
       {tool === 'shapes' && shape !== 'line' && <><ThemedText style={styles.label}>Fill colour</ThemedText><ColorSwatches value={fillColor} onChange={value => { setFillColor(value); styleSelection({ fillColor: value === null ? '' : hexColor(value) }); }} original={{ label: 'None', value: null }} disabled={busy} /></>}
@@ -431,7 +441,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       {!imageSignaturesAvailable && <ThemedText>Update the native app build to add signature images.</ThemedText>}
     </View>}
     <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
-      {toolbar.atBottom && toolActions}
+      {!markup && toolbar.atBottom && toolActions}
       <Pressable accessibilityRole="button" accessibilityLabel="Undo annotation" disabled={busy || !history.canUndo} onPress={undoMark} style={[styles.icon, !history.canUndo && { opacity: 0.35 }]}><UniversalIcon ios="arrow.uturn.backward" android="undo" size={24} color={colors.systemBlue} /></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Redo annotation" disabled={busy || !history.canRedo} onPress={redoMark} style={[styles.icon, !history.canRedo && { opacity: 0.35 }]}><UniversalIcon ios="arrow.uturn.forward" android="redo" size={24} color={colors.systemBlue} /></Pressable>
       <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={busy || !recovery.ready || !marks.length} onPress={() => void run()} /></View>
@@ -440,10 +450,10 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.markup}>
     {toolbar.measurements}
     {(tool === 'numbers' || tool === 'watermark') ? <>{pageControls}{numberPreview ? <PdfPagePreview image={numberPreview} active={active} preserveViewport /> : <PdfPreviewStage hint={tool === 'watermark' ? 'Enter a watermark to preview its placement.' : 'Preparing page numbers...'}><View style={styles.status}>{busy && <AppLoader />}</View></PdfPreviewStage>}</> : <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} embedded toolbarActions={toolbar.atBottom ? undefined : toolActions} onClose={() => {}} />}
-    {optionsOpen && <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets style={{ maxHeight: '44%', flexGrow: 0 }} contentContainerStyle={styles.content}>{status}<View style={styles.field}><ThemedText style={styles.label}>{source.name}</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>{info.pageCount} pages · {formatSize(info.size)}</ThemedText></View><ThemedText>{guidance[tool]}</ThemedText>
+    {optionsOpen && <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets style={{ maxHeight: '44%', flexGrow: 0 }} contentContainerStyle={styles.content}>{status}<View style={styles.field}><ThemedText style={styles.label}>{source.name}</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>{info.pageCount} pages Â· {formatSize(info.size)}</ThemedText></View><ThemedText>{guidance[tool]}</ThemedText>
 
     {rangeTools.has(tool) && <>{field('Pages (leave empty for all)', ranges, setRanges)}<ThemedText style={{ color: colors.secondaryLabel }}>For example: 1, 3, 5-8</ThemedText></>}
-    {tool === 'insert' && <>{field(`Insert after page (0–${info.pageCount})`, position, setPosition, true)}<ThemedText>{insert ? insert.name : 'One blank page'}</ThemedText><ToolButton title="Choose PDF to insert" secondary disabled={busy} onPress={() => void pickInsert()} />{insert && <ToolButton title="Use a blank page" secondary disabled={busy} onPress={() => { try { new File(insert.uri).delete(); } catch { /* Session cleanup. */ } setInsert(undefined); }} />}</>}
+    {tool === 'insert' && <>{field(`Insert after page (0â€“${info.pageCount})`, position, setPosition, true)}<ThemedText>{insert ? insert.name : 'One blank page'}</ThemedText><ToolButton title="Choose PDF to insert" secondary disabled={busy} onPress={() => void pickInsert()} />{insert && <ToolButton title="Use a blank page" secondary disabled={busy} onPress={() => { try { new File(insert.uri).delete(); } catch { /* Session cleanup. */ } setInsert(undefined); }} />}</>}
     {(tool === 'compress' || tool === 'to_image') && choices([{ id: 'max', label: 'Max quality', icon: { ios: 'sparkles', android: 'high-quality' } }, { id: 'balanced', label: 'Balanced', icon: { ios: 'scalemass', android: 'balance' } }, { id: 'small', label: 'Smallest', icon: { ios: 'arrow.down.right.and.arrow.up.left', android: 'compress' } }], quality, setQuality)}
     {tool === 'compress' && <><ToolButton title="Estimate output size" secondary disabled={busy} onPress={() => void estimateSize()} />{estimate?.quality === quality && <ThemedText>Output will be at most {formatSize(Math.min(estimate.size, info.size))}. The exact reduction is known after saving; an already optimized PDF may stay the same size.</ThemedText>}</>}
     {tool === 'ocr' && <>

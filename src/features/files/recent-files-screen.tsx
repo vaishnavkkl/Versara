@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { EditorMenu } from '@/components/editor-menu';
 import { AppLoader } from '@/components/app-loader';
 import { router, useFocusEffect } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
@@ -50,18 +51,20 @@ function cacheList(key: string, value: CachedList) {
   if (listCache.size > 8) listCache.delete(listCache.keys().next().value!);
 }
 
-export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: FileKind; onSelect?: (file: RecentFile) => Promise<boolean>; selectionTitle?: string }) {
+export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs = false }: { kind: FileKind; includePdfs?: boolean; onSelect?: (file: RecentFile) => Promise<boolean>; selectionTitle?: string }) {
+  const cacheKind = includePdfs ? 'privacy' : kind;
+  const showPdfs = kind === 'pdf' || includePdfs;
   const colors = usePalette();
   const active = useScreenActive();
   const [grid] = useLayoutPreference();
-  const [libraryFiles, setFiles] = useState<RecentListItem[]>(() => listCache.get(`${kind}|`)?.items ?? []);
+  const [libraryFiles, setFiles] = useState<RecentListItem[]>(() => listCache.get(`${cacheKind}|`)?.items ?? []);
   const [search, setSearch] = useState('');
-  const pdfs = useDevicePdfs(kind === 'pdf' && active, search);
+  const pdfs = useDevicePdfs(showPdfs && active, search);
   const [accessBusy, setAccessBusy] = useState(false);
-  const files = useMemo(() => kind === 'pdf' && hasNativePdfLibrary
+  const files = useMemo(() => showPdfs && hasNativePdfLibrary
     ? [...libraryFiles, ...pdfs.items].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT)
-    : libraryFiles, [kind, libraryFiles, pdfs.items]);
-  const [loading, setLoading] = useState(() => !listCache.has(`${kind}|`));
+    : libraryFiles, [showPdfs, libraryFiles, pdfs.items]);
+  const [loading, setLoading] = useState(() => !listCache.has(`${cacheKind}|`));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accessHint, setAccessHint] = useState(false);
@@ -75,7 +78,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
   useFocusEffect(useCallback(() => {
     focused.current = true;
     navigating.current = false;
-    const key = `${kind}|${search.trim()}`;
+    const key = `${cacheKind}|${search.trim()}`;
     const cached = listCache.get(key);
     const forced = lastRevision.current !== revision || refreshOnReturn.current;
     refreshOnReturn.current = false;
@@ -88,7 +91,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
     if (cached) { setFiles(current => current === cached.items ? current : cached.items); setLoading(false); }
     if (cached && !forced && Date.now() - cached.loaded < REFRESH_AFTER_MS) return () => { cancelled = true; focused.current = false; };
     const timer = setTimeout(() => {
-      void listCategoryFiles(kind, search).then(items => {
+      void (includePdfs ? Promise.all([listCategoryFiles('image', search), listCategoryFiles('pdf', search)]).then(groups => groups.flat().sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT)) : listCategoryFiles(kind, search)).then(items => {
         if (cancelled) return;
         const signature = signatureOf(items);
         const previous = listCache.get(key);
@@ -100,7 +103,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
       }).finally(() => { if (!cancelled) setLoading(false); });
     }, search ? 180 : 0);
     return () => { cancelled = true; focused.current = false; clearTimeout(timer); };
-  }, [kind, search, revision]));
+  }, [kind, cacheKind, includePdfs, search, revision]));
 
   async function openLibrary(file: RecentFile) {
     // The listing already has the document path. Avoid resolving it again inside
@@ -139,15 +142,15 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
     }
   }
 
-  async function browse() {
+  async function browse(importKind: FileKind = kind) {
     if (picking.current || navigating.current) return;
     picking.current = true; setBusy(true); setError(null);
     try {
-      if (kind !== 'pdf') {
+      if (importKind !== 'pdf') {
         const status = await getFileAccessStatus();
         if (status === 'denied' || status === 'undetermined') await requestFileAccess();
       }
-      const file = await importRecentFile(kind);
+      const file = await importRecentFile(importKind);
       if (file) refreshOnReturn.current = true;
       if (file && focused.current) await openLibrary(file);
     } catch (cause) {
@@ -206,7 +209,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
           <UniversalIcon ios="magnifyingglass" android="search" size={20} color={colors.secondaryLabel} />
           <TextInput
             accessibilityLabel={`Search recent ${kind} files`}
-            placeholder={`Search ${kind === 'pdf' ? 'PDFs' : kind === 'audio' ? 'audio' : `${label.toLowerCase()}s`}`}
+            placeholder={includePdfs ? 'Search PDFs and images' : `Search ${kind === 'pdf' ? 'PDFs' : kind === 'audio' ? 'audio' : `${label.toLowerCase()}s`}`}
             placeholderTextColor={colors.secondaryLabel}
             value={search}
             onChangeText={setSearch}
@@ -215,13 +218,13 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
             style={[styles.input, { color: colors.label }]}
           />
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Open ${article} ${label.toLowerCase()}`} disabled={busy} onPress={() => { void browse(); }} style={[styles.browse, getGradients(colors).module, { borderColor: colors.moduleBorder }]}>
+        {includePdfs ? <EditorMenu label="Open" disabled={busy} items={[{ id: 'pdf', label: 'Open PDF', onPress: () => void browse('pdf') }, { id: 'image', label: 'Open image', onPress: () => void browse('image') }]} /> : <Pressable accessibilityRole="button" accessibilityLabel={`Open ${article} ${label.toLowerCase()}`} disabled={busy} onPress={() => { void browse(); }} style={[styles.browse, getGradients(colors).module, { borderColor: colors.moduleBorder }]}>
           {busy ? <AppLoader color={colors.moduleText} /> : <UniversalIcon ios="folder.badge.plus" android="create-new-folder" size={20} color={colors.moduleText} />}
           <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Open</ThemedText>
-        </Pressable>
+        </Pressable>}
       </View>
 
-      {kind === 'pdf' && Platform.OS !== 'web' && (hasNativePdfLibrary ? <View style={styles.pdfStatus}>
+      {showPdfs && Platform.OS !== 'web' && (hasNativePdfLibrary ? <View style={styles.pdfStatus}>
         {pdfs.access ? <>
           <ThemedText style={[styles.caption, styles.grow, { color: colors.secondaryLabel }]}>{search ? 'Matching recent PDFs' : `Recent PDFs on this device${Platform.OS === 'ios' ? ' folders' : ''}`}</ThemedText>
           {Platform.OS === 'ios' && <Pressable accessibilityRole="button" accessibilityLabel="Add PDF folder" disabled={accessBusy} onPress={requestPdfAccess} style={styles.pageButton}><UniversalIcon ios="folder.badge.plus" android="create-new-folder" size={20} color={colors.systemBlue} /></Pressable>}
@@ -232,7 +235,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
           <ThemedText style={[styles.accessText, { color: colors.systemBlue }]}>{accessBusy ? 'Opening…' : Platform.OS === 'ios' ? 'Add a PDF folder to show recent PDFs' : 'Allow file access to show recent PDFs'}</ThemedText>
         </Pressable>}
       </View> : <ThemedText style={styles.message}>Install a new development build to enable native device PDF access.</ThemedText>)}
-      {kind === 'pdf' && !!pdfs.error && <ThemedText accessibilityRole="alert" style={[styles.caption, styles.inset, { color: colors.label }]}>{pdfs.error}</ThemedText>}
+      {showPdfs && !!pdfs.error && <ThemedText accessibilityRole="alert" style={[styles.caption, styles.inset, { color: colors.label }]}>{pdfs.error}</ThemedText>}
 
       {accessHint && (
         <Pressable
@@ -284,9 +287,9 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
               <View style={[styles.row, grid && styles.gridCell, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
                 <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} style={[styles.file, grid && styles.gridFile]}>
                   <View style={[styles.thumbnail, grid && styles.gridThumbnail]}>
-                    {!fromDevice || (kind === 'image' && item.uri.startsWith('content://'))
-                      ? <FileThumbnail uri={item.uri} kind={kind} active={active && !busy} />
-                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={kind === 'video' ? 'play.rectangle' : kind === 'audio' ? 'waveform' : kind === 'image' ? 'photo' : 'doc.richtext'} android={kind === 'video' ? 'smart-display' : kind === 'audio' ? 'graphic-eq' : kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
+                    {!fromDevice || (item.kind === 'image' && item.uri.startsWith('content://'))
+                      ? <FileThumbnail uri={item.uri} kind={item.kind} active={active && !busy} />
+                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : 'doc.richtext'} android={item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
                   </View>
                   <View style={styles.grow}>
                     <ThemedText numberOfLines={2} style={[styles.name, { color: colors.label }]}>{item.name}</ThemedText>
@@ -308,8 +311,8 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle }: { kind: Fi
               <View style={[styles.emptyIcon, getGradients(colors).module, { borderColor: colors.moduleBorder }]}>
                 <UniversalIcon ios="folder" android="folder-open" size={28} color={colors.moduleText} />
               </View>
-              <ThemedText style={[styles.heading, { color: colors.label }]}>{search ? 'No matching files' : emptyCopy[kind].title}</ThemedText>
-              <ThemedText style={[styles.emptyText, { color: colors.secondaryLabel }]}>{search ? 'Try a different file name.' : emptyCopy[kind].body}</ThemedText>
+              <ThemedText style={[styles.heading, { color: colors.label }]}>{search ? 'No matching files' : includePdfs ? 'Choose a PDF or image' : emptyCopy[kind].title}</ThemedText>
+              <ThemedText style={[styles.emptyText, { color: colors.secondaryLabel }]}>{search ? 'Try a different file name.' : includePdfs ? 'Open a PDF or image to review private details.' : emptyCopy[kind].body}</ThemedText>
             </View>
           )}
         />
