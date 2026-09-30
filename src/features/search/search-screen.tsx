@@ -14,6 +14,7 @@ import { FileEngine, type ExplorerEntry } from '../../../modules/file-engine';
 import { ExplorerRow } from '@/features/files/explorer-row';
 import { explorerAvailable, KIND_GLYPHS, openExplorerEntry } from '@/features/files/explorer';
 import { importRecentFile } from '@/features/files/recent-files';
+import { startNewDocument } from '@/features/documents/open-document';
 import { EDITOR_TOOL_TABS } from '@/features/files/media-toolbar';
 import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
 import { createImagePdfToolForFile } from '@/features/pdf/pdf-tool-session';
@@ -94,7 +95,9 @@ export function SearchScreen() {
     busy.current = true; setOpening(tool.key); Keyboard.dismiss();
     let session: string | null = null;
     try {
-      if (tool.module === 'Privacy') {
+      if (tool.module === 'Documents') {
+        startNewDocument(tool.id === 'text' ? 'txt' : 'docx');
+      } else if (tool.module === 'Privacy') {
         const privacyTool = getPrivacyTool(tool.id);
         if (!privacyTool) throw new Error('This privacy tool is unavailable. Please choose another tool.');
         if (!(await openPrivacyTool(privacyTool.id, { current: () => mounted.current }))) return;

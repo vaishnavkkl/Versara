@@ -5,6 +5,7 @@ import { showDialog } from '@/components/app-dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ScreenHeader } from '@/components/screen-header';
+import { HeaderHistorySlot } from '@/components/header-history';
 import { UniversalIcon } from '@/components/universal-icon';
 import { PdfToolLayoutContext } from '@/features/pdf/pdf-tool-layout';
 import { ToolButton } from '@/components/tool-button';
@@ -62,7 +63,7 @@ export default function PdfToolScreen() {
   const tool = session?.tool;
   return <PdfToolLayoutContext.Provider value={{ landscape, setLandscape }}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !unsaved, orientation: landscape ? 'landscape' : 'portrait' }} />
-    {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close}><Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { backgroundColor: colors.accentSurface, opacity: pressed ? .6 : 1 }]}><UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.accent} /></Pressable></ScreenHeader>}
+    {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close}><HeaderHistorySlot /><Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { backgroundColor: colors.accentSurface, opacity: pressed ? .6 : 1 }]}><UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.accent} /></Pressable></ScreenHeader>}
     {!session ? <View style={styles.empty}><ThemedText>Select a file from the PDF tools to get started.</ThemedText><ToolButton title="Back to PDF tools" onPress={close} /></View>
       : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} />
       : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : 'edit'} />

@@ -1,4 +1,5 @@
 import { EditorMenu } from '@/components/editor-menu';
+import { HeaderHistoryButtons } from '@/components/header-history';
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, FlatList, ScrollView, StyleSheet, View } from 'react-native';
@@ -364,7 +365,9 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   const secondaryText = { color: colors.secondaryLabel };
   const totalSelected = scan?.findings.filter(finding => selectedFindingIds.has('scan-' + finding.id)).length ?? 0;
   return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <ScreenHeader title={TITLES[mode]} onBack={close} />
+    <ScreenHeader title={TITLES[mode]} onBack={close}>
+      {mode !== 'metadata' && <HeaderHistoryButtons canUndo={history.canUndo} canRedo={history.canRedo} disabled={busy} onUndo={() => restoreHistory(false)} onRedo={() => restoreHistory(true)} />}
+    </ScreenHeader>
     {!available ? <View style={styles.empty}>
       <UniversalIcon ios="lock.shield" android="security" size={36} color={colors.privacyInk} />
       <ThemedText>Update the app build to use native privacy scanning and export.</ThemedText>
@@ -385,11 +388,9 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
       {isPdf && image ? <PdfDocumentPreview uri={image.uri} count={pageCount} embedded onClose={close} /> : image ? <PdfPreviewStage hint={saved ? 'Saved PNG copy. Pinch to zoom and review.' : 'Final PNG preview. Review every cover before saving.'} onFit={() => setFit(value => value + 1)}>
         {active && <ZoomableImage key={image.uri + ':' + fit} uri={image.uri} onClose={close} />}
       </PdfPreviewStage>
-        : mode !== 'metadata' && PdfMarkupView ? <PdfPreviewStage actions={<EditorMenu label={selecting ? 'Select cover' : 'Cover'} disabled={busy} items={[
-          { id: 'cover', label: 'Add cover', selected: !selecting, onPress: () => { setSelecting(false); setSelectedId(undefined); setReviewing(false); } },
-          { id: 'select', label: 'Select and resize', selected: selecting, disabled: !canSelect, onPress: () => { setSelecting(true); setReviewing(false); } },
+        : mode !== 'metadata' && PdfMarkupView ? <PdfPreviewStage actions={<EditorMenu label="Settings" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} items={[
           { id: 'delete', label: 'Delete selected cover', disabled: !selectedId || !marks.some(mark => mark.id === selectedId), onPress: () => changeMarks(current => current.filter(mark => mark.id !== selectedId)) },
-          { id: 'review', label: reviewing ? 'Hide review' : 'Review suggestions', onPress: () => setReviewing(value => !value) },
+          { id: 'review', label: reviewing ? 'Hide review' : 'Review suggestions', selected: reviewing, onPress: () => setReviewing(value => !value) },
         ]} />} hint={selecting ? 'Tap a cover to select it. Drag its handles to resize.' : 'Drag to add a solid cover. Use two fingers to zoom and pan.'} onFit={() => setFit(value => value + 1)}>
           {active && <PdfMarkupView key={fit} style={styles.grow} source={basePreview.uri} marks={marksJson} mode={selecting ? 'select' : 'polygon'}
             inkColor="#000000" fillColor="#000000" inkWidth={.001} inkOpacity={1} brush="pen" pattern="solid" shapePath={RECTANGLE}
@@ -435,8 +436,8 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
         </> : <>
           <View style={styles.row}>
             {mode !== 'metadata' && <>
-              <EditorOption label="Undo" compact disabled={!history.canUndo} onPress={() => restoreHistory(false)} />
-              <EditorOption label="Redo" compact disabled={!history.canRedo} onPress={() => restoreHistory(true)} />
+              <EditorOption compact label="Cover" selected={!selecting} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setSelectedId(undefined); setReviewing(false); }} />
+              <EditorOption compact label="Select & resize" selected={selecting} disabled={busy || !canSelect} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setReviewing(false); }} />
               {selecting && <EditorOption label="Delete" compact disabled={!selectedId || !marks.some(mark => mark.id === selectedId)} onPress={() => changeMarks(current => current.filter(mark => mark.id !== selectedId))} />}
             </>}
             <EditorOption label={mode === 'metadata' ? 'Metadata' : 'Review'} compact icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => setReviewing(value => !value)} />

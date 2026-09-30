@@ -115,7 +115,7 @@ final class PdfDeviceLibrary {
     }
   }
   /// Newest PDFs in the chosen folders. Walks at most three levels and a bounded number of entries; no index is built.
-  func recent(limit: Int, search: String, promise: Promise) {
+  func recent(limit: Int, search: String, kind: String = "pdf", extensions: Set<String> = ["pdf"], promise: Promise) {
     let id = UUID().uuidString
     run(id, promise: promise) {
       let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
@@ -131,7 +131,7 @@ final class PdfDeviceLibrary {
           if visited > 4000 { break }
           if visited % 200 == 0 { try self.check(id) }
           if files.level > 3 { files.skipDescendants(); continue }
-          guard file.pathExtension.lowercased() == "pdf", let values = try? file.resourceValues(forKeys: keys),
+          guard extensions.contains(file.pathExtension.lowercased()), let values = try? file.resourceValues(forKeys: keys),
                 values.isRegularFile == true, values.isSymbolicLink != true else { continue }
           let name = file.lastPathComponent
           if !needle.isEmpty && !name.lowercased().contains(needle) { continue }
@@ -141,8 +141,10 @@ final class PdfDeviceLibrary {
       }
       found.sort { $0.modified > $1.modified }
       return found.prefix(limit).map { item -> [String: Any] in
-        ["id": "device-pdf-\(item.uri)", "uri": item.uri, "name": item.name, "mimeType": "application/pdf",
-         "size": item.size, "modified": item.modified, "kind": "pdf", "source": "device"]
+        let ext = (item.name as NSString).pathExtension.lowercased()
+        let mime = ext == "pdf" ? "application/pdf" : ext == "txt" ? "text/plain" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        return ["id": "device-\(kind)-\(item.uri)", "uri": item.uri, "name": item.name, "mimeType": mime,
+         "size": item.size, "modified": item.modified, "kind": kind, "source": "device"]
       }
     }
   }

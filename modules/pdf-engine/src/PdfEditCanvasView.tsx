@@ -9,6 +9,8 @@ export type PdfEditCanvasProps = ViewProps & {
   /** JSON array of { id, x, y, width, height } in normalised page coordinates. */
   objects: string;
   selectedId: number;
+  /** Comma-separated ids drawn as marked for deletion. */
+  markedIds?: string;
   adding: boolean;
   disabled: boolean;
   /** JSON { x, y } baseline-left point, or an empty string. */

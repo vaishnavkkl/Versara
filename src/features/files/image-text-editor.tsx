@@ -7,6 +7,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { ScreenHeader } from '@/components/screen-header';
+import { HeaderHistoryButtons } from '@/components/header-history';
 import { showDialog } from '@/components/app-dialog';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ColorSwatches } from '@/components/color-swatches';
@@ -260,6 +261,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const objectsJson = useMemo(() => JSON.stringify(analysis?.lines.map(item => ({ id: item.id, x: item.x, y: item.y, width: item.width, height: item.height })) ?? []), [analysis]);
   return <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.systemBackground }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
     <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}>
+      <HeaderHistoryButtons canUndo={history.length > 0} canRedo={future.length > 0} disabled={busy} onUndo={undo} onRedo={redo} />
       <ImageWorkspaceTools id={id} current={addOnly ? 'text' : 'edit_text'} disabled={!file || busy || !recovery.ready || boxOpen} onApply={applyToWorkspace} />
       {boxOpen ? <Pressable accessibilityRole="button" accessibilityLabel={addOnly ? 'Apply added text' : 'Apply text change'}
         disabled={busy || (addOnly && !text.trim())} onPress={() => apply()}
@@ -317,14 +319,6 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
             <UniversalIcon ios="text.badge.plus" android="text-fields" size={20} color={colors.systemBlue} />
             <ThemedText style={[styles.chipText, { color: colors.systemBlue }]}>Add text instead</ThemedText>
           </Pressable>}
-          <Pressable accessibilityRole="button" disabled={busy || !history.length} onPress={undo} style={[styles.action, { backgroundColor: colors.accentSurface, opacity: history.length ? 1 : 0.5 }]}>
-            <UniversalIcon ios="arrow.uturn.backward" android="undo" size={20} color={colors.systemBlue} />
-            <ThemedText style={[styles.chipText, { color: colors.systemBlue }]}>Undo</ThemedText>
-          </Pressable>
-          <Pressable accessibilityRole="button" disabled={busy || !future.length} onPress={redo} style={[styles.action, { backgroundColor: colors.accentSurface, opacity: future.length ? 1 : 0.5 }]}>
-            <UniversalIcon ios="arrow.uturn.forward" android="redo" size={20} color={colors.systemBlue} />
-            <ThemedText style={[styles.chipText, { color: colors.systemBlue }]}>Redo</ThemedText>
-          </Pressable>
           <ThemedText style={[styles.grow, styles.note, { color: colors.secondaryLabel }]}>{edits.length ? `${edits.length} change${edits.length === 1 ? '' : 's'}` : addOnly ? 'No text added yet' : `${analysis.lines.length} text line${analysis.lines.length === 1 ? '' : 's'} found`}</ThemedText>
       </View>}
     </View>}

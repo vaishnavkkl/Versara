@@ -12,6 +12,7 @@ import { Host, Slider } from '@expo/ui';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { ScreenHeader } from '@/components/screen-header';
+import { HeaderHistoryButtons } from '@/components/header-history';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { toolColors } from '@/theme/tool-colors';
@@ -252,8 +253,6 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{children}</ScrollView>;
   const panel = <View style={styles.panel}>
     {!!FileEngine?.nativeImageHistoryVersion && <View style={[styles.chips, styles.wrap]}>
-      <EditorOption label="Undo" disabled={busy || !draft.ready || !history.canUndo} onPress={() => { if (locked.current) return; setCompare(false); restoreCrop(history.undo().crop); }} />
-      <EditorOption label="Redo" disabled={busy || !draft.ready || !history.canRedo} onPress={() => { if (locked.current) return; setCompare(false); restoreCrop(history.redo().crop); }} />
       <EditorOption label="Original" selected={compare} disabled={busy || !draft.ready} onPress={() => { if (locked.current) return; restoreCrop(compare ? crop : null); setCompare(value => !value); }} />
     </View>}
     {!!draft.error && <ThemedText accessibilityRole="alert" style={styles.note}>{draft.error}</ThemedText>}
@@ -298,6 +297,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
     <ScreenHeader title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}>
+      <HeaderHistoryButtons canUndo={!!file && draft.ready && history.canUndo && !busy && !compare} canRedo={!!file && draft.ready && history.canRedo && !busy && !compare} disabled={!file || busy || !draft.ready || compare} onUndo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.undo().crop); }} onRedo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.redo().crop); }} />
       <ImageWorkspaceTools id={id} current={tab} disabled={!file || busy || !draft.ready || compare} onApply={applyToWorkspace} />
       <Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait view' : 'Switch to landscape view'} onPress={() => setLandscape(value => !value)} style={styles.headerButton}>
         <UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.systemBlue} />

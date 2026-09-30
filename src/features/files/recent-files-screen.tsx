@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { EditorMenu } from '@/components/editor-menu';
 import { AppLoader } from '@/components/app-loader';
@@ -8,7 +8,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { HelpButton } from '@/components/help-button';
 import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
-import RecentImagesView, { hasNativeImageList, hasNativeMediaList } from '../../../modules/file-engine/src/RecentImagesView';
+import RecentImagesView, { hasNativeDocumentList, hasNativeImageList, hasNativeMediaList } from '../../../modules/file-engine/src/RecentImagesView';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing, typography } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -28,15 +28,17 @@ import { getFileAccessStatus, requestFileAccess, wasFileAccessAsked } from './fi
 import { FileEngine } from '../../../modules/file-engine';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
-import { hasNativePdfLibrary, useDevicePdfs } from './use-device-pdfs';
+import { hasNativeDocumentLibrary, hasNativePdfLibrary, useDevicePdfs, type DeviceListKind } from './use-device-pdfs';
 import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
 import { stagePreviewFile } from './preview-handoff';
+import { formatWhen, showRecentFileActions } from './recent-file-actions';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
   image: { title: 'Your images start here', body: 'Allow file access to see recent photos, or open one to keep it here.' },
   video: { title: 'Your videos start here', body: 'Allow file access to see recent videos, or open one to keep it here.' },
   audio: { title: 'Your audio starts here', body: 'Open an audio file once and it stays in Recents for quick access next time.' },
+  document: { title: 'Your documents start here', body: 'Open a Word or text file once and it stays in Recents.' },
 };
 
 // Tabs revisit these lists constantly. Keep the last result per tab so returning shows it instantly,
@@ -51,19 +53,33 @@ function cacheList(key: string, value: CachedList) {
   if (listCache.size > 8) listCache.delete(listCache.keys().next().value!);
 }
 
-export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs = false }: { kind: FileKind; includePdfs?: boolean; onSelect?: (file: RecentFile) => Promise<boolean>; selectionTitle?: string }) {
+type ScreenProps = {
+  kind: FileKind; includePdfs?: boolean; onSelect?: (file: RecentFile) => Promise<boolean>; selectionTitle?: string;
+  /** Shown between the title bar and the search field. */
+  header?: ReactNode;
+  back?: { label: string; onPress: () => void };
+};
+
+export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs = false, header, back }: ScreenProps) {
   const cacheKind = includePdfs ? 'privacy' : kind;
-  const showPdfs = kind === 'pdf' || includePdfs;
+  const deviceKind: DeviceListKind | null = kind === 'pdf' || includePdfs ? 'pdf' : kind === 'document' ? 'document' : null;
+  const showPdfs = deviceKind !== null;
+  const deviceSupported = deviceKind === 'document' ? hasNativeDocumentLibrary : hasNativePdfLibrary;
+  const deviceLabel = deviceKind === 'document' ? 'documents' : 'PDFs';
   const colors = usePalette();
   const active = useScreenActive();
   const [grid] = useLayoutPreference();
   const [libraryFiles, setFiles] = useState<RecentListItem[]>(() => listCache.get(`${cacheKind}|`)?.items ?? []);
   const [search, setSearch] = useState('');
-  const pdfs = useDevicePdfs(showPdfs && active, search);
+  const pdfs = useDevicePdfs(showPdfs && active, search, deviceKind ?? 'pdf');
   const [accessBusy, setAccessBusy] = useState(false);
-  const files = useMemo(() => showPdfs && hasNativePdfLibrary
-    ? [...libraryFiles, ...pdfs.items].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT)
-    : libraryFiles, [showPdfs, libraryFiles, pdfs.items]);
+  const files = useMemo(() => {
+    if (!showPdfs || !deviceSupported) return libraryFiles;
+    // Files opened before are already in the library under the same name.
+    const names = deviceKind === 'document' ? new Set(libraryFiles.map(file => file.name.toLowerCase())) : null;
+    const device = names ? pdfs.items.filter(item => !names.has(item.name.toLowerCase())) : pdfs.items;
+    return [...libraryFiles, ...device].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT);
+  }, [showPdfs, deviceSupported, deviceKind, libraryFiles, pdfs.items]);
   const [loading, setLoading] = useState(() => !listCache.has(`${cacheKind}|`));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +102,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
     setBusy(picking.current);
     let cancelled = false;
     void getFileAccessStatus().then(status => {
-      if (!cancelled) setAccessHint(kind !== 'pdf' && (status === 'denied' || status === 'undetermined') && wasFileAccessAsked());
+      if (!cancelled) setAccessHint(kind !== 'pdf' && kind !== 'document' && (status === 'denied' || status === 'undetermined') && wasFileAccessAsked());
     });
     if (cached) { setFiles(current => current === cached.items ? current : cached.items); setLoading(false); }
     if (cached && !forced && Date.now() - cached.loaded < REFRESH_AFTER_MS) return () => { cancelled = true; focused.current = false; };
@@ -146,7 +162,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
     if (picking.current || navigating.current) return;
     picking.current = true; setBusy(true); setError(null);
     try {
-      if (importKind !== 'pdf') {
+      if (importKind !== 'pdf' && importKind !== 'document') {
         const status = await getFileAccessStatus();
         if (status === 'denied' || status === 'undetermined') await requestFileAccess();
       }
@@ -160,7 +176,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
       if (focused.current && !navigating.current) {
         setBusy(false);
         void getFileAccessStatus().then(status => {
-          if (focused.current) setAccessHint(kind !== 'pdf' && (status === 'denied' || status === 'undetermined') && wasFileAccessAsked());
+          if (focused.current) setAccessHint(kind !== 'pdf' && kind !== 'document' && (status === 'denied' || status === 'undetermined') && wasFileAccessAsked());
         });
         setRevision(value => value + 1);
       }
@@ -178,6 +194,12 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
     ], { ios: 'trash', android: 'delete-outline' });
   }
 
+  function refreshAll() {
+    listCache.clear();
+    if (focused.current) setRevision(value => value + 1);
+    pdfs.refresh();
+  }
+
   function requestPdfAccess() {
     if (!FileEngine || accessBusy) return;
     setAccessBusy(true);
@@ -190,19 +212,20 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
   const article = kind === 'image' || kind === 'audio' ? 'an' : 'a';
   const nativeItems = useMemo(() => JSON.stringify(files.map(item => ({
     id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
-    detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${new Date(item.opened).toLocaleDateString()}`,
+    detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${formatWhen(item.opened)}`,
   }))), [files, onSelect]);
   const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground });
 
   return (
     <View style={[styles.screen, getGradients(colors).page]}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" accessibilityLabel={onSelect ? 'Back to Privacy' : 'Back to dashboard'} onPress={() => onSelect ? (router.canGoBack() ? router.back() : router.replace('/(modules)/privacy')) : router.navigate('/(tabs)')} style={styles.iconButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel={back ? `Back to ${back.label}` : onSelect ? 'Back to Privacy' : 'Back to dashboard'} onPress={() => back ? back.onPress() : onSelect ? (router.canGoBack() ? router.back() : router.replace('/(modules)/privacy')) : router.navigate('/(tabs)')} style={styles.iconButton}>
           <UniversalIcon ios="chevron.left" android="arrow-back" color={colors.label} size={24} />
         </Pressable>
         <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>{selectionTitle ?? label}</ThemedText>
         <HelpButton /><LayoutToggle />
       </View>
+      {header}
 
       <View style={styles.toolbar}>
         <View style={[styles.search, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}>
@@ -224,17 +247,17 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
         </Pressable>}
       </View>
 
-      {showPdfs && Platform.OS !== 'web' && (hasNativePdfLibrary ? <View style={styles.pdfStatus}>
+      {showPdfs && Platform.OS !== 'web' && (deviceSupported ? <View style={styles.pdfStatus}>
         {pdfs.access ? <>
-          <ThemedText style={[styles.caption, styles.grow, { color: colors.secondaryLabel }]}>{search ? 'Matching recent PDFs' : `Recent PDFs on this device${Platform.OS === 'ios' ? ' folders' : ''}`}</ThemedText>
-          {Platform.OS === 'ios' && <Pressable accessibilityRole="button" accessibilityLabel="Add PDF folder" disabled={accessBusy} onPress={requestPdfAccess} style={styles.pageButton}><UniversalIcon ios="folder.badge.plus" android="create-new-folder" size={20} color={colors.systemBlue} /></Pressable>}
+          <ThemedText style={[styles.caption, styles.grow, { color: colors.secondaryLabel }]}>{search ? `Matching recent ${deviceLabel}` : `Recent ${deviceLabel} on this device${Platform.OS === 'ios' ? ' folders' : ''}`}</ThemedText>
+          {Platform.OS === 'ios' && <Pressable accessibilityRole="button" accessibilityLabel="Add a folder" disabled={accessBusy} onPress={requestPdfAccess} style={styles.pageButton}><UniversalIcon ios="folder.badge.plus" android="create-new-folder" size={20} color={colors.systemBlue} /></Pressable>}
           {pdfs.loading ? <View style={styles.pageButton}><AppLoader size="small" /></View>
-            : <Pressable accessibilityRole="button" accessibilityLabel="Refresh recent PDFs" onPress={pdfs.refresh} style={styles.pageButton}><UniversalIcon ios="arrow.clockwise" android="refresh" size={20} color={colors.systemBlue} /></Pressable>}
+            : <Pressable accessibilityRole="button" accessibilityLabel={`Refresh recent ${deviceLabel}`} onPress={pdfs.refresh} style={styles.pageButton}><UniversalIcon ios="arrow.clockwise" android="refresh" size={20} color={colors.systemBlue} /></Pressable>}
         </> : <Pressable accessibilityRole="button" disabled={accessBusy} onPress={requestPdfAccess} style={[styles.accessButton, { backgroundColor: colors.accentSurface }]}>
           <UniversalIcon ios="folder.badge.plus" android="folder-shared" size={18} color={colors.systemBlue} />
-          <ThemedText style={[styles.accessText, { color: colors.systemBlue }]}>{accessBusy ? 'Opening…' : Platform.OS === 'ios' ? 'Add a PDF folder to show recent PDFs' : 'Allow file access to show recent PDFs'}</ThemedText>
+          <ThemedText style={[styles.accessText, { color: colors.systemBlue }]}>{accessBusy ? 'Opening…' : Platform.OS === 'ios' ? `Add a folder to show recent ${deviceLabel}` : `Allow file access to show recent ${deviceLabel}`}</ThemedText>
         </Pressable>}
-      </View> : <ThemedText style={styles.message}>Install a new development build to enable native device PDF access.</ThemedText>)}
+      </View> : <ThemedText style={styles.message}>Install a new development build to list {deviceLabel} on this device.</ThemedText>)}
       {showPdfs && !!pdfs.error && <ThemedText accessibilityRole="alert" style={[styles.caption, styles.inset, { color: colors.label }]}>{pdfs.error}</ThemedText>}
 
       {accessHint && (
@@ -262,12 +285,13 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
           <AppLoader />
           <ThemedText style={{ color: colors.secondaryLabel }}>Loading recent files...</ThemedText>
         </View>
-      ) : (kind === 'image' || kind === 'pdf' || ((kind === 'video' || kind === 'audio') && hasNativeMediaList)) && RecentImagesView && Platform.OS !== 'web' && files.length > 0 ? (
+      ) : (kind === 'image' || kind === 'pdf' || ((kind === 'video' || kind === 'audio') && hasNativeMediaList) || (kind === 'document' && hasNativeDocumentList)) && RecentImagesView && Platform.OS !== 'web' && files.length > 0 ? (
         <RecentImagesView
           style={styles.nativeList}
           items={nativeItems} palette={nativePalette} grid={grid} disabled={busy} active={active && !busy}
           onOpen={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item) void openItem(item); }}
           onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (!onSelect && item?.source === 'library' && !busy) remove(item); }}
+          onLongPress={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && !busy) showRecentFileActions(item, refreshAll); }}
         />
       ) : (
         <FlatList
@@ -285,16 +309,16 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
             const fromDevice = item.source === 'device';
             return (
               <View style={[styles.row, grid && styles.gridCell, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
-                <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} style={[styles.file, grid && styles.gridFile]}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} onLongPress={() => { if (!busy) showRecentFileActions(item, refreshAll); }} style={[styles.file, grid && styles.gridFile]}>
                   <View style={[styles.thumbnail, grid && styles.gridThumbnail]}>
                     {!fromDevice || (item.kind === 'image' && item.uri.startsWith('content://'))
                       ? <FileThumbnail uri={item.uri} kind={item.kind} active={active && !busy} />
-                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : 'doc.richtext'} android={item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
+                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : item.kind === 'document' ? (/\.txt$/i.test(item.name) ? 'doc.plaintext' : 'doc.text') : 'doc.richtext'} android={item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : item.kind === 'document' ? (/\.txt$/i.test(item.name) ? 'text-snippet' : 'description') : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
                   </View>
                   <View style={styles.grow}>
                     <ThemedText numberOfLines={2} style={[styles.name, { color: colors.label }]}>{item.name}</ThemedText>
                     <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>
-                      {fromDevice ? 'On this device' : 'In Versara'} · {formatSize(item.size)} · {new Date(item.opened).toLocaleDateString()}
+                      {fromDevice ? 'On this device' : 'In Versara'} · {formatSize(item.size)} · {formatWhen(item.opened)}
                     </ThemedText>
                   </View>
                 </Pressable>

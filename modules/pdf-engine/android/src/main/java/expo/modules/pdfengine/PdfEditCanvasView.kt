@@ -184,6 +184,12 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     outlines.invalidate()
   }
   fun setSelectedId(value: Int) { selectedId = value; outlines.invalidate() }
+  private var markedIds: Set<Int> = emptySet()
+  /** Comma-separated ids drawn as marked for deletion. */
+  fun setMarkedIds(value: String) {
+    markedIds = value.split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
+    outlines.invalidate()
+  }
   fun setAdding(value: Boolean) { adding = value; outlines.invalidate() }
   fun setDisabled(value: Boolean) { disabled = value; edit.isEnabled = !value }
   fun setPlacement(json: String) {
@@ -284,6 +290,10 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     val fit = min(width / pageWidth, height / pageHeight)
     val nextWidth = max(1, (pageWidth * fit).toInt()); val nextHeight = max(1, (pageHeight * fit).toInt())
     val resized = nextWidth != contentWidth || nextHeight != contentHeight
+    // The editor bar, keyboard and busy footer change this view's height; keep the zoom and the
+    // point of the page that was in the middle instead of re-centring the whole page.
+    val middle = if (resized && zoom > 1.01f && contentWidth > 0 && contentHeight > 0 && !tx.isNaN() && !ty.isNaN())
+      Pair((lastWidth / 2f - tx) / (contentWidth * zoom), (lastHeight / 2f - ty) / (contentHeight * zoom)) else null
     contentWidth = nextWidth; contentHeight = nextHeight
     styleText()
     layer.measure(MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.EXACTLY))
@@ -293,7 +303,13 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     handle.layout(0, 0, size, size)
     val viewResized = width != lastWidth || height != lastHeight
     lastWidth = width; lastHeight = height
-    if (resized) { tx = Float.NaN; ty = Float.NaN; outlines.marksChanged() }
+    if (resized) {
+      if (middle != null) {
+        tx = width / 2f - middle.first * contentWidth * zoom
+        ty = height / 2f - middle.second * contentHeight * zoom
+      } else { tx = Float.NaN; ty = Float.NaN }
+      outlines.marksChanged()
+    }
     applyTransform()
     if (viewResized && focusRect != null) post { focusOn() }
   }
@@ -518,6 +534,18 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x661565FF }
     private val selected = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF1565FF.toInt() }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x221565FF }
+    private val marked = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFFE0282E.toInt() }
+    private val markedFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x66FF5A5F }
+    private val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE0282E.toInt() }
+    private val tick = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.WHITE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    /** Round check badge on a marked box's top-right corner, kept the same size on screen at any zoom. */
+    private fun drawCheck(canvas: Canvas, x: Float, y: Float) {
+      val r = density * 7f / zoom
+      canvas.drawCircle(x, y, r, badge)
+      tick.strokeWidth = density * 1.6f / zoom
+      val path = android.graphics.Path().apply { moveTo(x - r * 0.45f, y); lineTo(x - r * 0.1f, y + r * 0.35f); lineTo(x + r * 0.45f, y - r * 0.3f) }
+      canvas.drawPath(path, tick)
+    }
     private val marker = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1565FF.toInt() }
     private val scratch = RectF()
     private val patch = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -528,13 +556,19 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     override fun onDraw(canvas: Canvas) {
       val w = width.toFloat(); val h = height.toFloat()
       if (marks.isNotEmpty()) drawMarks(canvas, w, h)
-      outline.strokeWidth = density * 0.8f / zoom; selected.strokeWidth = density * 1.5f / zoom
+      outline.strokeWidth = density * 0.8f / zoom; selected.strokeWidth = density * 1.5f / zoom; marked.strokeWidth = density * 2f / zoom
       if (!adding) {
         val count = min(boxes.size, 600)
         for (index in 0 until count) {
           val box = boxes[index]
           scratch.set(box.rect.left * w, box.rect.top * h, box.rect.right * w, box.rect.bottom * h)
-          if (box.id == selectedId) { canvas.drawRect(scratch, fill); canvas.drawRect(scratch, selected) } else canvas.drawRect(scratch, outline)
+          if (box.id in markedIds) {
+            val pad = density * 1.5f / zoom
+            scratch.inset(-pad, -pad)
+            canvas.drawRect(scratch, markedFill); canvas.drawRect(scratch, marked)
+            drawCheck(canvas, scratch.right, scratch.top)
+          }
+          else if (box.id == selectedId) { canvas.drawRect(scratch, fill); canvas.drawRect(scratch, selected) } else canvas.drawRect(scratch, outline)
         }
       }
       val point = placement

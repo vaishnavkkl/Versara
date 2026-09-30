@@ -12,6 +12,7 @@ import { brandFont, catalog, radius, spacing as s, typography as t } from '@/the
 
 const MODULES = [
   { title: 'PDF', description: 'Read, edit & organize documents', ios: 'doc.richtext', android: 'picture-as-pdf', href: '/(modules)/documents', tone: 'pdf' },
+  { title: 'Documents', description: 'Edit Word files on this device', ios: 'doc.text', android: 'description', href: '/(modules)/word', tone: 'word' },
   { title: 'Image', description: 'Edit photos & create PDFs', ios: 'photo', android: 'image', href: '/(modules)/image', tone: 'image' },
   { title: 'Edited files', description: 'Pick up where you left off', ios: 'folder', android: 'folder-open', href: '/edited-files', tone: 'files' },
   { title: 'Privacy', description: 'Redaction & safer sharing', ios: 'lock.shield', android: 'verified-user', href: '/(modules)/privacy', tone: 'privacy' },
@@ -42,7 +43,7 @@ export default function HomeScreen() {
       </View>
       <View style={styles.intro}>
         <ThemedText accessibilityRole="header" style={styles.title}>Your workspace</ThemedText>
-        <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>PDFs and images, made simple.</ThemedText>
+        <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>PDFs, documents and images, made simple.</ThemedText>
       </View>
       <Pressable accessibilityRole="button" accessibilityLabel="Search tools and files" onPress={() => router.navigate('/(tabs)/search')}
         style={({ pressed }) => [styles.search, { backgroundColor: pressed ? colors.catalogPressed : colors.catalogSurface, borderColor: colors.catalogBorder }]}>

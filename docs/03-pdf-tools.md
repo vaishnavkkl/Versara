@@ -1,7 +1,7 @@
 # PDF Tool Suite
 
 The PDF Tool Suite is a major subsystem focused entirely on local, offline document processing. 
-*Note: DOCX → PDF is explicitly excluded from V1.*
+*Note: The Documents module edits DOCX and can export a simplified PDF. A full Word-to-PDF conversion suite is still out of scope. Legacy .doc is unsupported.*
 
 ## Core Features
 - **PDF Viewer:** Open local PDFs, page thumbnails, zoom, search text, dark mode, share, print.

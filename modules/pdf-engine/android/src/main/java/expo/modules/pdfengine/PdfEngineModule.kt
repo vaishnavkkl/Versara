@@ -19,6 +19,7 @@ class PdfEngineModule : Module() {
     Constant("nativeReaderSearchVersion") { 1 }
     Constant("nativeSearchableOcrVersion") { 1 }
     Constant("nativeMarkupEditingVersion") { 1 }
+    Constant("nativeAnnotationsVersion") { 1 }
     AsyncFunction("processPdf") { id: String, request: String, promise: expo.modules.kotlin.Promise ->
       val context = appContext.reactContext
       if (context == null) promise.reject("PDF_UNAVAILABLE", "The app is not ready.", null)
@@ -98,6 +99,7 @@ class PdfEngineModule : Module() {
       Prop("pageLayout") { view: PdfEditCanvasView, value: String -> view.setPageLayout(value) }
       Prop("objects") { view: PdfEditCanvasView, value: String -> view.setObjects(value) }
       Prop("selectedId") { view: PdfEditCanvasView, value: Int -> view.setSelectedId(value) }
+      Prop("markedIds") { view: PdfEditCanvasView, value: String -> view.setMarkedIds(value) }
       Prop("adding") { view: PdfEditCanvasView, value: Boolean -> view.setAdding(value) }
       Prop("disabled") { view: PdfEditCanvasView, value: Boolean -> view.setDisabled(value) }
       Prop("placement") { view: PdfEditCanvasView, value: String -> view.setPlacement(value) }
@@ -106,6 +108,6 @@ class PdfEngineModule : Module() {
       Prop("focus") { view: PdfEditCanvasView, value: String -> view.setFocus(value) }
       OnViewDestroys { view: PdfEditCanvasView -> view.dispose() }
     }
-    Constant("nativeEditCanvasVersion") { 2 }
+    Constant("nativeEditCanvasVersion") { 3 }
   }
 }

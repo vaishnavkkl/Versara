@@ -92,6 +92,7 @@ private class SquareImageView(context: Context) : ImageView(context) {
 class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(context, appContext), ComponentCallbacks2 {
   private val onOpen by EventDispatcher()
   private val onRemove by EventDispatcher()
+  private val onLongPress by EventDispatcher()
   private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String)
   private var items = emptyList<Item>()
   private var itemsJson = ""
@@ -215,6 +216,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     "video" -> android.R.drawable.ic_media_play
     "audio" -> android.R.drawable.ic_lock_silent_mode_off
     "pdf" -> android.R.drawable.ic_menu_agenda
+    "document" -> android.R.drawable.ic_menu_edit
     else -> android.R.drawable.ic_menu_gallery
   }
 
@@ -252,6 +254,13 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       remove.isFocusable = true
       remove.setOnClickListener { item?.let { if (!disabled && it.removable) onRemove(mapOf("id" to it.id)) } }
       setOnClickListener { item?.let { if (!disabled) onOpen(mapOf("id" to it.id)) } }
+      setOnLongClickListener {
+        val current = item ?: return@setOnLongClickListener false
+        if (disabled) return@setOnLongClickListener false
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        onLongPress(mapOf("id" to current.id))
+        true
+      }
       val text = LinearLayout(context).apply { orientation = VERTICAL; addView(name); addView(detail) }
       if (gridCell) {
         orientation = VERTICAL
@@ -313,7 +322,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     }
 
     private fun show(bitmap: Bitmap, key: String) {
-      image.scaleType = if (item?.kind == "pdf") ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
+      image.scaleType = if (item?.kind == "pdf" || item?.kind == "document") ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
       image.setImageBitmap(bitmap)
       loaded = key
     }
@@ -327,7 +336,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       val request = ++token
       val size = if (gridCell) gridPixels else listPixels
       val job = FutureTask<Unit> {
-        val bitmap = try { decode(current.uri, current.kind, size) } catch (_: Exception) { null } catch (_: OutOfMemoryError) { cache.evictAll(); null }
+        val bitmap = try { if (current.kind == "document") DocumentPreview.render(context, Uri.parse(current.uri), current.name, size) else decode(current.uri, current.kind, size) } catch (_: Exception) { null } catch (_: OutOfMemoryError) { cache.evictAll(); null }
         main.post {
           if (!disposed && token == request && bitmap != null) {
             cache.put(key, bitmap)

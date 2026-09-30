@@ -25,7 +25,7 @@ public class FileEngineModule: Module {
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 2 }
+    Constant("nativeImageListVersion") { 3 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -61,7 +61,7 @@ public class FileEngineModule: Module {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView.self) {
-      Events("onOpen", "onRemove")
+      Events("onOpen", "onRemove", "onLongPress")
       Prop("items") { (view: RecentImagesView, value: String) in view.setItems(value) }
       Prop("grid") { (view: RecentImagesView, value: Bool) in view.setGrid(value) }
       Prop("palette") { (view: RecentImagesView, value: String) in view.setPalette(value) }
@@ -104,6 +104,28 @@ public class FileEngineModule: Module {
     Function("cancelPdfScan") { (id: String) in self.pdfs.cancel(id) }
     AsyncFunction("listRecentPdfs") { (limit: Int, search: String, promise: Promise) in
       self.pdfs.recent(limit: max(1, min(limit, 60)), search: search.trimmingCharacters(in: .whitespacesAndNewlines), promise: promise)
+    }
+    Constant("nativeDeviceDeleteVersion") { 1 }
+    AsyncFunction("deleteDeviceFile") { (uri: String, promise: Promise) in
+      if uri.hasPrefix("ph://") {
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [String(uri.dropFirst(5))], options: nil)
+        guard assets.count > 0 else { promise.reject("DELETE_FAILED", "This photo is no longer available."); return }
+        PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.deleteAssets(assets) }) { done, error in
+          if done { promise.resolve(true) } else { promise.reject("DELETE_FAILED", error?.localizedDescription ?? "The photo was not deleted.") }
+        }
+        return
+      }
+      guard let url = URL(string: uri), url.isFileURL else { promise.reject("DELETE_FAILED", "This file can't be deleted here."); return }
+      self.queue.async {
+        do {
+          try PdfFolderAccess.withAccess(to: url) { try FileManager.default.removeItem(at: url) }
+          promise.resolve(true)
+        } catch { promise.reject("DELETE_FAILED", error.localizedDescription) }
+      }
+    }
+    Constant("nativeRecentDocumentsVersion") { 1 }
+    AsyncFunction("listRecentDocuments") { (limit: Int, search: String, promise: Promise) in
+      self.pdfs.recent(limit: max(1, min(limit, 60)), search: search.trimmingCharacters(in: .whitespacesAndNewlines), kind: "document", extensions: ["docx", "txt"], promise: promise)
     }
     Constant("nativeExplorerVersion") { 1 }
     AsyncFunction("getStorageRoots") { (promise: Promise) in promise.resolve(FileExplorer.roots()) }
@@ -252,7 +274,7 @@ final class DeviceLibrary {
     try PdfFolderAccess.withAccess(to: source) { try FileManager.default.copyItem(at: source, to: destination) }
     let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
     let mime = UTType(filenameExtension: destination.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-    return ["uri": destinationUri, "name": destination.lastPathComponent, "mimeType": mime, "size": size, "kind": kind]
+    return ["uri": destinationUri, "name": source.lastPathComponent, "mimeType": mime, "size": size, "kind": kind]
   }
 
   private func export(asset: PHAsset, to destination: URL) throws {

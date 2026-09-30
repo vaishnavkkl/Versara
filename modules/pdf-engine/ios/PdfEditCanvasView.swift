@@ -193,6 +193,11 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     scroll.zoom(to: CGRect(x: x, y: rect.midY * base.height - size.height * 0.38, width: size.width, height: size.height), animated: true)
   }
   func setSelectedId(_ value: Int) { overlay.selectedId = value; overlay.setNeedsDisplay() }
+  /// Comma-separated ids drawn as marked for deletion.
+  func setMarkedIds(_ value: String) {
+    overlay.markedIds = Set(value.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) })
+    overlay.setNeedsDisplay()
+  }
   func setAdding(_ value: Bool) { adding = value; overlay.adding = value; overlay.setNeedsDisplay() }
   func setDisabled(_ value: Bool) { disabled = value; field.isEditable = !value; scroll.isUserInteractionEnabled = !value; updateHandle() }
   func setPlacement(_ json: String) {
@@ -239,6 +244,14 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     scroll.frame = bounds
     guard bounds.width > 0, bounds.height > 0, bounds.size != lastBounds else { updateHandle(); return }
     lastBounds = bounds.size
+    // The editor bar, keyboard and busy footer change this view's height; keep the zoom and the
+    // point of the page that was in the middle instead of starting over at the whole page.
+    let previousZoom = scroll.zoomScale
+    var middle: CGPoint?
+    if previousZoom > 1.01, page.bounds.width > 0, page.bounds.height > 0 {
+      let point = scroll.convert(CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), to: page)
+      middle = CGPoint(x: point.x / page.bounds.width, y: point.y / page.bounds.height)
+    }
     let fit = min(bounds.width / pageSize.width, bounds.height / pageSize.height)
     scroll.zoomScale = 1
     page.frame = CGRect(x: 0, y: 0, width: pageSize.width * fit, height: pageSize.height * fit)
@@ -246,6 +259,17 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     overlay.frame = page.bounds
     scroll.contentSize = page.frame.size
     center()
+    if let middle {
+      scroll.setZoomScale(min(previousZoom, scroll.maximumZoomScale), animated: false)
+      center()
+      let zoom = scroll.zoomScale
+      let minX = -scroll.contentInset.left, minY = -scroll.contentInset.top
+      let maxX = max(minX, scroll.contentSize.width - scroll.bounds.width + scroll.contentInset.right)
+      let maxY = max(minY, scroll.contentSize.height - scroll.bounds.height + scroll.contentInset.bottom)
+      let x = middle.x * page.bounds.width * zoom - scroll.bounds.width / 2
+      let y = middle.y * page.bounds.height * zoom - scroll.bounds.height / 2
+      scroll.contentOffset = CGPoint(x: min(max(x, minX), maxX), y: min(max(y, minY), maxY))
+    }
     layoutField()
     if focusRect != nil { DispatchQueue.main.async { self.focusOn() } }
   }
@@ -400,6 +424,7 @@ private final class EditOverlay: UIView {
   var rects: [CGRect] = []
   var ids: [Int] = []
   var selectedId = -1
+  var markedIds: Set<Int> = []
   var adding = false
   var textVisible = false
   var placement: CGPoint?
@@ -443,7 +468,22 @@ private final class EditOverlay: UIView {
     if !adding {
       for (index, box) in rects.enumerated() {
         let frame = CGRect(x: box.minX * w, y: box.minY * h, width: box.width * w, height: box.height * h)
-        if ids[index] == selectedId {
+        if markedIds.contains(ids[index]) {
+          let red = UIColor(red: 0.88, green: 0.16, blue: 0.18, alpha: 1)
+          let marked = frame.insetBy(dx: -1.5 / zoom, dy: -1.5 / zoom)
+          context.setFillColor(UIColor(red: 1, green: 0.35, blue: 0.37, alpha: 0.4).cgColor); context.fill(marked)
+          context.setStrokeColor(red.cgColor); context.setLineWidth(2 / zoom); context.stroke(marked)
+          let r = 7 / zoom
+          context.setFillColor(red.cgColor)
+          context.fillEllipse(in: CGRect(x: marked.maxX - r, y: marked.minY - r, width: r * 2, height: r * 2))
+          context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(1.6 / zoom)
+          context.setLineCap(.round); context.setLineJoin(.round)
+          context.move(to: CGPoint(x: marked.maxX - r * 0.45, y: marked.minY))
+          context.addLine(to: CGPoint(x: marked.maxX - r * 0.1, y: marked.minY + r * 0.35))
+          context.addLine(to: CGPoint(x: marked.maxX + r * 0.45, y: marked.minY - r * 0.3))
+          context.strokePath()
+          continue
+        } else if ids[index] == selectedId {
           context.setFillColor(blue.withAlphaComponent(0.13).cgColor); context.fill(frame)
           context.setStrokeColor(blue.cgColor); context.setLineWidth(1.5 / zoom)
         } else {

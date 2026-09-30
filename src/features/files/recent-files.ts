@@ -4,15 +4,15 @@ import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 import { FileEngine, type DeviceRecentFile } from '../../../modules/file-engine';
 import { retainPickerCopy } from '../pdf/pdf-cache';
 
-export type FileKind = 'pdf' | 'image' | 'video' | 'audio';
+export type FileKind = 'pdf' | 'image' | 'video' | 'audio' | 'document';
 export type RecentFile = { id: string; uri: string; name: string; kind: FileKind; mimeType: string; size: number; opened: number };
 export type LibraryItem = RecentFile & { source: 'library' };
 export type DeviceItem = DeviceRecentFile & { kind: FileKind; opened: number };
 export type RecentListItem = LibraryItem | DeviceItem;
 /** Libraries show only the most recent items; older files stay reachable through Open and search. */
 export const RECENT_LIMIT = 30;
-export const FILE_LABELS = { pdf: 'PDF', image: 'Image', video: 'Video', audio: 'Audio' } as const;
-const mimeTypes = { pdf: 'application/pdf', image: 'image/*', video: 'video/*', audio: 'audio/*' };
+export const FILE_LABELS = { pdf: 'PDF', image: 'Image', video: 'Video', audio: 'Audio', document: 'Document' } as const;
+const mimeTypes = { pdf: 'application/pdf', image: 'image/*', video: 'video/*', audio: 'audio/*', document: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 const library = () => new Directory(Paths.document, 'Versara Library');
 const documentRoot = () => Paths.document.uri.replace(/\/+$/, '') + '/';
 // iOS may change its sandbox prefix after an app update. Persist relative paths.
@@ -42,7 +42,7 @@ export async function listRecentFiles(kind: FileKind, search = '') {
 export async function listCategoryFiles(kind: FileKind, search = ''): Promise<RecentListItem[]> {
   const libraryFiles = (await listRecentFiles(kind, search)).map(file => ({ ...file, source: 'library' as const }));
   let device: DeviceItem[] = [];
-  if (FileEngine?.listDeviceRecents && !(kind === 'pdf' && FileEngine.nativePdfLibraryVersion)) {
+  if (FileEngine?.listDeviceRecents && !(kind === 'pdf' && FileEngine.nativePdfLibraryVersion) && kind !== 'document') {
     try {
       const items = await FileEngine.listDeviceRecents(kind, RECENT_LIMIT, search.trim());
       const libraryNames = new Set(libraryFiles.map(file => file.name.toLowerCase()));
@@ -82,7 +82,12 @@ export async function rememberFile(file: { uri: string; name: string; mimeType?:
 export async function importRecentFile(kind: FileKind): Promise<RecentFile | null> {
   let asset;
   if (kind === 'image' || kind === 'pdf') asset = (await selectFileAssets(kind, 1))[0];
-  else {
+  else if (kind === 'document') {
+    const { getDocumentAsync } = await import('expo-document-picker');
+    const selection = await getDocumentAsync({ type: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'application/msword'], multiple: false, copyToCacheDirectory: true });
+    if (selection.canceled) return null;
+    asset = selection.assets[0];
+  } else {
     const { getDocumentAsync } = await import('expo-document-picker');
     const selection = await getDocumentAsync({ type: mimeTypes[kind], multiple: false, copyToCacheDirectory: true });
     if (selection.canceled) return null;
@@ -94,7 +99,9 @@ export async function importRecentFile(kind: FileKind): Promise<RecentFile | nul
   const copy = new File(root, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
   try {
     root.create({ intermediates: true, idempotent: true });
-    const expected = kind === 'pdf' ? asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name) : asset.mimeType?.startsWith(kind + '/');
+    const extensionName = asset.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0].toLowerCase() ?? '';
+    if (kind === 'document' && extensionName === '.doc') throw new Error('Word 97 .doc files aren\'t supported. Save the file as DOCX and open that.');
+    const expected = kind === 'document' ? extensionName === '.docx' || extensionName === '.txt' : kind === 'pdf' ? asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name) : asset.mimeType?.startsWith(kind + '/');
     if (asset.mimeType && asset.mimeType !== 'application/octet-stream' && !expected) throw new Error(`Choose a ${FILE_LABELS[kind].toLowerCase()} file.`);
     await retainPickerCopy(asset.uri, copy);
     return await rememberFile({ uri: copy.uri, name: asset.name, mimeType: asset.mimeType, size: copy.size }, kind);

@@ -4,6 +4,7 @@ import Photos
 import ImageIO
 import CoreGraphics
 import AVFoundation
+import QuickLookThumbnailing
 
 private struct RecentImage: Decodable {
   let id: String
@@ -17,6 +18,7 @@ private struct RecentImage: Decodable {
 final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
   let onOpen = EventDispatcher()
   let onRemove = EventDispatcher()
+  let onLongPress = EventDispatcher()
   var disabled = false
   private var active = true
   func setActive(_ value: Bool) {
@@ -67,6 +69,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     list.alwaysBounceVertical = true
     list.register(RecentImageCell.self, forCellWithReuseIdentifier: "image")
     addSubview(list)
+    list.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:))))
     memoryObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
       self?.cache.removeAllObjects()
     }
@@ -130,6 +133,11 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     load(item, into: cell)
     return cell
   }
+  @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
+    guard gesture.state == .began, !disabled, let path = list.indexPathForItem(at: gesture.location(in: list)), path.item < items.count else { return }
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    onLongPress(["id": items[path.item].id])
+  }
   func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
     guard !disabled, indexPath.item < items.count else { return }
     onOpen(["id": items[indexPath.item].id])
@@ -181,6 +189,21 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
               context.concatenate(page.getDrawingTransform(.cropBox, rect: target, rotate: 0, preserveAspectRatio: true))
               context.drawPDFPage(page)
               return context.makeImage().map { UIImage(cgImage: $0) }
+            }
+            if operation?.isCancelled == false { finish(image ?? nil) }
+            return
+          }
+          if item.kind == "document" {
+            let image = try? PdfFolderAccess.withAccess(to: url) { () -> UIImage? in
+              let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: size, height: size), scale: 1, representationTypes: .thumbnail)
+              let done = DispatchSemaphore(value: 0)
+              var result: UIImage?
+              QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+                result = representation?.uiImage
+                done.signal()
+              }
+              _ = done.wait(timeout: .now() + 8)
+              return result
             }
             if operation?.isCancelled == false { finish(image ?? nil) }
             return
@@ -255,11 +278,11 @@ private final class RecentImageCell: UICollectionViewCell {
   func configure(_ item: RecentImage, grid: Bool, label: UIColor, secondary: UIColor, surface: UIColor) {
     releaseImage()
     self.grid = grid
-    image.contentMode = item.kind == "pdf" ? .scaleAspectFit : .scaleAspectFill
+    image.contentMode = item.kind == "pdf" || item.kind == "document" ? .scaleAspectFit : .scaleAspectFill
     contentView.backgroundColor = surface
     name.text = item.name; name.textColor = label
     detail.text = item.detail; detail.textColor = secondary
-    let symbol = item.kind == "pdf" ? "doc.richtext" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
+    let symbol = item.kind == "pdf" ? "doc.richtext" : item.kind == "document" ? "doc.text" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
     image.image = UIImage(systemName: symbol); image.tintColor = secondary
     remove.tintColor = grid ? .white : secondary.withAlphaComponent(0.55)
     remove.layer.shadowOpacity = grid ? 0.45 : 0

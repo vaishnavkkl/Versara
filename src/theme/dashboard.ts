@@ -24,7 +24,7 @@ export const typography = {
 
 export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 152, touchTarget: 48 } as const;
 export const motion = { feedback: 120, tab: { duration: 400, dampingRatio: 1 } } as const;
-export type ModuleTone = 'pdf' | 'image' | 'files' | 'privacy' | 'default';
+export type ModuleTone = 'pdf' | 'word' | 'image' | 'files' | 'privacy' | 'default';
 export function moduleColors(colors: Palette, tone: ModuleTone) {
   if (tone === 'default') return { ink: colors.systemBlue, surface: colors.accentSurface };
   return { ink: colors[`${tone}Ink`], surface: colors[`${tone}Surface`] };

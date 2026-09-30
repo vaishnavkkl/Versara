@@ -47,12 +47,12 @@ export default function FilePreviewScreen() {
   // Decode/upload the first image only after the native push/pop animation completes.
   // The timeout covers direct links/non-animated mounts that do not emit transitionEnd.
   useLayoutEffect(() => {
-    if (!active) { setTransitionReady(false); return; }
+    if (!active) return;
     const fallback = setTimeout(() => setTransitionReady(true), 1000);
     const unsubscribe = navigation.addListener('transitionEnd', event => {
       if (!event.data.closing) { clearTimeout(fallback); setTransitionReady(true); }
     });
-    return () => { clearTimeout(fallback); unsubscribe(); };
+    return () => { clearTimeout(fallback); unsubscribe(); setTransitionReady(false); };
   }, [active, navigation]);
   useEffect(() => {
     mounted.current = true;

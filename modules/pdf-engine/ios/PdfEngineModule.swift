@@ -17,6 +17,7 @@ public class PdfEngineModule: Module {
     Constant("nativeReaderSearchVersion") { 1 }
     Constant("nativeSearchableOcrVersion") { 1 }
     Constant("nativeMarkupEditingVersion") { 1 }
+    Constant("nativeAnnotationsVersion") { 1 }
     AsyncFunction("processPdf") { (id: String, request: String, promise: Promise) in
       self.advanced.run(id, request: request, promise: promise) { [weak self] completed, total in
         self?.sendEvent("onConversionProgress", ["jobId": id, "completed": completed, "total": total])
@@ -84,6 +85,7 @@ public class PdfEngineModule: Module {
       Prop("pageLayout") { (view: PdfEditCanvasView, value: String) in view.setPageLayout(value) }
       Prop("objects") { (view: PdfEditCanvasView, value: String) in view.setObjects(value) }
       Prop("selectedId") { (view: PdfEditCanvasView, value: Int) in view.setSelectedId(value) }
+      Prop("markedIds") { (view: PdfEditCanvasView, value: String) in view.setMarkedIds(value) }
       Prop("adding") { (view: PdfEditCanvasView, value: Bool) in view.setAdding(value) }
       Prop("disabled") { (view: PdfEditCanvasView, value: Bool) in view.setDisabled(value) }
       Prop("placement") { (view: PdfEditCanvasView, value: String) in view.setPlacement(value) }
@@ -92,6 +94,6 @@ public class PdfEngineModule: Module {
       Prop("focus") { (view: PdfEditCanvasView, value: String) in view.setFocus(value) }
       OnViewDestroys { (view: PdfEditCanvasView) in view.dispose() }
     }
-    Constant("nativeEditCanvasVersion") { 2 }
+    Constant("nativeEditCanvasVersion") { 3 }
   }
 }

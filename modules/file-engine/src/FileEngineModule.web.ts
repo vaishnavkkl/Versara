@@ -37,6 +37,8 @@ export default {
   cancelPdfScan(_id: string) {},
   async listPdfPage(_offset: number, _limit: number, _search: string) { return { items: [] as DeviceRecentFile[], total: 0 }; },
   async listRecentPdfs(_limit: number, _search: string) { return [] as DeviceRecentFile[]; },
+  async deleteDeviceFile(_uri: string): Promise<boolean> { throw new Error('Deleting device files is available in the Android and iOS apps.'); },
+  async listRecentDocuments(_limit: number, _search: string) { return [] as DeviceRecentFile[]; },
   async recognizeImageText(_uri: string): Promise<{ width: number; height: number; lines: never[] }> { throw new Error('Image text editing is available in the Android and iOS apps.'); },
   async renderImageText(_options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }> { throw new Error('Image text editing is available in the Android and iOS apps.'); },
   async editImage(_options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }> { throw new Error('Image editing is available in the Android and iOS apps.'); },

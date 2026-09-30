@@ -84,6 +84,12 @@ declare class FileEngine extends NativeModule {
   saveToDevice(sourceUri: string, name: string, mimeType: string, replaceUri: string): Promise<SavedDeviceFile>;
   readonly nativeRecentPdfsVersion?: number;
   listRecentPdfs(limit: number, search: string): Promise<DeviceRecentFile[]>;
+  readonly nativeDeviceDeleteVersion?: number;
+  /** Deletes a file listed from the device (MediaStore, Photos or a chosen folder). */
+  deleteDeviceFile(uri: string): Promise<boolean>;
+  readonly nativeRecentDocumentsVersion?: number;
+  /** DOCX and TXT files, using the same all-files access (Android) or folder access (iOS) as PDFs. */
+  listRecentDocuments(limit: number, search: string): Promise<DeviceRecentFile[]>;
   getPdfAccessAsync(): Promise<FileAccessResult>;
   requestPdfAccessAsync(): Promise<FileAccessResult>;
   scanPdfFiles(id: string): Promise<number>;

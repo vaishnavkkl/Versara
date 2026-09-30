@@ -69,6 +69,7 @@ export default function RootLayout() {
           <Stack.Screen name="privacy-tool" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
           <Stack.Screen name="image-text" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
           <Stack.Screen name="edited-files" options={{ headerShown: false, animation: 'slide_from_right' }} />
+          <Stack.Screen name="doc-editor" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
         </Stack>
         <FileAccessPrompt ready={splashDone} />
         <DialogHost />

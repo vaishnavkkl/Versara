@@ -47,7 +47,7 @@ class FileEngineModule : Module() {
       else imageTools.run(context, id, request, promise)
     }
     Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 2 }
+    Constant("nativeImageListVersion") { 3 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -92,7 +92,7 @@ class FileEngineModule : Module() {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView::class) {
-      Events("onOpen", "onRemove")
+      Events("onOpen", "onRemove", "onLongPress")
       Prop("items") { view: RecentImagesView, value: String -> view.setItems(value) }
       Prop("grid") { view: RecentImagesView, value: Boolean -> view.setGrid(value) }
       Prop("palette") { view: RecentImagesView, value: String -> view.setPalette(value) }
@@ -166,6 +166,16 @@ class FileEngineModule : Module() {
         catch (error: Throwable) { promise.reject("PDF_LIST_FAILED", error.message ?: "Could not list recent PDFs.", error) }
       }
     }
+    Constant("nativeRecentDocumentsVersion") { 1 }
+    AsyncFunction("listRecentDocuments") { limit: Int, search: String, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) { promise.reject("FILE_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
+      if (!PdfDeviceLibrary.allowed(context)) { promise.resolve(emptyList<Map<String, Any?>>()); return@AsyncFunction }
+      worker.execute {
+        try { promise.resolve(library.recentDocuments(context, limit.coerceIn(1, 60), search.trim())) }
+        catch (error: Throwable) { promise.reject("DOCUMENT_LIST_FAILED", error.message ?: "Could not list recent documents.", error) }
+      }
+    }
 
     AsyncFunction("getFileAccessAsync") { promise: Promise ->
       access.get(appContext.permissions, promise)
@@ -209,6 +219,30 @@ class FileEngineModule : Module() {
       }
     }
 
+    Constant("nativeDeviceDeleteVersion") { 1 }
+    AsyncFunction("deleteDeviceFile") { uri: String, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) { promise.reject("FILE_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
+      worker.execute {
+        try {
+          val source = Uri.parse(uri)
+          val deleted = if (source.scheme == "file") File(requireNotNull(source.path)).delete() else {
+            // With All files access the file itself is removed, then its media index row.
+            var path: String? = null
+            if (PdfDeviceLibrary.allowed(context)) context.contentResolver.query(source, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { if (it.moveToFirst()) path = it.getString(0) }
+            val file = path?.let { File(it) }
+            if (file != null && file.exists() && file.delete()) { try { context.contentResolver.delete(source, null, null) } catch (_: Exception) { }; true }
+            else context.contentResolver.delete(source, null, null) > 0
+          }
+          if (deleted) promise.resolve(true) else promise.reject("DELETE_FAILED", "Could not delete this file.", null)
+        } catch (error: SecurityException) {
+          promise.reject("DELETE_DENIED", "Allow All files access in Settings to delete files from this device.", error)
+        } catch (error: Throwable) {
+          promise.reject("DELETE_FAILED", error.message ?: "Could not delete this file.", error)
+        }
+      }
+    }
+
     Constant("nativeExplorerVersion") { 1 }
     AsyncFunction("getStorageRoots") { promise: Promise ->
       val context = appContext.reactContext
@@ -236,6 +270,8 @@ class FileEngineModule : Module() {
     OnActivityEntersBackground { privacy.cancelAll(); pdfs.cancelAll() }
   }
 }
+
+private const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 /** Runtime media/storage permission via Expo's activity-aware Permissions service. */
 internal class FileAccess {
@@ -333,7 +369,14 @@ internal class DeviceLibrary {
   }
 
   /** Newest PDFs from the system media index. SQL applies the name filter and row limit, so nothing is scanned. */
-  fun recentPdfs(context: Context, limit: Int, search: String): List<Map<String, Any?>> {
+  fun recentPdfs(context: Context, limit: Int, search: String) =
+    recentByType(context, limit, search, "pdf", listOf("application/pdf"), listOf("pdf"))
+
+  /** Newest Word and plain text documents from the system media index. */
+  fun recentDocuments(context: Context, limit: Int, search: String) =
+    recentByType(context, limit, search, "document", listOf(DOCX_MIME), listOf("docx", "txt"))
+
+  private fun recentByType(context: Context, limit: Int, search: String, kind: String, mimes: List<String>, extensions: List<String>): List<Map<String, Any?>> {
     val collection = MediaStore.Files.getContentUri("external")
     val projection = arrayOf(
       MediaStore.Files.FileColumns._ID,
@@ -342,8 +385,9 @@ internal class DeviceLibrary {
       MediaStore.Files.FileColumns.SIZE,
       MediaStore.Files.FileColumns.DATE_MODIFIED,
     )
-    val filters = mutableListOf("(${MediaStore.Files.FileColumns.MIME_TYPE}=? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?)", "${MediaStore.Files.FileColumns.SIZE}>0")
-    val args = mutableListOf("application/pdf", "%.pdf")
+    val types = mimes.map { "${MediaStore.Files.FileColumns.MIME_TYPE}=?" } + extensions.map { "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" }
+    val filters = mutableListOf("(${types.joinToString(" OR ")})", "${MediaStore.Files.FileColumns.SIZE}>0")
+    val args = (mimes + extensions.map { "%.$it" }).toMutableList()
     if (search.isNotEmpty()) {
       filters.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? ESCAPE '\\'")
       args.add("%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
@@ -363,18 +407,22 @@ internal class DeviceLibrary {
     cursor?.use {
       val idIndex = it.getColumnIndexOrThrow(projection[0])
       val nameIndex = it.getColumnIndexOrThrow(projection[1])
+      val mimeIndex = it.getColumnIndexOrThrow(projection[2])
       val sizeIndex = it.getColumnIndexOrThrow(projection[3])
       val modifiedIndex = it.getColumnIndexOrThrow(projection[4])
       while (it.moveToNext() && results.size < limit) {
         val id = it.getLong(idIndex)
+        val name = it.getString(nameIndex) ?: "Document.${extensions[0]}"
+        val extension = name.substringAfterLast('.', "").lowercase()
+        if (kind == "document" && extension !in extensions) continue
         results.add(mapOf(
-          "id" to "device-pdf-$id",
+          "id" to "device-$kind-$id",
           "uri" to ContentUris.withAppendedId(collection, id).toString(),
-          "name" to (it.getString(nameIndex) ?: "Document.pdf"),
-          "mimeType" to "application/pdf",
+          "name" to name,
+          "mimeType" to (it.getString(mimeIndex)?.takeIf { value -> value.isNotEmpty() } ?: if (kind == "pdf") "application/pdf" else if (extension == "txt") "text/plain" else DOCX_MIME),
           "size" to it.getLong(sizeIndex).coerceAtLeast(0),
           "modified" to it.getLong(modifiedIndex) * 1000L,
-          "kind" to "pdf",
+          "kind" to kind,
           "source" to "device",
         ))
       }

@@ -298,9 +298,9 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
             {searchAvailable && <Pressable accessibilityRole="button" accessibilityLabel="Search PDF" disabled={busy || loading} onPress={() => performOption('search')} style={styles.iconButton}><UniversalIcon ios="magnifyingglass" android="search" size={22} color={colors.systemBlue} /></Pressable>}
           </View>}
           {ready && !focused && landscape && <Pressable accessibilityRole="button" accessibilityLabel="Switch to portrait" onPress={() => performOption('orientation')} style={[styles.landscapeExit, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="rectangle.portrait" android="screen-rotation" size={20} color={colors.systemBlue} /></Pressable>}
+          <View style={styles.body2}>
           <View style={[styles.body2, landscape && styles.row]}>
           {ready && !focused && landscape && <ToolRail tools={visibleTools} quickIds={['fit', 'thumbnails', 'previous', 'next']} landscape side="left" showToolbox={false} disabled={busy || loading} onAction={performOption} />}
-          {landscape && ready && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && document && <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} vertical parity={0} />}
           <View style={[styles.canvas, landscape && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
             {document && !error && screenActive && !openingEditor && <PdfEngineView
               key={document.uri}
@@ -325,9 +325,10 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
               <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{error ?? 'Choose a PDF, swipe up to read and pinch to zoom. Editing and reading tools appear below.'}</ThemedText>
             </View>}
           </View>
-          {landscape && ready && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && document && pageCount > 1 && <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} vertical parity={1} />}
           {!landscape && strip}
           {ready && !focused && <ToolRail tools={visibleTools} quickIds={landscape ? ['edit_text', 'text', 'highlight', 'draw'] : undefined} disabled={busy || loading} landscape={landscape} onAction={performOption} />}
+          </View>
+          {landscape && strip}
           </View>
           {focused && <Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" onPress={() => setFocused(false)} style={[styles.restore, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} /><ThemedText style={{ color: colors.systemBlue }}>Show controls</ThemedText></Pressable>}
           {(!document || error) && <Pressable accessibilityRole="button" disabled={busy} onPress={chooseFile} style={[styles.openButton, getGradients(colors).module]}><UniversalIcon ios="folder" android="folder-open" size={22} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText }}>Choose PDF</ThemedText></Pressable>}

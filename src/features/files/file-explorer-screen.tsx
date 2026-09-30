@@ -1,7 +1,7 @@
 import type { PickerKind } from './file-picker-session';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { ThemedText } from '@/components/themed-text';
@@ -13,6 +13,7 @@ import { getGradients, gradient, spacing as s, typography as t } from '@/theme/d
 import { FileEngine, type DirectoryListing, type ExplorerEntry, type StorageRoot } from '../../../modules/file-engine';
 import { ExplorerRow } from './explorer-row';
 import { explorerAvailable, openExplorerEntry } from './explorer';
+import { RecentFilesSection } from './recent-files-section';
 
 const LISTING_CACHE = 24;
 const listings = new Map<string, DirectoryListing>();
@@ -163,11 +164,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           );
         })}
         {Platform.OS === 'ios' && available && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>iOS keeps each app&apos;s files separate. Downloads from other apps open through Files or the share sheet.</ThemedText>}
-        {!picker && <Pressable accessibilityRole="button" onPress={() => router.navigate('/edited-files')} style={({ pressed }) => [styles.shortcut, { borderColor: colors.tileBorder, backgroundColor: colors.tileSurface, opacity: pressed ? 0.8 : 1 }]}>
-          <UniversalIcon ios="square.and.pencil" android="edit-note" size={22} color={colors.systemBlue} />
-          <ThemedText style={[styles.grow, { color: colors.label, fontWeight: '600' }]}>Edited files</ThemedText>
-          <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.muted} />
-        </Pressable>}
+        {!picker && <RecentFilesSection />}
       </ScrollView>
     );
   }
@@ -234,7 +231,6 @@ const styles = StyleSheet.create({
   caption: { ...t.caption },
   track: { height: 6, borderRadius: 3, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3 },
-  shortcut: { flexDirection: 'row', alignItems: 'center', gap: s.md, minHeight: 56, paddingHorizontal: 16, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, marginTop: s.sm },
   fill1: { flex: 1 },
   bar: { flexDirection: 'row', alignItems: 'center', gap: s.sm, paddingHorizontal: s.md, paddingVertical: s.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },

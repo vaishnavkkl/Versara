@@ -9,7 +9,7 @@ import { usePalette } from '@/theme/colors';
 
 export type PdfTextObject = { id: number; text: string; editable: boolean; size: number; font?: string; color?: number; bounds: { x: number; y: number; width: number; height: number } | null };
 type Props = {
-  uri: string; width: number; height: number; objects: PdfTextObject[]; selectedId?: number;
+  uri: string; width: number; height: number; objects: PdfTextObject[]; selectedId?: number; markedIds?: number[];
   adding: boolean; disabled: boolean; removedIds: number[]; placement: { x: number; y: number } | null;
   onSelect: (object: PdfTextObject) => void; onPlace: (point: { x: number; y: number }) => void;
 };
@@ -101,7 +101,9 @@ function ZoomPage({ viewport, ...props }: Props & { viewport: { width: number; h
           <Image source={{ uri: props.uri }} style={StyleSheet.absoluteFill} contentFit="contain" cachePolicy="none" allowDownscaling={false} />
           {!props.adding && props.objects.filter(object => object.id === props.selectedId || !props.removedIds.includes(object.id)).slice(0, 300).map(object => object.bounds && <View key={object.id} style={[styles.outline, {
             left: object.bounds.x * width, top: object.bounds.y * height, width: Math.max(2, object.bounds.width * width), height: Math.max(2, object.bounds.height * height),
-            borderColor: object.id === props.selectedId ? '#1565ff' : '#1565ff44', backgroundColor: object.id === props.selectedId ? '#1565ff22' : 'transparent',
+            borderColor: props.markedIds?.includes(object.id) ? '#e0282e' : object.id === props.selectedId ? '#1565ff' : '#1565ff44',
+            backgroundColor: props.markedIds?.includes(object.id) ? '#ff5a5f66' : object.id === props.selectedId ? '#1565ff22' : 'transparent',
+            borderWidth: props.markedIds?.includes(object.id) ? 2 : 1,
           }]} />)}
           {props.placement && <View style={[styles.marker, { left: props.placement.x * width, top: props.placement.y * height }]} />}
         </Animated.View>

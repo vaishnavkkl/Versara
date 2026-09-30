@@ -14,6 +14,8 @@ declare class PdfEngine extends NativeModule<{ onConversionProgress: (event: Con
   readonly nativeReaderSearchVersion?: number;
   readonly nativeSearchableOcrVersion?: number;
   readonly nativeMarkupEditingVersion?: number;
+  /** Markup saved as real PDF annotations; preview lists and edits existing annotations. */
+  readonly nativeAnnotationsVersion?: number;
   processPdf(jobId: string, request: string): Promise<string>;
   cancelPdfTool(jobId: string): void;
   renderFileThumbnail(jobId: string, uri: string, kind: string, page: number, outputUri: string): Promise<string>;

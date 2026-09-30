@@ -26,12 +26,13 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', heif: 'image/heif', tiff: 'image/tiff', tif: 'image/tiff', bmp: 'image/bmp',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', '3gp': 'video/3gpp',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain',
 };
 /** Library entries may store wildcard types like `image/*`; device folders need a real type. */
 export function concreteMimeType(file: { name: string; mimeType: string; kind: FileKind }) {
   if (file.mimeType && !file.mimeType.includes('*')) return file.mimeType;
   const extension = file.name.match(/\.([a-zA-Z0-9]{1,8})$/)?.[1].toLowerCase() ?? '';
-  return MIME_BY_EXTENSION[extension] ?? (file.kind === 'pdf' ? 'application/pdf' : file.kind === 'image' ? 'image/jpeg' : file.kind === 'video' ? 'video/mp4' : 'audio/mpeg');
+  return MIME_BY_EXTENSION[extension] ?? (file.kind === 'pdf' ? 'application/pdf' : file.kind === 'document' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : file.kind === 'image' ? 'image/jpeg' : file.kind === 'video' ? 'video/mp4' : 'audio/mpeg');
 }
 
 /** Resolves null when the user cancels or presses Back. */

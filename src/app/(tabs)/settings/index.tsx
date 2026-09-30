@@ -23,7 +23,7 @@ import { clearSearchHistory, hydrateSearchHistory, setSearchHistoryEnabled, useS
 type Icon = React.ComponentProps<typeof UniversalIcon>;
 const VERSION = Constants.expoConfig?.version ?? '1.0.0';
 const LICENSES = 'Versara is built with free and open-source software, including:\n\n• PDFium (BSD-3-Clause / Apache-2.0)\n• React Native (MIT)\n• Expo SDK (MIT)\n• React Native Reanimated (MIT)\n• Sora typeface (SIL Open Font License)\n• Material Icons (Apache-2.0)';
-const PRIVACY = 'Versara works offline. PDFs and images are processed on this device and are never uploaded.\n\nThere is no account, no analytics and no ads. Your preferences are stored only on this phone.';
+const PRIVACY = 'Versara works offline. PDFs, documents and images are processed on this device and are never uploaded.\n\nThere is no account, no analytics and no ads. Your preferences are stored only on this phone.';
 
 function cacheBytes() {
   try { return unusedThumbnailBytes(); } catch { return 0; }
