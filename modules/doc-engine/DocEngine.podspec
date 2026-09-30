@@ -23,6 +23,11 @@ Pod::Spec.new do |s|
   if File.exist?(cokit_archive)
     s.vendored_libraries = cokit_archive
     s.pod_target_xcconfig['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) VERSARA_WITH_COKIT=1 IOS=1'
-    s.resources = [s.resources, 'vendor/cokit/ios/resources/**/*'].flatten
+    # Keep program/ and share/ as directories at the app bundle root. COKit
+    # resolves its registry and bootstrap files relative to that structure.
+    s.resources = [s.resources,
+                   'vendor/cokit/ios/resources/program',
+                   'vendor/cokit/ios/resources/share',
+                   'vendor/cokit/ios/THIRDPARTYLICENSES'].flatten
   end
 end
