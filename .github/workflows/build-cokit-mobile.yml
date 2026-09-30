@@ -24,12 +24,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool pkg-config make g++ python3-polib python3-lxml
-      - uses: android-actions/setup-android@v3
-      - name: Install Android 37 SDK and NDK 29
+      - name: Verify preinstalled Android 37 SDK and NDK 29
         run: |
-          sdkmanager --install 'ndk;29.0.14206865' 'platforms;android-37.0' 'build-tools;37.0.0'
           test -f "$ANDROID_HOME/ndk/29.0.14206865/source.properties"
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -x "$ANDROID_HOME/build-tools/37.0.0/aapt2"
       - name: Fetch pinned Collabora mobile source
         run: |
           git clone --filter=blob:none --branch distro/collabora/co-26.04-mobile \
@@ -98,6 +97,9 @@ jobs:
         run: |
           printf '%s\n' '--with-distro=CPiOS' '--with-lang=en-US' > autogen.input
           ./autogen.sh
+      - name: Compile iOS device engine
+        working-directory: collabora/engine
+        run: |
           make -j2
       - name: Package device archives and runtime data
         run: |
