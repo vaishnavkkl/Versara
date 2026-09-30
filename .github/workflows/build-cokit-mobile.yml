@@ -1,0 +1,114 @@
+name: Build free offline document engine
+
+# The first isolated branch push runs the source build; later builds can be dispatched manually.
+on:
+  push:
+    branches: [feature/cokit-mobile-engine]
+    paths:
+      - '.github/workflows/build-cokit-mobile.yml'
+      - 'modules/doc-engine/cpp/CokitSession.cpp'
+      - 'modules/doc-engine/cpp/CokitSession.h'
+      - 'scripts/patch-cokit-android.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool pkg-config make g++ python3-polib python3-lxml
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;29.0.14206865' 'platforms;android-37' 'build-tools;37.0.0'
+      - name: Fetch pinned Collabora mobile source
+        run: |
+          git clone --filter=blob:none --branch distro/collabora/co-26.04-mobile \
+            https://github.com/CollaboraOnline/online.mirror.git collabora
+          git -C collabora checkout 5ae1c42aee3b09be881c5a3a97c0581f63404505
+          test "$(git -C collabora rev-parse HEAD)" = 5ae1c42aee3b09be881c5a3a97c0581f63404505
+      - name: Link Versara C bridge inside the Android engine
+        run: |
+          node scripts/patch-cokit-android.mjs collabora/engine
+          echo "VERSARA_COKIT_BRIDGE=$GITHUB_WORKSPACE/modules/doc-engine/cpp/CokitSession.cpp" >> "$GITHUB_ENV"
+          echo "VERSARA_COKIT_HEADERS=$GITHUB_WORKSPACE/modules/doc-engine/cpp" >> "$GITHUB_ENV"
+      - name: Build Android arm64 engine
+        working-directory: collabora/engine
+        run: |
+          cat > autogen.input <<EOF
+          --build=x86_64-unknown-linux-gnu
+          --with-android-sdk=$ANDROID_HOME
+          --with-android-ndk=$ANDROID_HOME/ndk/29.0.14206865
+          --with-distro=CPAndroidAarch64
+          --with-lang=en-US
+          EOF
+          ./autogen.sh
+          make -j2
+      - name: Build Android runtime assets
+        working-directory: collabora
+        run: |
+          ./autogen.sh
+          ./configure --enable-androidapp --with-lo-builddir="$(pwd)/engine" \
+            --with-android-abi=arm64-v8a --with-app-package-name=com.versara.app
+          make -j2
+          ./android/gradlew -p android :lib:generateReleaseAssets --no-daemon
+      - name: Package Android runtime
+        run: |
+          mkdir -p package/android/arm64-v8a package/android/assets
+          cp collabora/engine/android/jniLibs/arm64-v8a/*.so package/android/arm64-v8a/
+          cp -a collabora/android/lib/src/main/assets/. package/android/assets/
+          printf '%s\n' 5ae1c42aee3b09be881c5a3a97c0581f63404505 > package/android/REVISION
+          cp collabora/THIRDPARTYLICENSES package/android/THIRDPARTYLICENSES
+          tar -C package -cJf cokit-android-arm64.tar.xz android
+          test "$(stat -c%s cokit-android-arm64.tar.xz)" -lt 450000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cokit-android-arm64
+          path: cokit-android-arm64.tar.xz
+          retention-days: 1
+
+  ios-device-arm64:
+    runs-on: macos-26
+    timeout-minutes: 330
+    steps:
+      - name: Install native build tools
+        run: |
+          brew install autoconf automake libtool pkg-config
+          python3 -m venv "$RUNNER_TEMP/co-python"
+          "$RUNNER_TEMP/co-python/bin/pip" install polib lxml
+          echo "$RUNNER_TEMP/co-python/bin" >> "$GITHUB_PATH"
+      - name: Fetch pinned Collabora mobile source
+        run: |
+          git clone --filter=blob:none --branch distro/collabora/co-26.04-mobile \
+            https://github.com/CollaboraOnline/online.mirror.git collabora
+          git -C collabora checkout 5ae1c42aee3b09be881c5a3a97c0581f63404505
+          test "$(git -C collabora rev-parse HEAD)" = 5ae1c42aee3b09be881c5a3a97c0581f63404505
+      - name: Build iOS device engine
+        working-directory: collabora/engine
+        run: |
+          printf '%s\n' '--with-distro=CPiOS' '--with-lang=en-US' > autogen.input
+          ./autogen.sh
+          make -j2
+      - name: Package device archives and runtime data
+        run: |
+          mkdir -p package/ios/lib package/ios/resources
+          cd collabora/engine
+          list=workdir/CustomTarget/ios/ios-all-static-libs.list
+          test -s "$list"
+          libtool -static -o ../../package/ios/libCOKit.a $(cat "$list")
+          cp -a instdir/program instdir/share ../../package/ios/resources/
+          cd ../..
+          printf '%s\n' 5ae1c42aee3b09be881c5a3a97c0581f63404505 > package/ios/REVISION
+          cp collabora/THIRDPARTYLICENSES package/ios/THIRDPARTYLICENSES
+          tar -C package -cJf cokit-ios-device-arm64.tar.xz ios
+          test "$(stat -f%z cokit-ios-device-arm64.tar.xz)" -lt 450000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cokit-ios-device-arm64
+          path: cokit-ios-device-arm64.tar.xz
+          retention-days: 1

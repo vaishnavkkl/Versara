@@ -39,6 +39,8 @@ export type DocFormat = {
 declare class DocEngine extends NativeModule {
   /** DOCX open, edit and save. Older builds leave this unset; 2 adds headers, footers and page numbers; 3 adds page setup, spacing, ruler and page strip. */
   readonly nativeDocEditorVersion?: number;
+  /** True only when a mobile COKit binary was linked into this native build. */
+  readonly nativeCokitAvailable?: boolean;
   command(name: string, value: string): Promise<void>;
   insertImage(path: string): Promise<void>;
   resizeImage(percent: number): Promise<void>;

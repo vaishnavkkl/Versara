@@ -4,6 +4,7 @@ public class DocEngineModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DocEngine")
     Constant("nativeDocEditorVersion") { 3 }
+    Constant("nativeCokitAvailable") { CokitBridge.isAvailable() }
     View(DocEditorView.self) {
       Events("onReady", "onDocChange", "onError", "onFormat", "onBand")
       Prop("source") { (view: DocEditorView, value: String) in view.sourceProp = value }

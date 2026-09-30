@@ -48,3 +48,4 @@ example
 /modules/**/ios/build/
 /modules/**/android/.cxx/
 /modules/pdf-engine/vendor/
+/modules/doc-engine/vendor/

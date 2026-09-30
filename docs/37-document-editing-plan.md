@@ -2,6 +2,8 @@
 
 Status: Track A1/A2 and Track B are implemented. Both tracks stay fully offline, native on Android and iOS, and use only free/open-source code. [PDF tools](03-pdf-tools.md) records that DOCX editing lives in Documents, with simplified PDF export rather than a full conversion suite.
 
+The current DOCX layout is still a simplified editor and fails on multi-section Word files with anchored graphics. DOCX stays in the product; [LibreOfficeKit integration research](38-libreofficekit-docx-research.md) records the replacement path for faithful layout and editing. Do not treat image sizing or visual page gaps as a substitute for a layout engine.
+
 ## What already exists
 
 Text edit/add/remove (PDFium), highlight, freehand, shapes, visual signatures, watermark, page numbers, OCR with searchable text layer, protection, metadata removal, flatten, repair and page organization. See [native PDF suite](20-native-pdf-suite.md) and [editor implementation](31-editor-functionality-implementation.md). Marks are exported as page vectors, not editable PDF annotations. Form filling, content redaction and object/image editing are listed there as missing.
@@ -93,7 +95,7 @@ Files and Search open `.docx` in a new `/doc-editor` route. It adds a Home "Docu
 
 ## Alternatives considered
 
-- **LibreOffice core / Collabora Office mobile (MPL-2.0):** full Word fidelity offline, but roughly 100 MB or more, a heavy build, and macOS required for iOS. Revisit only if fidelity becomes the priority.
+- **Collabora Office mobile engine (MPL-2.0 and other open-source licenses):** chosen for offline DOCX fidelity. It is a large native build, with Linux required for Android and macOS for iOS; see [the integration status](38-libreofficekit-docx-research.md#integration-state).
 - **MuPDF (AGPL), ONLYOFFICE mobile (AGPL / commercial SDK), PoDoFo (LGPL, App Store linking concerns), Pandoc (GPL):** excluded for licensing.
 - **Apache POI / docx4j (Apache-2.0):** Android-only Java, large; the shared C++ core covers both platforms.
 - **Commercial SDKs (Nutrient/PSPDFKit, Apryse, Foxit):** excluded by project rules.

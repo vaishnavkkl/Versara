@@ -7,6 +7,7 @@ class DocEngineModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("DocEngine")
     Constant("nativeDocEditorVersion") { 3 }
+    Constant("nativeCokitAvailable") { NativeCokit.available() }
     View(DocEditorView::class) {
       Events("onReady", "onDocChange", "onError", "onFormat", "onBand")
       Prop("source") { view: DocEditorView, value: String -> view.sourceProp = value }

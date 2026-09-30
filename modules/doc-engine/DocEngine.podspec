@@ -12,11 +12,17 @@ Pod::Spec.new do |s|
   s.frameworks = 'UIKit', 'CoreText', 'ImageIO'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
+    'CLANG_CXX_LANGUAGE_STANDARD' => 'c++20',
     'HEADER_SEARCH_PATHS' => '$(inherited) "${PODS_TARGET_SRCROOT}/cpp" "${PODS_TARGET_SRCROOT}/cpp/third_party"',
   }
-  s.source_files = 'ios/**/*.{h,m,mm,swift}', 'cpp/**/*.{hpp,cpp,c,h}'
-  s.private_header_files = 'cpp/**/*.{hpp,h}'
+  s.source_files = 'ios/**/*.{h,m,mm,swift}', 'cpp/**/*.{hpp,hxx,cpp,c,h}'
+  s.private_header_files = 'cpp/**/*.{hpp,hxx,h}'
   s.resources = 'fonts/docfonts/Carlito-*.ttf', 'fonts/docfonts/Caladea-*.ttf', 'fonts/docfonts/OFL-Carlito.txt', 'fonts/docfonts/OFL-Caladea.txt'
   s.libraries = 'c++'
+  cokit_archive = File.join(__dir__, 'vendor/cokit/ios/libCOKit.a')
+  if File.exist?(cokit_archive)
+    s.vendored_libraries = cokit_archive
+    s.pod_target_xcconfig['GCC_PREPROCESSOR_DEFINITIONS'] = '$(inherited) VERSARA_WITH_COKIT=1 IOS=1'
+    s.resources = [s.resources, 'vendor/cokit/ios/resources/**/*'].flatten
+  end
 end
