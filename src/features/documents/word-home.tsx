@@ -31,7 +31,7 @@ export function WordHome() {
   return <RecentFilesScreen kind="document" selectionTitle="Documents" header={header}
     back={{ label: 'Toolbox', onPress: () => router.navigate('/(tabs)') }}
     onSelect={async file => {
-      if (!isDocEditorAvailable) { setError('Install a new development build to edit documents.'); return false; }
+      if (file.name.toLowerCase().endsWith('.txt') && !isDocEditorAvailable) { setError('Install a new development build to edit text files.'); return false; }
       return openRecentDocument(file);
     }} />;
 }

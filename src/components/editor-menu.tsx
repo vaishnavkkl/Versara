@@ -6,8 +6,9 @@ import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
+import { optionColorKey, toolColors } from '@/theme/tool-colors';
 
-export type EditorMenuItem = { id: string; label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon };
+export type EditorMenuItem = { id: string; label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon; colorKey?: string };
 
 const SHEET_AFTER = 6;
 
@@ -18,30 +19,32 @@ function iconFor(label: string, explicit?: OptionIcon) {
 }
 
 /** Native menu for a short list. Longer lists open a native bottom sheet so every row can show its icon. */
-export function EditorMenu({ label, items, disabled = false, compact = false, icon }: { label: string; items: EditorMenuItem[]; disabled?: boolean; compact?: boolean; icon?: OptionIcon }) {
+export function EditorMenu({ label, items, disabled = false, compact = false, icon, tintedItems = false, colorKey }: { label: string; items: EditorMenuItem[]; disabled?: boolean; compact?: boolean; icon?: OptionIcon; tintedItems?: boolean; colorKey?: string }) {
   const [open, setOpen] = useState(false);
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
   const triggerIcon = icon ?? iconFor(label);
-  const sheet = items.length > SHEET_AFTER || Platform.OS !== 'ios';
+  const sheet = tintedItems || items.length > SHEET_AFTER || Platform.OS !== 'ios';
+  const triggerTint = tintedItems ? toolColors(colorKey ?? optionColorKey(label), colors).ink : colors.systemBlue;
   const choose = (item: EditorMenuItem) => {
     setOpen(false);
     if (!disabled && !item.disabled) item.onPress();
   };
   const trigger = <Pressable accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)}
     style={[styles.trigger, compact && styles.compact, { backgroundColor: colors.fieldSurface, borderColor: colors.separator, opacity: disabled ? .4 : 1 }]}>
-    {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={colors.systemBlue} />}
+    {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={triggerTint} />}
     <ThemedText numberOfLines={1} style={[styles.triggerLabel, compact && styles.compactLabel]}>{label}</ThemedText>
     <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />
   </Pressable>;
   const rows = items.map(item => {
     const rowIcon = iconFor(item.label, item.icon);
     const inactive = disabled || item.disabled;
+    const tint = tintedItems ? toolColors(item.colorKey ?? optionColorKey(item.label), colors) : null;
     return <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ selected: item.selected, disabled: inactive }} disabled={inactive} onPress={() => choose(item)}
-      style={[styles.row, { backgroundColor: item.selected ? colors.accentSurface : 'transparent', opacity: inactive ? .4 : 1 }]}>
-      {rowIcon ? <UniversalIcon {...rowIcon} size={22} color={item.selected ? colors.systemBlue : colors.label} /> : <View style={styles.iconGap} />}
-      <ThemedText style={[styles.rowLabel, item.selected && { color: colors.systemBlue, fontWeight: '700' }]}>{item.label}</ThemedText>
-      {item.selected && <UniversalIcon ios="checkmark" android="check" size={18} color={colors.systemBlue} />}
+      style={[styles.row, { backgroundColor: item.selected ? tint?.surface ?? colors.accentSurface : 'transparent', opacity: inactive ? .4 : 1 }]}>
+      {rowIcon ? <UniversalIcon {...rowIcon} size={22} color={tint?.ink ?? (item.selected ? colors.systemBlue : colors.label)} /> : <View style={styles.iconGap} />}
+      <ThemedText style={[styles.rowLabel, item.selected && { color: tint?.ink ?? colors.systemBlue, fontWeight: '700' }]}>{item.label}</ThemedText>
+      {item.selected && <UniversalIcon ios="checkmark" android="check" size={18} color={tint?.ink ?? colors.systemBlue} />}
     </Pressable>;
   });
   if (Platform.OS === 'web' || sheet) return <View style={styles.anchor}>
@@ -63,7 +66,7 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
       onPressAction={({ nativeEvent }) => { const item = items.find(entry => entry.id === nativeEvent.event); if (item) choose(item); }}>
       <View accessible accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ disabled }}
         style={[styles.trigger, compact && styles.compact, { backgroundColor: colors.fieldSurface, borderColor: colors.separator }]}>
-        {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={colors.systemBlue} />}
+        {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={triggerTint} />}
         <ThemedText numberOfLines={1} style={[styles.triggerLabel, compact && styles.compactLabel]}>{label}</ThemedText>
         <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />
       </View>
@@ -75,7 +78,7 @@ const styles = StyleSheet.create({
   anchor: { alignSelf: 'flex-end', maxWidth: '100%' },
   dim: { opacity: 0.4 },
   trigger: { minHeight: 44, maxWidth: 220, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  compact: { maxWidth: 148, paddingHorizontal: 10 },
+  compact: { minHeight: 48, maxWidth: 148, paddingHorizontal: 10, borderRadius: 12 },
   triggerLabel: { flexShrink: 1, fontSize: 15, fontWeight: '600' },
   compactLabel: { fontSize: 13 },
   row: { minHeight: 52, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12 },

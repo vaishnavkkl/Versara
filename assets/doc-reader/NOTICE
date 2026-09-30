@@ -1,0 +1,12 @@
+docx-renderer
+Copyright 2026 recon-vcs
+
+This product is a fork of docx-preview-sync
+(https://github.com/millet0328/docx-preview-sync),
+Copyright millet0328, licensed under the Apache License, Version 2.0.
+
+docx-preview-sync is itself derived from docx-preview (docxjs)
+(https://github.com/VolodymyrBaydalka/docxjs),
+Copyright Volodymyr Baydalka, licensed under the Apache License, Version 2.0.
+
+This product includes software developed by both upstream projects.

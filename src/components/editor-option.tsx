@@ -1,32 +1,24 @@
-import { Pressable, StyleSheet } from 'react-native';
+import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import { usePalette } from '@/theme/colors';
-import { toolColors } from '@/theme/tool-colors';
+import { optionColorKey, toolColors } from '@/theme/tool-colors';
 import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
 
 export { optionIcon } from '@/theme/editor-icons';
 
-export function optionColorKey(label: string) {
-  const value = label.toLowerCase();
-  if (/area|pencil|size|percent|fit|fill|stretch/.test(value)) return 'resize';
-  if (/select|pen|solid|rotate|undo|redo/.test(value)) return 'rotate';
-  if (/dotted|style|colour|color|heic|png|tiff|jpeg|webp|export|save|share/.test(value)) return 'export';
-  if (/dashed|highlight|compress|balance/.test(value)) return 'compress';
-  if (/draw|brush|marker|bold/.test(value)) return 'draw';
-  if (/delete|remove|discard/.test(value)) return 'redact';
-  return 'adjust';
-}
-export function EditorOption({ label, selected = false, disabled = false, onPress, icon, compact = false, accessibilityLabel }: {
-  label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon; compact?: boolean; accessibilityLabel?: string;
+export { optionColorKey } from '@/theme/tool-colors';
+
+export function EditorOption({ label, selected = false, disabled = false, onPress, icon, compact = false, accessibilityLabel, style }: {
+  label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon; compact?: boolean; accessibilityLabel?: string; style?: StyleProp<ViewStyle>;
 }) {
   const colors = usePalette();
   const tint = toolColors(optionColorKey(label), colors);
   const symbol = icon ?? optionIcon(label);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
-    style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }]}>
-    {symbol && <UniversalIcon {...symbol} size={22} color={tint.ink} />}
-    <ThemedText style={{ fontSize: compact ? 13 : 15, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
+    style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }, style]}>
+    {symbol && <UniversalIcon {...symbol} size={compact ? 20 : 22} color={tint.ink} />}
+    <ThemedText style={{ fontSize: compact ? 13 : 15, lineHeight: compact ? 17 : 21, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
   </Pressable>;
 }
-const styles = StyleSheet.create({ compact: { minWidth: 56, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'column', gap: 4 }, option: { minHeight: 52, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ compact: { minHeight: 48, minWidth: 56, paddingHorizontal: 10, paddingVertical: 4, flexDirection: 'column', gap: 1 }, option: { minHeight: 52, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' } });

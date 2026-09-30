@@ -20,6 +20,7 @@ import { createPdfToolForDocument, discardPdfToolSession } from '../pdf/pdf-tool
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { toast } from '@/components/toast';
 import { rememberFile, type FileKind } from './recent-files';
+import { openDocument } from '@/features/documents/open-document';
 
 type Filter = 'all' | FileKind;
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'pdf', label: 'PDFs' }, { id: 'document', label: 'Documents' }, { id: 'image', label: 'Images' }];
@@ -67,7 +68,7 @@ export function EditedFilesScreen() {
     try {
       const recent = await rememberFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size }, file.kind);
       if (!mounted.current) return;
-      if (file.kind === 'document') router.push({ pathname: '/doc-editor', params: { uri: recent.uri, name: recent.name, format: recent.name.toLowerCase().endsWith('.txt') ? 'txt' : 'docx' } });
+      if (file.kind === 'document') openDocument(recent);
       else router.push({ pathname: '/file-preview', params: { id: recent.id } });
     } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not open this file.'); }
     finally { locked.current = false; if (mounted.current) setBusy(false); }
@@ -88,7 +89,7 @@ export function EditedFilesScreen() {
     try {
       if (id === 'edit') {
         if (file.kind === 'document') {
-          if (mounted.current) router.push({ pathname: '/doc-editor', params: { uri: file.uri, name: file.name, format: file.name.toLowerCase().endsWith('.txt') ? 'txt' : 'docx' } });
+          if (mounted.current) openDocument(file);
         } else if (file.kind === 'pdf') {
           const session = await createPdfToolForDocument('edit_text', 'Edit PDF', file);
           if (!session) return;
@@ -126,7 +127,7 @@ export function EditedFilesScreen() {
 
   const actions = [{ title: 'File actions', data: [
     { id: 'open', title: 'Open', subtitle: '', ios: 'doc', android: 'open-in-new' },
-    { id: 'edit', title: 'Edit', subtitle: '', ios: 'square.and.pencil', android: 'edit' },
+    ...(menu?.kind === 'document' && menu.name.toLowerCase().endsWith('.docx') ? [] : [{ id: 'edit', title: 'Edit', subtitle: '', ios: 'square.and.pencil', android: 'edit' } as const]),
     { id: 'rename', title: 'Rename', subtitle: '', ios: 'pencil', android: 'drive-file-rename-outline' },
     { id: 'duplicate', title: 'Duplicate', subtitle: '', ios: 'doc.on.doc', android: 'file-copy' },
     { id: 'save', title: 'Save to device', subtitle: '', ios: 'square.and.arrow.down', android: 'save-alt' },

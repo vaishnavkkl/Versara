@@ -5,10 +5,11 @@ import { spacing, typography } from '@/theme/dashboard';
 
 const GAP = 8;
 type Measurement = { key: string; widths: Record<string, number> };
+type ToolbarControl = string | number | { label: string; compact?: boolean; minWidth?: number };
 
 /** Measures inert equivalents, never duplicate interactive buttons. The sizing mirrors
  * compact EditorOption and ToolButton; location changes cannot change these probes. */
-export function useResponsiveEditorToolbar(options: (string | number)[], buttons: string[], iconButtons = 0) {
+export function useResponsiveEditorToolbar(options: ToolbarControl[], buttons: ToolbarControl[], iconButtons = 0) {
   const { fontScale } = useWindowDimensions();
   const key = JSON.stringify([fontScale, options, buttons, iconButtons]);
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -20,28 +21,28 @@ export function useResponsiveEditorToolbar(options: (string | number)[], buttons
     setAvailableWidth(current => current === width ? current : width);
   }, []);
   const entries = [
-    ...options.map((label, index) => ({ id: `option:${index}`, label: typeof label === 'string' ? label : '', width: typeof label === 'number' ? label : undefined, compact: true })),
-    ...buttons.map((label, index) => ({ id: `button:${index}`, label, width: undefined, compact: false })),
+    ...options.map((control, index) => ({ id: `option:${index}`, label: typeof control === 'string' ? control : typeof control === 'number' ? '' : control.label, width: typeof control === 'number' ? control : undefined, minWidth: typeof control === 'object' ? control.minWidth : undefined, compact: typeof control === 'object' ? control.compact ?? true : true })),
+    ...buttons.map((control, index) => ({ id: `button:${index}`, label: typeof control === 'string' ? control : typeof control === 'number' ? '' : control.label, width: typeof control === 'number' ? control : undefined, minWidth: typeof control === 'object' ? control.minWidth : undefined, compact: typeof control === 'object' ? control.compact ?? false : false })),
   ];
   // Retain the last measured widths until replacement probes report. A changing
   // annotation count must not reset a crowded toolbar to bottom on every stroke.
   const widths = measurement.widths;
   const measured = entries.every(entry => widths[entry.id] > 0);
   const toolsWidth = options.reduce<number>((sum, _, index) => sum + (widths[`option:${index}`] ?? 0), 0) + Math.max(0, options.length - 1) * GAP;
-  const requiredWidth = buttons.reduce((sum, _, index) => sum + (widths[`button:${index}`] ?? 0), 0) + iconButtons * 44 + Math.max(0, buttons.length + iconButtons - 1) * GAP;
+  const requiredWidth = buttons.reduce<number>((sum, _, index) => sum + (widths[`button:${index}`] ?? 0), 0) + iconButtons * 44 + Math.max(0, buttons.length + iconButtons - 1) * GAP;
   // Begin at the bottom. Probes and footer geometry stay unchanged when actions move,
   // so the decision does not oscillate as the flexible Save button grows or shrinks.
   const atBottom = !measured || !availableWidth || Math.ceil(toolsWidth + requiredWidth + GAP) <= availableWidth;
   const primaryMinWidth = Math.min(availableWidth, widths[`button:${buttons.length - 1}`] ?? 0);
   const measurements = <View key={key} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.probes}>
-    {entries.map(entry => <View key={entry.id} style={[styles.probe, entry.compact ? styles.compactProbe : styles.buttonProbe, entry.width !== undefined && { width: entry.width }]} onLayout={event => {
+    {entries.map(entry => <View key={entry.id} style={[styles.probe, entry.compact ? styles.compactProbe : styles.buttonProbe, entry.minWidth !== undefined && { minWidth: entry.minWidth }, entry.width !== undefined && { width: entry.width }]} onLayout={event => {
       if (currentKey.current !== key) return;
       const width = Math.ceil(event.nativeEvent.layout.width);
       setMeasurement(current => {
         return current.key === key && current.widths[entry.id] === width ? current : { key, widths: { ...current.widths, [entry.id]: width } };
       });
     }}>
-      <View style={styles.symbol} />
+      <View style={entry.compact ? styles.compactSymbol : styles.buttonSymbol} />
       {!!entry.label && <ThemedText style={entry.compact ? styles.compactText : styles.buttonText}>{entry.label}</ThemedText>}
     </View>)}
   </View>;
@@ -57,9 +58,10 @@ export const responsiveToolbarStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   probes: { position: 'absolute', opacity: 0, left: 0, top: 0, alignItems: 'flex-start' },
   probe: { alignSelf: 'flex-start', flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
-  compactProbe: { minWidth: 56, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth },
+  compactProbe: { minWidth: 56, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth, gap: 1 },
   buttonProbe: { flexDirection: 'row', gap: 7, paddingHorizontal: spacing.md },
-  symbol: { width: 22, height: 22 },
-  compactText: { fontSize: 13 },
+  compactSymbol: { width: 20, height: 20 },
+  buttonSymbol: { width: 20, height: 20 },
+  compactText: { fontSize: 13, lineHeight: 17 },
   buttonText: { ...typography.label, textAlign: 'center' },
 });

@@ -259,6 +259,25 @@ final class DocLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 /// Text view whose caret spans the glyphs on the line (ascender to descender at the baseline);
 /// page-flow and paragraph spacing make some line fragments much taller than their text.
 final class DocTextView: UITextView {
+  var pagePitch: CGFloat = 0
+  var bodyHeight: CGFloat = 0
+
+  override func draw(_ rect: CGRect) {
+    guard pagePitch > 1, bodyHeight > 1, let context = UIGraphicsGetCurrentContext() else { super.draw(rect); return }
+    let visible = rect.intersection(context.boundingBoxOfClipPath)
+    guard !visible.isNull, !visible.isEmpty else { return }
+    let first = max(0, Int(floor(visible.minY / pagePitch)))
+    let last = max(first, Int(floor(visible.maxY / pagePitch)))
+    let path = UIBezierPath()
+    for page in first...last {
+      path.append(UIBezierPath(rect: CGRect(x: 0, y: CGFloat(page) * pagePitch, width: bounds.width, height: bodyHeight)))
+    }
+    context.saveGState()
+    path.addClip()
+    super.draw(rect)
+    context.restoreGState()
+  }
+
   override func caretRect(for position: UITextPosition) -> CGRect {
     var rect = super.caretRect(for: position)
     let storage = textStorage
@@ -507,6 +526,8 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
     measureBands()
     manager.pitch = pitch
     manager.content = contentH
+    editor.pagePitch = pitch
+    editor.bodyHeight = contentH
     if container.size.width != contentW { container.size = CGSize(width: contentW, height: .greatestFiniteMagnitude) }
     editor.typingAttributes = baseAttributes()
   }
@@ -593,7 +614,7 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
     let top = CGFloat(index) * pitch
     let glyphs = manager.glyphRange(forBoundingRect: CGRect(x: 0, y: top, width: contentW, height: contentH), in: container)
     context.saveGState()
-    context.clip(to: CGRect(x: 0, y: 0, width: pageW, height: pageH))
+    context.clip(to: CGRect(x: mL, y: mT, width: contentW, height: contentH))
     let origin = CGPoint(x: mL, y: mT - top)
     manager.drawBackground(forGlyphRange: glyphs, at: origin)
     manager.drawGlyphs(forGlyphRange: glyphs, at: origin)
@@ -1213,7 +1234,7 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
     let file = draft()
     if FileManager.default.fileExists(atPath: file.path), let data = try? Data(contentsOf: file), data.count < 8_000_000, let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
       restored = true
-      return saved
+      return prepareMedia(saved)
     }
     restored = false
     let result: [String: Any]
@@ -1223,22 +1244,38 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
       result = try json(DocxBridge.run(stringify(["action": "open", "path": sourcePath])))
       if let message = result["message"] as? String, result["error"] != nil { throw DocumentError(message) }
     }
-    guard !blank, format != "txt", !sourcePath.isEmpty else { return result }
+    return prepareMedia(result)
+  }
+
+  private func prepareMedia(_ model: [String: Any]) -> [String: Any] {
+    guard !blank, format != "txt", !sourcePath.isEmpty else { return model }
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("versara-doc-media", isDirectory: true)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let prefix = String(format: "%08x", UInt32(truncatingIfNeeded: sourcePath.hashValue))
-    return withPreviews(result, folder: folder, prefix: prefix) as? [String: Any] ?? result
+    let original = (try? FileManager.default.attributesOfItem(atPath: sourcePath)) ?? [:]
+    let prefix = String(format: "%08x_%llx_%llx", UInt32(truncatingIfNeeded: sourcePath.hashValue), (original[.size] as? NSNumber)?.uint64Value ?? 0, UInt64((original[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0))
+    let cached = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])) ?? [])
+      .map { url -> (URL, Int64, Date) in
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        return (url, Int64(values?.fileSize ?? 0), values?.contentModificationDate ?? .distantPast)
+      }.sorted { $0.2 < $1.2 }
+    var bytes = cached.reduce(Int64(0)) { $0 + $1.1 }
+    for (url, size, _) in cached where bytes > 192 * 1024 * 1024 && !url.lastPathComponent.hasPrefix(prefix + "_") {
+      do { try FileManager.default.removeItem(at: url); bytes -= size } catch { }
+    }
+    return withPreviews(model, folder: folder, prefix: prefix) as? [String: Any] ?? model
   }
 
   /// Extracts every picture the document shows, including ones inside tables and text runs.
   private func withPreviews(_ node: Any, folder: URL, prefix: String) -> Any {
     if var dict = node as? [String: Any] {
-      if let media = dict["media"] as? String, !media.isEmpty, !media.contains("..") {
-        let dest = folder.appendingPathComponent(prefix + "_" + (media as NSString).lastPathComponent)
-        if !FileManager.default.fileExists(atPath: dest.path) {
+      if let media = dict["media"] as? String, !media.isEmpty {
+        let mediaKey = String(format: "%08x", UInt32(truncatingIfNeeded: media.hashValue))
+        let dest = folder.appendingPathComponent(prefix + "_" + mediaKey + "_" + (media as NSString).lastPathComponent)
+        if ((try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) == 0 {
           _ = DocxBridge.run(stringify(["action": "media", "path": sourcePath, "name": media, "output": dest.path]))
         }
-        if FileManager.default.fileExists(atPath: dest.path) { dict["preview"] = dest.path }
+        if ((try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 0 { dict["preview"] = dest.path }
+        else { dict.removeValue(forKey: "preview") }
       }
       for key in ["sections", "blocks", "runs", "table", "rows", "cells", "paras"] {
         if let child = dict[key] { dict[key] = withPreviews(child, folder: folder, prefix: prefix) }
@@ -1339,7 +1376,8 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
     for run in runs {
       let body = ((run["text"] as? String) ?? "").replacingOccurrences(of: "\n", with: "\u{2028}")
       if let media = run["media"] as? String, !media.isEmpty, !body.isEmpty {
-        text.append(imageString(cx: (run["cx"] as? NSNumber)?.doubleValue ?? 0, cy: (run["cy"] as? NSNumber)?.doubleValue ?? 0, path: run["preview"] as? String, maxWidth: width))
+        let room = imageRoom(block, width: width)
+        text.append(imageString(cx: (run["cx"] as? NSNumber)?.doubleValue ?? 0, cy: (run["cy"] as? NSNumber)?.doubleValue ?? 0, path: run["preview"] as? String, maxWidth: room.width, maxHeight: room.height))
         continue
       }
       let attrs = runAttributes(run)
@@ -1400,7 +1438,13 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
     let line = max(1, hasLine ? number("line", 240) : defaultNumber("line", 240))
     let rule = hasLine ? (block["rule"] as? String ?? "auto") : (defaults["rule"] as? String ?? "auto")
     switch rule {
-    case "exact": style.minimumLineHeight = px(line); style.maximumLineHeight = px(line)
+    case "exact":
+      var hasImage = false
+      text.enumerateAttribute(.attachment, in: range) { value, _, stop in
+        if value != nil { hasImage = true; stop.pointee = true }
+      }
+      style.minimumLineHeight = px(line)
+      if !hasImage { style.maximumLineHeight = px(line) }
     case "atLeast": style.minimumLineHeight = px(line)
     default: if line != 240 { style.lineHeightMultiple = CGFloat(line) / 240 }
     }
@@ -1436,16 +1480,40 @@ final class DocEditorView: ExpoView, UITextViewDelegate, UIScrollViewDelegate {
   private func appendImage(_ text: NSMutableAttributedString, _ block: [String: Any]) {
     let start = text.length
     let path = (block["preview"] as? String) ?? (block["source"] as? String)
-    text.append(imageString(cx: (block["cx"] as? NSNumber)?.doubleValue ?? 0, cy: (block["cy"] as? NSNumber)?.doubleValue ?? 0, path: path, maxWidth: contentW))
+    let room = imageRoom(block, width: contentW)
+    text.append(imageString(cx: (block["cx"] as? NSNumber)?.doubleValue ?? 0, cy: (block["cy"] as? NSNumber)?.doubleValue ?? 0, path: path, maxWidth: room.width, maxHeight: room.height))
     text.append(NSAttributedString(string: "\n", attributes: baseAttributes()))
     applyParagraph(text, ["align": block["align"] ?? "left", "before": block["before"] ?? 0, "after": block["after"] ?? 0, "line": 240], range: NSRange(location: start, length: text.length - start), width: contentW)
   }
 
-  private func imageString(cx: Double, cy: Double, path: String?, maxWidth: CGFloat) -> NSAttributedString {
+  /** Keep the attachment, line spacing and paragraph spacing inside one page body. */
+  private func imageRoom(_ block: [String: Any], width: CGFloat) -> CGSize {
+    let number = { (key: String, fallback: Int) in (block[key] as? NSNumber)?.intValue ?? fallback }
+    let indent = max(0, number("indent", 0))
+    let left = max(px(indent), px(max(0, indent + number("first", 0))))
+    let right = px(max(0, number("right", 0)))
+    let before = block["cb"] as? Bool == true ? 0 : px(max(0, number("before", defaultNumber("before", 0))))
+    let after = block["ca"] as? Bool == true ? 0 : px(max(0, number("after", defaultNumber("after", 0))))
+    let line = max(1, number("line", defaultNumber("line", 240)))
+    let rule = block["rule"] as? String ?? defaults["rule"] as? String ?? "auto"
+    let multiple = rule == "auto" ? max(1, CGFloat(line) / 240) : 1
+    let reserve = halfToPx(defaultHalf) + 2
+    return CGSize(width: max(1, width - left - right), height: max(1, (contentH - before - after - reserve) / multiple))
+  }
+
+  private func imageString(cx: Double, cy: Double, path: String?, maxWidth: CGFloat, maxHeight: CGFloat) -> NSAttributedString {
     var width = CGFloat(cx) / 12700 * scale, height = CGFloat(cy) / 12700 * scale
-    if width <= 0 || height <= 0 { width = 120; height = 90 }
+    if width <= 0 || height <= 0 {
+      if let path, let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as NSDictionary?,
+         let pixelsW = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+         let pixelsH = properties[kCGImagePropertyPixelHeight] as? NSNumber {
+        width = CGFloat(truncating: pixelsW) * scale
+        height = CGFloat(truncating: pixelsH) * scale
+      } else { width = 120; height = 90 }
+    }
     if width > maxWidth { height *= maxWidth / width; width = maxWidth }
-    if height > contentH { width *= contentH / height; height = contentH }
+    if height > maxHeight { width *= maxHeight / height; height = maxHeight }
     let attachment = NSTextAttachment()
     attachment.image = path.flatMap { image(at: $0, maxPixels: max(width, height) * UIScreen.main.scale) } ?? UIImage.from(color: UIColor(white: 0.91, alpha: 1))
     attachment.bounds = CGRect(x: 0, y: 0, width: max(1, width), height: max(1, height))

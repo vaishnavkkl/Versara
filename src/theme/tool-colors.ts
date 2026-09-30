@@ -1,5 +1,16 @@
 import type { Palette } from './colors';
 
+export function optionColorKey(label: string) {
+  const value = label.toLowerCase();
+  if (/area|pencil|size|percent|fit|fill|stretch/.test(value)) return 'resize';
+  if (/select|pen|solid|rotate|undo|redo/.test(value)) return 'rotate';
+  if (/dotted|style|colour|color|heic|png|tiff|jpeg|webp|export|save|share/.test(value)) return 'export';
+  if (/dashed|highlight|compress|balance/.test(value)) return 'compress';
+  if (/draw|brush|marker|bold/.test(value)) return 'draw';
+  if (/delete|remove|discard/.test(value)) return 'redact';
+  return 'adjust';
+}
+
 // Stable tool identities shared by the quick rail, toolbox and editor controls.
 const families = [
   { ids: ['edit_text', 'text', 'rename', 'extract_text', 'ocr'], light: '#7050AF', dark: '#C4A4F3' },

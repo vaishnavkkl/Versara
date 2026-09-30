@@ -4,6 +4,7 @@ import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/r
 import { EditorMenu } from '@/components/editor-menu';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { EditorOption } from '@/components/editor-option';
+import { optionIcon } from '@/theme/editor-icons';
 import { BrushControls, BRUSHES } from '../pdf/brush-controls';
 import { useMarkHistory, isMarkHistorySnapshot } from '../pdf/use-mark-history';
 import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
@@ -559,6 +560,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     } finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
   const cancel = () => { cancelled.current = true; jobs.current.forEach((_,job)=>FileEngine?.cancelImageJob(job)); };
+  const activeBrush = BRUSHES.find(item => item.id === brushType) ?? BRUSHES[0];
   const settingsAction = <Pressable accessibilityRole="button" accessibilityLabel="Image options" accessibilityState={{expanded:settings}} onPress={()=>{Keyboard.dismiss();setSettings(value=>!value);}} style={styles.chip}><UniversalIcon ios="slider.horizontal.3" android="tune" size={22} color={tint.ink} /></Pressable>;
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen,{backgroundColor:colors.systemBackground}]}>
     {toolbar.measurements}
@@ -569,7 +571,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       <View style={styles.grow}>
       <View style={styles.previewHeader}><ThemedText numberOfLines={1} style={[styles.grow,styles.note]}>{info.width} x {info.height} - {formatSize(info.size)}</ThemedText>{!drawing && tool !== 'rename' && <Pressable accessibilityRole="button" accessibilityLabel={compare?'Show changes':'Compare original'} onPress={()=>setCompare(value=>!value)} style={styles.chip}><ThemedText>{compare?'Show changes':'Original'}</ThemedText></Pressable>}{!toolbar.atBottom && settingsAction}</View>
       {(drawing || selectingArea) && preview && PdfMarkupView ? <PdfPreviewStage actions={drawing && <View style={{ gap: 8, alignItems: 'flex-end' }}>
-        {tool !== 'redact' && <EditorMenu label="Brush" disabled={busy} items={BRUSHES.map(item => ({ id: item.id, label: item.label, selected: brushType === item.id && shape === 'pen' && !erasing, onPress: () => edit(() => { setErasing(false); setSelecting(false); setShape('pen'); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); }) }))} />}
+        {tool !== 'redact' && <EditorMenu label={`Brush: ${activeBrush.label}`} icon={optionIcon(activeBrush.label)} colorKey={activeBrush.colorKey} tintedItems disabled={busy} items={BRUSHES.map(item => ({ id: item.id, label: item.label, colorKey: item.colorKey, selected: brushType === item.id && shape === 'pen' && !erasing, onPress: () => edit(() => { setErasing(false); setSelecting(false); setShape('pen'); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); }) }))} />}
         {tool !== 'redact' && <ShapePicker value={shape} onChange={value => edit(() => { setShape(value); setSelecting(false); setErasing(false); })} disabled={busy} />}
         <EditorMenu label="Settings" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} items={[
           { id: 'style', label: settings ? 'Hide style controls' : 'Style and colour', selected: settings, onPress: () => { Keyboard.dismiss(); setSettings(value => !value); } },

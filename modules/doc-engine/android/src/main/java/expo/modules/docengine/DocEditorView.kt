@@ -574,8 +574,8 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
     val layout = edit.layout ?: return
     canvas.save()
     canvas.translate(mL.toFloat(), (mT - index * pitch).toFloat())
-    val top = index * pitch - mT
-    canvas.clipRect(-mL, top, contentW + mR, top + pageH)
+    val top = index * pitch
+    canvas.clipRect(0, top, contentW, top + contentH)
     layout.draw(canvas)
     canvas.restore()
   }
@@ -617,6 +617,23 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
         canvas.drawRect(left, top, left + pageW, top + pageH, paper)
         drawBands(canvas, i, left, top)
       }
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+      if (scale <= 0f) return
+      val clip = canvas.clipBounds
+      val first = max(0, (clip.top - gutter) / max(1, pitch))
+      val last = min(pageCount - 1, (clip.bottom - gutter) / max(1, pitch))
+      if (last < first) return
+      val body = android.graphics.Path()
+      for (i in first..last) {
+        val top = (gutter + i * pitch + mT).toFloat()
+        body.addRect((gutter + mL).toFloat(), top, (gutter + mL + contentW).toFloat(), top + contentH, android.graphics.Path.Direction.CW)
+      }
+      canvas.save()
+      canvas.clipPath(body)
+      super.dispatchDraw(canvas)
+      canvas.restore()
     }
 
     private fun zoneAt(x: Float, y: Float): String? {
@@ -1288,7 +1305,7 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
     val draft = draft()
     if (draft.exists() && draft.length() < 8_000_000) {
       restored = true
-      return JSONObject(draft.readText())
+      return JSONObject(draft.readText()).also { cacheImages(it) }
     }
     restored = false
     val result = when {
@@ -1306,16 +1323,27 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
   private fun cacheImages(model: JSONObject) {
     if (blank || format == "txt" || sourcePath.isEmpty()) return
     val folder = File(context.cacheDir, "versara-doc-media").apply { mkdirs() }
-    val prefix = sourcePath.hashCode().toUInt().toString(16)
+    val original = File(sourcePath)
+    val prefix = "${sourcePath.hashCode().toUInt().toString(16)}_${original.length().toString(16)}_${original.lastModified().toString(16)}"
+    val cached = folder.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() }.orEmpty()
+    var bytes = cached.sumOf { it.length() }
+    for (file in cached) {
+      if (bytes <= 192L * 1024 * 1024) break
+      if (!file.name.startsWith("${prefix}_")) {
+        val length = file.length()
+        if (file.delete()) bytes -= length
+      }
+    }
     fun visit(node: Any?) {
       when (node) {
         is JSONArray -> for (i in 0 until node.length()) visit(node.opt(i))
         is JSONObject -> {
           val media = node.optString("media")
-          if (media.isNotEmpty() && !media.contains("..")) {
-            val dest = File(folder, prefix + "_" + media.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_"))
-            if (!dest.exists()) NativeDoc.call(JSONObject().put("action", "media").put("path", sourcePath).put("name", media).put("output", dest.path).toString())
-            if (dest.exists()) node.put("preview", dest.path)
+          if (media.isNotEmpty()) {
+            val name = media.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val dest = File(folder, "${prefix}_${media.hashCode().toUInt().toString(16)}_$name")
+            if (!dest.exists() || dest.length() == 0L) NativeDoc.call(JSONObject().put("action", "media").put("path", sourcePath).put("name", media).put("output", dest.path).toString())
+            if (dest.exists() && dest.length() > 0L) node.put("preview", dest.path) else node.remove("preview")
           }
           for (key in listOf("sections", "blocks", "runs", "table", "rows", "cells", "paras")) node.opt(key)?.let { visit(it) }
         }
@@ -1430,14 +1458,15 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
       val a = text.length
       text.append(run.optString("text").replace('\n', '\u2028'))
       val b = text.length
-      if (a < b || (a == start && r == runs.length() - 1)) applyRun(text, run, a, b, width)
+      if (a < b || (a == start && r == runs.length() - 1)) applyRun(text, run, a, b, block, width)
     }
     applyParagraphSpans(text, block, start, text.length, width)
   }
 
-  private fun applyRun(text: Spannable, run: JSONObject, a: Int, b: Int, width: Int) {
+  private fun applyRun(text: Spannable, run: JSONObject, a: Int, b: Int, block: JSONObject, width: Int) {
     if (run.optString("media").isNotEmpty() && b > a) {
-      attachImage(text, a, run.optLong("cx"), run.optLong("cy"), run.optString("preview"), width)
+      val (roomW, roomH) = imageRoom(block, width)
+      attachImage(text, a, run.optLong("cx"), run.optLong("cy"), run.optString("preview"), roomW, roomH)
       return
     }
     val lineStart = a == 0 || text[a - 1] == '\n'
@@ -1543,7 +1572,6 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
         else -> 0
       }
       val fill = (stop.first - x - after).coerceIn(least, max(least, width - x))
-      android.util.Log.w("DOCTAB", "text='${text.subSequence(start, end)}' x=$x firstPx=$firstPx stops=$stops stop=$stop after=$after fill=$fill width=$width scale=$scale")
       text.setSpan(DocTabFill(fill, stop.third), tab, tab + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
       x += fill
       from = tab + 1
@@ -1563,7 +1591,8 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
   private fun appendImage(text: DocText, block: JSONObject) {
     val at = text.length
     text.append('\uFFFC')
-    attachImage(text, at, block.optLong("cx"), block.optLong("cy"), block.optString("preview").ifEmpty { block.optString("source") }, contentW)
+    val (roomW, roomH) = imageRoom(block, contentW)
+    attachImage(text, at, block.optLong("cx"), block.optLong("cy"), block.optString("preview").ifEmpty { block.optString("source") }, roomW, roomH)
     val flags = Spanned.SPAN_EXCLUSIVE_INCLUSIVE or FIRST
     when (block.optString("align")) {
       "center" -> text.setSpan(DocAlignSpan(Layout.Alignment.ALIGN_CENTER), at, at + 1, flags)
@@ -1572,12 +1601,29 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
     text.setSpan(SpacingSpan(px(block.optInt("before", 0).coerceAtLeast(0)), px(block.optInt("after", 0).coerceAtLeast(0)), 240, "auto", 0, 0f), at, at + 1, flags)
   }
 
-  private fun attachImage(text: Spannable, at: Int, cx: Long, cy: Long, source: String, maxWidth: Int) {
+  /** The attachment and its paragraph spacing must fit inside one printable body area. */
+  private fun imageRoom(block: JSONObject, width: Int): Pair<Int, Int> {
+    val left = max(px(block.optInt("indent", 0).coerceAtLeast(0)), px((block.optInt("indent", 0) + block.optInt("first", 0)).coerceAtLeast(0)))
+    val right = px(block.optInt("right", 0).coerceAtLeast(0))
+    val before = if (block.optBoolean("cb")) 0 else px(block.optInt("before", defaults.optInt("before", 0)).coerceAtLeast(0))
+    val after = if (block.optBoolean("ca")) 0 else px(block.optInt("after", defaults.optInt("after", 0)).coerceAtLeast(0))
+    val line = block.optInt("line", defaults.optInt("line", 240)).coerceAtLeast(1)
+    val factor = if (block.optString("rule", defaults.optString("rule", "auto")) == "auto") line / 240f * (1f + DocFonts.gap(dominantFont(block))) else 1f
+    val height = ((contentH - before - after - halfToPx(defaultHalf).roundToInt() - dp(2)) / max(1f, factor)).roundToInt()
+    return max(1, width - left - right) to max(1, height)
+  }
+
+  private fun attachImage(text: Spannable, at: Int, cx: Long, cy: Long, source: String, maxWidth: Int, maxHeight: Int) {
     var w = cx / 12700f * scale
     var h = cy / 12700f * scale
-    if (w <= 0f || h <= 0f) { w = dp(120).toFloat(); h = dp(90).toFloat() }
+    if (w <= 0f || h <= 0f) {
+      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      if (source.startsWith("/")) BitmapFactory.decodeFile(source, bounds)
+      w = if (bounds.outWidth > 0) bounds.outWidth.toFloat() * scale else dp(120).toFloat()
+      h = if (bounds.outHeight > 0) bounds.outHeight.toFloat() * scale else dp(90).toFloat()
+    }
     if (w > maxWidth) { h *= maxWidth / w; w = maxWidth.toFloat() }
-    val tallest = contentH.toFloat()
+    val tallest = maxHeight.toFloat()
     if (h > tallest) { w *= tallest / h; h = tallest }
     val width = w.roundToInt().coerceAtLeast(1)
     val height = h.roundToInt().coerceAtLeast(1)
@@ -1670,7 +1716,7 @@ class DocEditorView(context: Context, appContext: AppContext) : ExpoView(context
         if (c > 0) text.append('\t')
         val a = text.length
         text.append(cell.optString("text"))
-        if (text.length > a) applyRun(text, cell, a, text.length, edges[min(c + 1, columns)] - edges[min(c, columns)])
+        if (text.length > a) applyRun(text, cell, a, text.length, cell, edges[min(c + 1, columns)] - edges[min(c, columns)])
         if (c < columns) fills[c] = hexColor(cell.optString("fill"))
       }
       val end = text.length

@@ -36,6 +36,7 @@ type Edit = { page: number; kind: 'replace' | 'delete' | 'add'; objectId?: numbe
 type Draft = { text: string; style: TextStyle; size: string; indent: number; color: number | null };
 const DEFAULT_INK = 0x101020;
 const INDENT_STEP = 18;
+const TEXT_ACTION_MIN_WIDTH = 112;
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const roundSize = (size: number) => Math.round(size * 2) / 2;
 
@@ -136,7 +137,10 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
-  const toolbar = useResponsiveEditorToolbar([44, 44], ['Text list', 'Save (' + edits.length + ')'], 2);
+  const toolbar = useResponsiveEditorToolbar(
+    [{ label: 'Options', minWidth: TEXT_ACTION_MIN_WIDTH }],
+    [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, 'Save (' + edits.length + ')'],
+  );
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
@@ -424,7 +428,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
   </ScrollView>;
   const toolActions = <View style={responsiveToolbarStyles.tools}>
-        <EditorOption compact label="Options" selected={showOptions} disabled={busy} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} onPress={() => { setShowOptions(!showOptions); setShowTextList(false); }} />
+        <EditorOption compact label="Options" style={styles.textAction} selected={showOptions} disabled={busy} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} onPress={() => { setShowOptions(!showOptions); setShowTextList(false); }} />
   </View>;
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
   return <KeyboardAvoidingView style={[styles.screen, landscape && styles.landscapeRow]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -504,8 +508,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
       {busy ? <View style={styles.row}><AppLoader /><ThemedText style={styles.grow} accessibilityLiveRegion="polite">{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText><ToolButton title="Cancel" secondary onPress={() => { previewQueue.cancel(); if (job.current) PdfEngine?.cancelTextEdit(job.current); }} /></View> : source && <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
         {toolbar.atBottom && toolActions}
-        <EditorOption compact label={adding ? 'Select text' : 'Add text'} selected={adding} disabled={busy} icon={{ ios: adding ? 'cursorarrow' : 'text.badge.plus', android: adding ? 'touch-app' : 'text-fields' }} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} />
-        <ToolButton title="Text list" secondary onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
+        <EditorOption compact label={adding ? 'Select text' : 'Add text'} style={styles.textAction} selected={adding} disabled={busy} icon={{ ios: adding ? 'cursorarrow' : 'text.badge.plus', android: adding ? 'touch-app' : 'text-fields' }} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} />
+        <EditorOption compact label="Text list" style={styles.textAction} selected={showTextList} disabled={busy} onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
         <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={'Save (' + edits.length + ')'} disabled={!edits.length || !recovery.ready} onPress={requestSave} /></View>
       </View>}
     </View>}
@@ -513,6 +517,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
 }
 
 const styles = StyleSheet.create({
+  textAction: { minWidth: TEXT_ACTION_MIN_WIDTH },
   markedRow: { backgroundColor: '#ff5a5f40', borderRadius: 8, paddingHorizontal: 8 },
   editorBar: { padding: 4, gap: 0 }, markCount: { paddingHorizontal: s.sm, fontWeight: '600' },
   deleteButton: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 14, borderRadius: 12, marginLeft: 4 }, deleteLabel: { color: '#fff', fontWeight: '600' }, screen: { flex: 1 }, canvas: { flex: 1, minHeight: 120 }, form: { padding: s.lg, gap: s.md }, heading: { ...t.heading }, label: { ...t.label },

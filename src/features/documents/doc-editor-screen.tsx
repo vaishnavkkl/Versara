@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BackHandler, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { BackHandler, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,6 +37,8 @@ function parsePage(value?: string): PageSetup {
 export function DocEditorScreen() {
   const params = useLocalSearchParams<{ uri?: string; name?: string; format?: string; blank?: string; export?: string }>();
   const colors = usePalette();
+  const { width } = useWindowDimensions();
+  const compactHeader = width < 500;
   const [rotated, setRotated] = useState(false);
   const blank = params.blank === '1';
   const format = params.format === 'txt' ? 'txt' : 'docx';
@@ -91,15 +93,15 @@ export function DocEditorScreen() {
   async function save(mode: 'save' | 'saveAs' | 'docx', exitAfter = false) {
     const engine = DocEngine;
     if (!engine || saving.current) return;
+    saving.current = true;
     close();
     const toDocx = mode === 'docx' || docx;
     const extension = toDocx ? '.docx' : '.txt';
     const suggested = title.replace(/\.[^.]+$/, '') + extension;
     const origin = mode === 'save' && target ? target : null;
-    const chosen = origin ? origin.name : await askNewFileName(suggested);
-    if (!chosen) return;
-    saving.current = true;
     try {
+      const chosen = origin ? origin.name : await askNewFileName(suggested);
+      if (!chosen) return;
       const output = outputFile(toDocx ? 'docx' : 'txt');
       const result = await withLoading('Saving your document…', async () => {
         await engine.save(output.uri);
@@ -116,12 +118,12 @@ export function DocEditorScreen() {
   async function exportPdf() {
     const engine = DocEngine;
     if (!engine || saving.current) return;
-    close();
-    const suggested = name.replace(/\.[^.]+$/, '') + '.pdf';
-    const choice = await askNewFileName(suggested);
-    if (!choice) return;
     saving.current = true;
+    close();
+    const suggested = title.replace(/\.[^.]+$/, '') + '.pdf';
     try {
+      const choice = await askNewFileName(suggested);
+      if (!choice) return;
       const output = outputFile('pdf');
       await withLoading('Creating a PDF…', async () => {
         await (hasPageSetup ? engine.exportPdf(output.uri) : engine.exportPdf(output.uri, 'a4'));
@@ -133,22 +135,28 @@ export function DocEditorScreen() {
   }
 
   async function exportText() {
-    if (!DocEngine) return;
+    const engine = DocEngine;
+    if (!engine || saving.current) return;
     close();
     const output = outputFile('txt');
+    saving.current = true;
     try {
-      await DocEngine.exportText(output.uri);
-      const stored = await saveEditedOutput({ output: output.uri, mimeType: 'text/plain', kind: 'document', mode: 'new', name: name.replace(/\.[^.]+$/, '') + '.txt' });
+      const stored = await withLoading('Saving text…', async () => {
+        await engine.exportText(output.uri);
+        return saveEditedOutput({ output: output.uri, mimeType: 'text/plain', kind: 'document', mode: 'new', name: title.replace(/\.[^.]+$/, '') + '.txt' });
+      });
       toast(`Text saved to ${stored.device.location}`);
     } catch (cause) { setError((cause as Error).message || 'Could not save the text.'); }
+    finally { saving.current = false; }
   }
 
   async function addImage() {
     close();
-    const { getDocumentAsync } = await import('expo-document-picker');
-    const picked = await getDocumentAsync({ type: ['image/png', 'image/jpeg', 'image/gif'], copyToCacheDirectory: true, multiple: false });
-    if (picked.canceled) return;
-    try { await DocEngine?.insertImage(picked.assets[0].uri); } catch (cause) { setError((cause as Error).message); }
+    try {
+      const { getDocumentAsync } = await import('expo-document-picker');
+      const picked = await getDocumentAsync({ type: ['image/png', 'image/jpeg', 'image/gif'], copyToCacheDirectory: true, multiple: false });
+      if (!picked.canceled) await DocEngine?.insertImage(picked.assets[0].uri);
+    } catch (cause) { setError((cause as Error).message || 'Could not insert this image.'); }
   }
 
   async function applyBands(next: HeaderFooter) {
@@ -209,19 +217,30 @@ export function DocEditorScreen() {
 
   return <SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !dirty, orientation: rotated ? 'landscape' : 'portrait' }} />
-    <View style={[styles.topBar, { borderBottomColor: colors.separator }]}>
+    <View style={[styles.topBar, compactHeader && styles.topBarCompact, { borderBottomColor: colors.separator }]}>
+      <View style={styles.headerMain}>
       {bar({ ios: 'chevron.left', android: 'arrow-back' }, 'Go back', leave)}
       <View style={styles.titleBlock}>
         <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>
         <ThemedText numberOfLines={1} style={[styles.subtitle, { color: colors.secondaryLabel }]}>
-          {!ready ? 'Opening…' : dirty ? 'Unsaved changes' : 'No changes'}{section.count > 1 ? ` · Part ${section.index + 1} of ${section.count}` : ''}
+          {!ready ? 'Opening…' : dirty ? 'Unsaved changes' : target ? 'Saved' : 'Not saved yet'}{section.count > 1 ? ` · Part ${section.index + 1} of ${section.count}` : ''}
         </ThemedText>
       </View>
-      {bar({ ios: 'arrow.uturn.backward', android: 'undo' }, 'Undo', () => run('undo'), !history.canUndo)}
-      {bar({ ios: 'arrow.uturn.forward', android: 'redo' }, 'Redo', () => run('redo'), !history.canRedo)}
-      {bar({ ios: 'textformat', android: 'text-format' }, 'Format', () => open('format'), !ready)}
-      {bar({ ios: 'plus', android: 'add' }, 'Insert', () => open('insert'), !ready)}
+      {!compactHeader && <>
+        {bar({ ios: 'arrow.uturn.backward', android: 'undo' }, 'Undo', () => run('undo'), !history.canUndo)}
+        {bar({ ios: 'arrow.uturn.forward', android: 'redo' }, 'Redo', () => run('redo'), !history.canRedo)}
+        {bar({ ios: 'textformat', android: 'text-format' }, 'Format', () => open('format'), !ready)}
+        {bar({ ios: 'plus', android: 'add' }, 'Insert', () => open('insert'), !ready)}
+      </>}
+      {bar({ ios: 'square.and.arrow.down', android: 'save' }, 'Save document', () => { void save(target ? 'save' : 'saveAs'); }, !ready)}
       {bar({ ios: 'ellipsis', android: 'more-vert' }, 'More options', () => open('more'), !ready)}
+      </View>
+      {compactHeader && <View style={styles.headerActions}>
+        {bar({ ios: 'arrow.uturn.backward', android: 'undo' }, 'Undo', () => run('undo'), !history.canUndo)}
+        {bar({ ios: 'arrow.uturn.forward', android: 'redo' }, 'Redo', () => run('redo'), !history.canRedo)}
+        {bar({ ios: 'textformat', android: 'text-format' }, 'Format', () => open('format'), !ready)}
+        {bar({ ios: 'plus', android: 'add' }, 'Insert', () => open('insert'), !ready)}
+      </View>}
     </View>
     {!!banner && <View style={[styles.banner, { backgroundColor: error ? colors.pdfSurface : colors.wordSurface }]}>
       <UniversalIcon ios={error ? 'exclamationmark.triangle' : 'lock'} android={error ? 'error-outline' : 'lock-outline'} size={18} color={error ? colors.pdfInk : colors.wordInk} />
@@ -262,7 +281,10 @@ export function DocEditorScreen() {
 const docxMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  topBar: { minHeight: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: s.xs, borderBottomWidth: StyleSheet.hairlineWidth },
+  topBar: { minHeight: 56, paddingHorizontal: s.xs, borderBottomWidth: StyleSheet.hairlineWidth },
+  topBarCompact: { paddingBottom: 2 },
+  headerMain: { minHeight: 56, flexDirection: 'row', alignItems: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', minHeight: 44 },
   titleBlock: { flex: 1, minWidth: 0, paddingHorizontal: s.xs },
   title: { ...t.label, fontSize: 16 },
   subtitle: { fontSize: 12, lineHeight: 16 },

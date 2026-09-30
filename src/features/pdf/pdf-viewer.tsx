@@ -264,7 +264,16 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   ];
   const visibleTools = landscape ? tools.filter(tool => !['scroll', 'orientation'].includes(tool.id)) : tools.filter(tool => tool.id !== 'orientation');
   const strip = ready && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && document ? <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
-  const submitPage = () => goToPage((Number.parseInt(pageInput, 10) || 1) - 1);
+  const submitPage = () => {
+    const requested = pageInput.trim();
+    const number = /^\d+$/.test(requested) ? Number(requested) : NaN;
+    if (!Number.isSafeInteger(number) || number < 1 || number > pageCount) {
+      setPageInput(String(page + 1));
+      if (requested) toast(`Enter a page from 1 to ${pageCount}.`);
+      return;
+    }
+    goToPage(number - 1);
+  };
   return (
     <View style={styles.screen}>
       {!toolLayout && <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />}
@@ -291,13 +300,13 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
           </View>}
           {ready && !focused && !landscape && <View style={[styles.pageBar, { borderColor: colors.separator }]}>
             <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={page === 0 || loading} onPress={() => goToPage(page - 1)} style={[styles.iconButton, (page === 0 || loading) && styles.disabled]}><UniversalIcon ios="chevron.left" android="chevron-left" size={22} color={colors.systemBlue} /></Pressable>
-            <TextInput accessibilityLabel="Page number" value={pageInput} onChangeText={setPageInput} keyboardType="number-pad" returnKeyType="go" selectTextOnFocus onSubmitEditing={submitPage} onEndEditing={submitPage} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+            <TextInput accessibilityLabel={`Page number, 1 to ${pageCount}`} value={pageInput} onChangeText={setPageInput} keyboardType="number-pad" returnKeyType="go" selectTextOnFocus onSubmitEditing={Keyboard.dismiss} onEndEditing={submitPage} maxLength={6} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
             <ThemedText style={styles.buttonText}>of {pageCount}</ThemedText>
             <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={page >= pageCount - 1 || loading} onPress={() => goToPage(page + 1)} style={[styles.iconButton, (page >= pageCount - 1 || loading) && styles.disabled]}><UniversalIcon ios="chevron.right" android="chevron-right" size={22} color={colors.systemBlue} /></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Switch to landscape" disabled={busy || loading} onPress={() => performOption('orientation')} style={styles.iconButton}><UniversalIcon ios="rectangle" android="screen-rotation" size={22} color={colors.systemBlue} /></Pressable>
             {searchAvailable && <Pressable accessibilityRole="button" accessibilityLabel="Search PDF" disabled={busy || loading} onPress={() => performOption('search')} style={styles.iconButton}><UniversalIcon ios="magnifyingglass" android="search" size={22} color={colors.systemBlue} /></Pressable>}
           </View>}
-          {ready && !focused && landscape && <Pressable accessibilityRole="button" accessibilityLabel="Switch to portrait" onPress={() => performOption('orientation')} style={[styles.landscapeExit, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="rectangle.portrait" android="screen-rotation" size={20} color={colors.systemBlue} /></Pressable>}
+          {ready && !focused && landscape && <Pressable accessibilityRole="button" accessibilityLabel="Switch to portrait" disabled={busy || loading} onPress={() => performOption('orientation')} style={[styles.landscapeExit, { backgroundColor: colors.accentSurface }, (busy || loading) && styles.disabled]}><UniversalIcon ios="rectangle.portrait" android="screen-rotation" size={20} color={colors.systemBlue} /></Pressable>}
           <View style={styles.body2}>
           <View style={[styles.body2, landscape && styles.row]}>
           {ready && !focused && landscape && <ToolRail tools={visibleTools} quickIds={['fit', 'thumbnails', 'previous', 'next']} landscape side="left" showToolbox={false} disabled={busy || loading} onAction={performOption} />}
@@ -343,7 +352,7 @@ const styles = StyleSheet.create({
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   searchInput: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, fontSize: 15 },
   searchStatus: { flex: 1, fontSize: 12 },
-  landscapeExit: { position: 'absolute', top: 4, right: 80, zIndex: 2, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  landscapeExit: { position: 'absolute', top: 4, right: 8, zIndex: 2, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   restore: { position: 'absolute', bottom: 16, alignSelf: 'center', minHeight: 48, paddingHorizontal: 16, borderRadius: 24, flexDirection: 'row', alignItems: 'center', gap: 8 },
   buttonText: { ...t.caption },
   iconButton: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },

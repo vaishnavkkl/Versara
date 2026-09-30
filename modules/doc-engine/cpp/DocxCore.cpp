@@ -807,21 +807,38 @@ int blockChars(const Block& block) {
   for (auto& row : block.rows) for (auto& cell : row) count += static_cast<int>(cell.text.size());
   return count;
 }
+std::string packagePartPath(const std::string& target) {
+  if (target.empty() || target.find(':') != std::string::npos || target.find('\\') != std::string::npos || target.find('?') != std::string::npos || target.find('#') != std::string::npos) return "";
+  // Relationship targets are relative to word/document.xml unless root-anchored.
+  // Some producers use word/... without a leading slash; accept that spelling too.
+  std::vector<std::string> parts;
+  if (target[0] != '/' && target.rfind("word/", 0) != 0) parts.push_back("word");
+  size_t start = target[0] == '/' ? 1 : 0;
+  while (start <= target.size()) {
+    auto end = target.find('/', start);
+    if (end == std::string::npos) end = target.size();
+    auto part = target.substr(start, end - start);
+    if (part == "..") { if (parts.empty()) return ""; parts.pop_back(); }
+    else if (!part.empty() && part != ".") parts.push_back(part);
+    start = end + 1;
+  }
+  if (parts.empty()) return "";
+  std::string resolved;
+  for (const auto& part : parts) { if (!resolved.empty()) resolved += '/'; resolved += part; }
+  return resolved;
+}
 std::map<std::string, std::string> relationships(const std::string& xml) {
   std::map<std::string, std::string> map;
   pugi::xml_document doc;
   if (xml.empty() || !doc.load_string(xml.c_str())) return map;
-  for (auto node : doc.first_child().children()) if (localName(node.name()) == "Relationship") map[attrLocal(node, "Id")] = attrLocal(node, "Target");
+  for (auto node : doc.first_child().children()) if (localName(node.name()) == "Relationship" && attrLocal(node, "TargetMode") != "External") map[attrLocal(node, "Id")] = attrLocal(node, "Target");
   return map;
 }
 std::string mediaPath(const std::map<std::string, std::string>* rels, const std::string& embed) {
   if (!rels || embed.empty()) return "";
   auto found = rels->find(embed);
   if (found == rels->end()) return "";
-  auto path = found->second;
-  if (path.find("..") != std::string::npos || path.find("://") != std::string::npos) return "";
-  if (!path.empty() && path[0] == '/') return path.substr(1);
-  return path.rfind("word/", 0) == 0 ? path : "word/" + path;
+  return packagePartPath(found->second);
 }
 
 // ---------- Reading the body ----------
@@ -888,7 +905,7 @@ struct Collector {
     bool textBox = false;
     walk(node, [&](pugi::xml_node part) {
       auto name = localName(part.name());
-      if ((name == "extent" || (name == "ext" && !cx)) && !attrLocal(part, "cx").empty()) { cx = std::atoll(attrLocal(part, "cx").c_str()); cy = std::atoll(attrLocal(part, "cy").c_str()); }
+      if ((name == "extent" || name == "ext") && !cx && !attrLocal(part, "cx").empty()) { cx = std::atoll(attrLocal(part, "cx").c_str()); cy = std::atoll(attrLocal(part, "cy").c_str()); }
       if (name == "blip" && embed.empty()) embed = attrLocal(part, "embed");
       if (name == "imagedata" && embed.empty()) embed = attrLocal(part, "id");
       if ((name == "shape" || name == "rect") && !cx) {
@@ -898,7 +915,7 @@ struct Collector {
       if (name == "txbxContent") textBox = true;
     });
     auto path = mediaPath(ctx.rels, embed);
-    if (!path.empty() && cx > 0 && cy > 0) {
+    if (!path.empty()) {
       Run image = style;
       image.text = "\xEF\xBF\xBC";
       image.media = path; image.cx = cx; image.cy = cy;
@@ -1032,19 +1049,20 @@ bool imageParagraph(pugi::xml_node paragraph, long long& cx, long long& cy, std:
   if (drawings != 1) return false;
   walk(drawing, [&](pugi::xml_node node) {
     auto name = localName(node.name());
-    if (name == "extent" || name == "ext") {
+    if ((name == "extent" || name == "ext") && !cx) {
       auto x = attrLocal(node, "cx"), y = attrLocal(node, "cy");
       if (!x.empty()) cx = std::atoll(x.c_str());
       if (!y.empty()) cy = std::atoll(y.c_str());
     }
-    if (name == "blip") embed = attrLocal(node, "embed");
+    if (name == "blip" && embed.empty()) embed = attrLocal(node, "embed");
+    if (name == "imagedata" && embed.empty()) embed = attrLocal(node, "id");
   });
-  return cx > 0 && cy > 0;
+  return !embed.empty();
 }
 Block paragraphFrom(pugi::xml_node node, const std::string& raw, Context& ctx) {
   long long cx = 0, cy = 0;
   std::string embed;
-  if (imageParagraph(node, cx, cy, embed)) {
+  if (imageParagraph(node, cx, cy, embed) && !mediaPath(ctx.rels, embed).empty()) {
     Block block; block.kind = "image"; block.raw = raw; block.cx = cx; block.cy = cy;
     block.media = mediaPath(ctx.rels, embed);
     PProps p; RProps base;
@@ -1493,9 +1511,7 @@ std::string sectReference(const std::string& sect, const char* kind) {
   return {};
 }
 std::string partPath(const std::string& target) {
-  if (target.empty() || target.find("..") != std::string::npos) return {};
-  if (target[0] == '/') return target.substr(1);
-  return "word/" + target;
+  return packagePartPath(target);
 }
 std::string alignOf(pugi::xml_node paragraph) {
   auto value = attrLocal(childLocal(childLocal(paragraph, "pPr"), "jc"), "val");
@@ -1510,11 +1526,24 @@ Band readBand(const std::string& xml) {
   if (xml.empty()) return band;
   pugi::xml_document doc;
   if (!doc.load_buffer(xml.data(), xml.size(), pugi::parse_default | pugi::parse_ws_pcdata)) { band.locked = true; return band; }
+  // Keep unsupported header/footer XML unchanged on save, but still show its
+  // readable text in the page margin. Links, tables and formatted runs are
+  // common in otherwise ordinary Word headers.
+  std::string fallback;
+  walk(doc.first_child(), [&](pugi::xml_node node) {
+    auto name = localName(node.name());
+    if (name == "p" && !fallback.empty() && fallback.back() != '\n') fallback.push_back('\n');
+    else if (name == "t") fallback += node.text().get();
+    else if (name == "tab") fallback.push_back('\t');
+    else if (name == "br" || name == "cr") fallback.push_back('\n');
+  });
+  while (!fallback.empty() && (fallback.back() == '\n' || fallback.back() == '\t')) fallback.pop_back();
+  auto locked = [&] { band.locked = true; band.text = fallback; return band; };
   std::vector<std::string> lines;
   bool alignSet = false;
   for (auto paragraph : doc.first_child().children()) {
     if (paragraph.type() != pugi::node_element) continue;
-    if (localName(paragraph.name()) != "p") { band.locked = true; return band; }
+    if (localName(paragraph.name()) != "p") return locked();
     std::string text, instr;
     bool page = false, pages = false, inResult = false, classified = false;
     auto classify = [&] {
@@ -1531,18 +1560,18 @@ Band readBand(const std::string& xml) {
       if (name == "pPr" || name == "bookmarkStart" || name == "bookmarkEnd" || name == "proofErr") continue;
       if (name == "fldSimple") {
         instr = attrLocal(child, "instr"); classified = false;
-        if (!classify()) { band.locked = true; return band; }
+        if (!classify()) return locked();
         continue;
       }
-      if (name != "r") { band.locked = true; return band; }
+      if (name != "r") return locked();
       for (auto part : child.children()) {
         auto partName = localName(part.name());
         if (partName == "rPr" || partName == "lastRenderedPageBreak") continue;
         if (partName == "fldChar") {
           auto type = attrLocal(part, "fldCharType");
           if (type == "begin") { instr.clear(); classified = false; }
-          else if (type == "separate") { inResult = true; if (!classify()) { band.locked = true; return band; } }
-          else if (type == "end") { inResult = false; if (!classify()) { band.locked = true; return band; } }
+          else if (type == "separate") { inResult = true; if (!classify()) return locked(); }
+          else if (type == "end") { inResult = false; if (!classify()) return locked(); }
           continue;
         }
         if (partName == "instrText") { instr += part.text().get(); continue; }
@@ -1550,13 +1579,13 @@ Band readBand(const std::string& xml) {
         if (partName == "t") text += part.text().get();
         else if (partName == "tab") text.push_back('\t');
         else if (partName == "br" || partName == "cr") text.push_back('\n');
-        else { band.locked = true; return band; }
+        else return locked();
       }
     }
     if (page || pages) {
       std::string rest = text;
       for (const char* word : {"Page", "page", "of"}) for (auto at = rest.find(word); at != std::string::npos; at = rest.find(word)) rest.erase(at, std::strlen(word));
-      if (rest.find_first_not_of(" \t\n") != std::string::npos || band.page) { band.locked = true; return band; }
+      if (rest.find_first_not_of(" \t\n") != std::string::npos || band.page) return locked();
       band.page = true;
       band.pageAlign = alignOf(paragraph) == "justify" ? "left" : alignOf(paragraph);
       band.pageFormat = pages ? "pageOf" : text.find("Page") != std::string::npos || text.find("page") != std::string::npos ? "page" : "plain";

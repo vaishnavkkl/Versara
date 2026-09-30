@@ -113,7 +113,8 @@ internal class SpacingSpan(val before: Int, val after: Int, private val line: In
     val single = (natural * (1f + gap)).roundToInt()
     when (rule) {
       "exact" -> {
-        val target = max(1, linePx)
+        val hasImage = spanned.getSpans(start, end, android.text.style.ImageSpan::class.java).isNotEmpty()
+        val target = if (hasImage) max(natural, linePx) else max(1, linePx)
         fm.ascent = (fm.ascent * target / natural.toFloat()).roundToInt()
         fm.descent = target + fm.ascent
       }
@@ -192,7 +193,6 @@ internal class PageFlowSpan(private val geometry: PageGeometry, private val orig
     val push = top >= regionBottom || forced || (top > regionTop && top + height - trailing > regionBottom)
     if (push) {
       val shift = (page + 1) * pitch - top
-      android.util.Log.w("DOCFLOW", "push start=$start v=$lineHeight base=$base top=$top pitch=$pitch content=${geometry.content} height=$height trailing=$trailing forced=$forced text='${text.subSequence(start, minOf(end, start + 30))}'")
       fm.ascent -= shift
       fm.top -= shift
     }

@@ -1,6 +1,6 @@
 # Plan: PDF editor extensions and native DOCX editor
 
-Status: Track A1/A2 and Track B are implemented. Both tracks stay fully offline, native on Android and iOS, and use only free/open-source code. [PDF tools](03-pdf-tools.md) records that DOCX editing lives in Documents, with simplified PDF export rather than a full conversion suite.
+Status: Track A1/A2 and the blank document/TXT creation editor are implemented. Existing DOCX files open read only in a separate offline viewer. The earlier plan to edit imported DOCX files was withdrawn after layout and stability problems; see [read-only DOCX viewer](38-read-only-docx-viewer.md). PDF tools remain native and offline.
 
 ## What already exists
 
@@ -58,7 +58,7 @@ The React toolbar reuses `TextStyleControls` and `ColorSwatches` and sends comma
 
 ### Formats
 
-- **DOCX:** open, edit, save, save as new.
+- **Existing DOCX:** read only in the dedicated viewer. The native editor does not open imported DOCX files.
 - **New blank document:** built from a bundled minimal DOCX template.
 - **TXT:** open and save.
 - **PDF export:** Android `StaticLayout` onto `PdfDocument` pages; iOS TextKit pagination into `UIGraphicsPDFRenderer`. A4/Letter and margins. The result is a simplified layout, not Word-identical.
@@ -67,7 +67,7 @@ The React toolbar reuses `TextStyleControls` and `ColorSwatches` and sends comma
 
 ### Integration
 
-Files and Search open `.docx` in a new `/doc-editor` route. It adds a Home "Documents" card, Recents, Edited files, the existing recoverable save/replace flow, drafts and the leave-without-saving dialog.
+Files and Search open existing `.docx` in `/doc-reader`. New blank DOCX and TXT files use `/doc-editor`, retaining creation, formatting, recoverable save flows, drafts and leave-without-saving behavior.
 
 ### Steps
 

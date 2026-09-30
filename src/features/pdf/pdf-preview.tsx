@@ -1,8 +1,9 @@
 import { type ReactNode, useState } from 'react';
 import { Stack } from 'expo-router';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
+import { toast } from '@/components/toast';
 import { usePalette } from '@/theme/colors';
 import NativeEditCanvas from '../../../modules/pdf-engine/src/PdfEditCanvasView';
 import { PdfEditCanvas } from './pdf-edit-canvas';
@@ -23,15 +24,21 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   const input = draft.input;
   const setInput = (value: string) => setDraft({ page, input: value });
   function submit() {
-    const target = /^\d+$/.test(input) ? Number(input) : NaN;
+    const requested = input.trim();
+    const target = /^\d+$/.test(requested) ? Number(requested) : NaN;
     setInput(String(page));
-    if (!disabled && Number.isInteger(target) && target >= 1 && target <= count && target !== page) onPageChange(target);
+    if (disabled) return;
+    if (!Number.isSafeInteger(target) || target < 1 || target > count) {
+      if (requested) toast(`Enter a page from 1 to ${count}.`);
+      return;
+    }
+    if (target !== page) onPageChange(target);
   }
   return <View style={styles.toolbar}>
     {!toolLayout && <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />}
     <View style={styles.pageControls}>
     <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={disabled || page <= 1} onPress={() => onPageChange(page - 1)} style={[styles.icon, (disabled || page <= 1) && styles.dim]}><UniversalIcon ios="chevron.left" android="chevron-left" size={24} color={colors.systemBlue} /></Pressable>
-    <TextInput accessibilityLabel={`Page number, ${count} pages`} keyboardType="number-pad" returnKeyType="done" selectTextOnFocus value={input} onChangeText={setInput} editable={!disabled} onSubmitEditing={submit} onEndEditing={submit} maxLength={5} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+    <TextInput accessibilityLabel={`Page number, 1 to ${count}`} keyboardType="number-pad" returnKeyType="done" selectTextOnFocus value={input} onChangeText={setInput} editable={!disabled} onSubmitEditing={Keyboard.dismiss} onEndEditing={submit} maxLength={6} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
     <ThemedText numberOfLines={1}>of {count}</ThemedText>
     <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={disabled || page >= count} onPress={() => onPageChange(page + 1)} style={[styles.icon, (disabled || page >= count) && styles.dim]}><UniversalIcon ios="chevron.right" android="chevron-right" size={24} color={colors.systemBlue} /></Pressable>
     </View>

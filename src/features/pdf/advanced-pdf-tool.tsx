@@ -21,7 +21,7 @@ import { ToolButton } from '@/components/tool-button';
 import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { usePalette } from '@/theme/colors';
-import type { OptionIcon } from '@/theme/editor-icons';
+import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
 import { browseFiles, disposeImports, formatSize, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
 import { askNewFileName, saveEditedOutput, savePdfResult, saveToDevice } from '../files/save-file';
 import { forgetRecentUri, rememberPdfResults } from '../files/recent-files';
@@ -115,6 +115,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const history = useMarkHistory();
   const { marks } = history;
   const [brushType, setBrushType] = useState('pen');
+  const activeBrush = BRUSHES.find(item => item.id === brushType) ?? BRUSHES[0];
   const [pattern, setPattern] = useState('solid');
   const [selecting, setSelecting] = useState(false);
   const [erasing, setErasing] = useState(false);
@@ -420,7 +421,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const settingsAction = <EditorOption label="Settings" compact accessibilityLabel="Show or hide tool settings" selected={optionsOpen} onPress={() => { Keyboard.dismiss(); setOptionsOpen(value => !value); }} />;
   const toolActions = <View style={responsiveToolbarStyles.tools}>
     {markup ? <>
-      {(tool === 'draw' || tool === 'sign' || tool === 'highlight') && <EditorMenu compact label={`Brush: ${BRUSHES.find(item => item.id === brushType)?.label ?? 'Pen'}`} icon={{ ios: 'paintbrush.pointed', android: 'brush' }} disabled={busy || selectedMark?.kind === 'image'} items={BRUSHES.map(item => ({ id: item.id, label: item.label, selected: brushType === item.id, onPress: () => { setErasing(false); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); if (tool === 'highlight') setBrush(true); } }))} />}
+      {(tool === 'draw' || tool === 'sign' || tool === 'highlight') && <EditorMenu compact tintedItems label={`Brush: ${activeBrush.label}`} icon={optionIcon(activeBrush.label)} colorKey={activeBrush.colorKey} disabled={busy || selectedMark?.kind === 'image'} items={BRUSHES.map(item => ({ id: item.id, label: item.label, colorKey: item.colorKey, selected: brushType === item.id, onPress: () => { setErasing(false); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); if (tool === 'highlight') setBrush(true); } }))} />}
       {tool === 'shapes' && <ShapePicker compact value={shape} onChange={setShape} disabled={busy} />}
       <EditorMenu compact label="Settings" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} items={[
         { id: 'style', label: showStyle ? 'Hide style and colour controls' : 'Show style and colour controls', selected: showStyle, disabled: selectedMark?.kind === 'image', onPress: () => { setShowStyle(value => !value); setShowAnnotations(false); setFocusAnnotation(undefined); } },
@@ -453,6 +454,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       {selectedMark?.kind === 'image' && <EditorOption label={selectedMark.backgroundRemoved ? 'Restore background' : 'Remove background'} icon={{ios:'wand.and.stars',android:'auto-fix-high'}} selected={selectedMark.backgroundRemoved} disabled={busy} onPress={() => history.update(selectedMark.id!, {backgroundRemoved:!selectedMark.backgroundRemoved,imageUri:selectedMark.backgroundRemoved ? selectedMark.originalImageUri : selectedMark.cleanImageUri,pixelPath:selectedMark.backgroundRemoved ? selectedMark.originalPixelPath : selectedMark.cleanPixelPath})} />}
       {!imageSignaturesAvailable && <ThemedText>Update the native app build to add signature images.</ThemedText>}
     </View>}
+    {tool === 'sign' && <ThemedText style={{ color: colors.secondaryLabel, paddingHorizontal: 4 }}>{guidance.sign}</ThemedText>}
     <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
       <EditorOption compact label={tool === 'sign' ? 'Sign' : tool === 'highlight' ? 'Mark' : tool === 'shapes' ? 'Shape' : 'Draw'} selected={!selecting && !erasing} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setErasing(false); setSelectedId(undefined); }} />
       <EditorOption compact label="Select & resize" selected={selecting} disabled={busy} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setErasing(false); }} />
@@ -476,7 +478,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {(tool === 'numbers' || tool === 'watermark') ? <>{pageControls}{numberPreview ? <PdfPagePreview image={numberPreview} active={active} preserveViewport /> : <PdfPreviewStage hint={tool === 'watermark' ? 'Enter a watermark to preview its placement.' : 'Preparing page numbers...'}><View style={styles.status}>{busy && <AppLoader />}</View></PdfPreviewStage>}</> : <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} embedded toolbarActions={toolbar.atBottom ? undefined : toolActions} onClose={() => {}} />}
     </View>
     <View style={landscape ? styles.landscapeSide : undefined}>
-    {optionsOpen && <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets style={landscape ? { flex: 1 } : { maxHeight: '44%', flexGrow: 0 }} contentContainerStyle={styles.content}>{status}<View style={styles.field}><ThemedText style={styles.label}>{source.name}</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>{info.pageCount} pages Â· {formatSize(info.size)}</ThemedText></View><ThemedText>{guidance[tool]}</ThemedText>
+    {optionsOpen && <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets style={landscape ? { flex: 1 } : { maxHeight: '44%', flexGrow: 0 }} contentContainerStyle={styles.content}><View style={styles.field}><ThemedText style={styles.label}>{source.name}</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>{info.pageCount} pages Â· {formatSize(info.size)}</ThemedText></View><ThemedText>{guidance[tool]}</ThemedText>
 
     {rangeTools.has(tool) && <>{field('Pages (leave empty for all)', ranges, setRanges)}<ThemedText style={{ color: colors.secondaryLabel }}>For example: 1, 3, 5-8</ThemedText></>}
     {tool === 'insert' && <>{field(`Insert after page (0â€“${info.pageCount})`, position, setPosition, true)}<ThemedText>{insert ? insert.name : 'One blank page'}</ThemedText><ToolButton title="Choose PDF to insert" secondary disabled={busy} onPress={() => void pickInsert()} />{insert && <ToolButton title="Use a blank page" secondary disabled={busy} onPress={() => { try { new File(insert.uri).delete(); } catch { /* Session cleanup. */ } setInsert(undefined); }} />}</>}
@@ -507,7 +509,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {tool === 'protect' && <>{field('New password', password, setPassword, false, true)}{field('Confirm password', confirmation, setConfirmation, false, true)}</>}
 
   </ScrollView>}
-  <PdfPreviewFooter>
+  <PdfPreviewFooter>{status}
     <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
       {toolbar.atBottom && toolActions}
       <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={busy || (tool === 'compress' && estimate?.quality !== quality)} onPress={() => void run()} /></View>

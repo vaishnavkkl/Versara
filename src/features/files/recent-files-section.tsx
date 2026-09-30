@@ -64,8 +64,8 @@ export function RecentFilesSection() {
 
   async function open(item: RecentListItem) {
     if (busy.current) return;
-    if (item.kind === 'document' && !isDocEditorAvailable) {
-      showDialog('Documents unavailable', 'Install a new development build to edit documents.', undefined, { ios: 'doc.text', android: 'description' });
+    if (item.kind === 'document' && item.name.toLowerCase().endsWith('.txt') && !isDocEditorAvailable) {
+      showDialog('Text editor unavailable', 'Install a new development build to edit text files.', undefined, { ios: 'doc.text', android: 'description' });
       return;
     }
     busy.current = true; setOpening(item.id);
