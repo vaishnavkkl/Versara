@@ -32,7 +32,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 export function concreteMimeType(file: { name: string; mimeType: string; kind: FileKind }) {
   if (file.mimeType && !file.mimeType.includes('*')) return file.mimeType;
   const extension = file.name.match(/\.([a-zA-Z0-9]{1,8})$/)?.[1].toLowerCase() ?? '';
-  return MIME_BY_EXTENSION[extension] ?? (file.kind === 'pdf' ? 'application/pdf' : file.kind === 'document' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : file.kind === 'image' ? 'image/jpeg' : file.kind === 'video' ? 'video/mp4' : 'audio/mpeg');
+  return MIME_BY_EXTENSION[extension] ?? (file.kind === 'pdf' ? 'application/pdf' : file.kind === 'image' ? 'image/jpeg' : file.kind === 'video' ? 'video/mp4' : 'audio/mpeg');
 }
 
 /** Resolves null when the user cancels or presses Back. */

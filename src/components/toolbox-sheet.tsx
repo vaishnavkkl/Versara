@@ -1,23 +1,15 @@
 import { useRef } from 'react';
 import { Keyboard } from 'react-native';
-import { BottomSheet, Host, RNHostView } from '@expo/ui';
+import { AppBottomSheet } from './app-bottom-sheet';
 import { ToolboxContent, type ToolboxProps } from './toolbox-content';
-import { useAppearance, usePalette } from '@/theme/colors';
+
+const SNAP = ['75%'];
 
 export function ToolboxSheet({ visible, onClose, onAction, ...content }: ToolboxProps) {
-  const colors = usePalette();
-  const mode = useAppearance(state => state.mode);
   const pending = useRef<string | null>(null);
-  function select(id: string) {
-    if (pending.current) return;
-    Keyboard.dismiss();
-    pending.current = id;
-    onClose();
-  }
-  function dismissed() { onClose(); const id = pending.current; pending.current = null; if (id) onAction(id); }
-  return <Host colorScheme={mode}>
-    <BottomSheet isPresented={visible} onDismiss={dismissed} snapPoints={['full']} showDragIndicator containerColor={colors.sheetBackground} contentPadding={0}>
-      <RNHostView><ToolboxContent {...content} onClose={onClose} onSelect={select} /></RNHostView>
-    </BottomSheet>
-  </Host>;
+  function select(id: string) { if (pending.current) return; Keyboard.dismiss(); pending.current = id; onClose(); }
+  function dismissed() { const id = pending.current; pending.current = null; if (id) onAction(id); }
+  return <AppBottomSheet visible={visible} onClose={onClose} onDismissed={dismissed} snapPoints={SNAP}>
+    <ToolboxContent {...content} onClose={onClose} onSelect={select} />
+  </AppBottomSheet>;
 }

@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import type { PdfMark, PdfMarkChange } from '../../../modules/pdf-engine/src/PdfMarkupView';
 
-type Change = { before?: PdfMark; after?: PdfMark; index: number; label: string };
+/** Changes sharing a `group` undo and redo together. */
+type Change = { before?: PdfMark; after?: PdfMark; index: number; label: string; group?: string };
 export type MarkHistorySnapshot = { marks: PdfMark[]; past: Change[]; future: Change[] };
 const empty = (): MarkHistorySnapshot => ({ marks: [], past: [], future: [] });
 const identifier = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -104,17 +105,42 @@ export function useMarkHistory() {
     const copy: PdfMark = { ...source, id: identifier(), points: source.points.map(([x, y]) => [x + dx, y + dy]) };
     record(undefined, copy, latest.current.marks.length, 'Duplicate mark'); return copy.id;
   }
+  /** Adds several marks as one undo step. */
+  function commitGroup(marks: PdfMark[]) {
+    const current = latest.current, group = identifier();
+    let next = current.marks;
+    const changes: Change[] = marks.map(mark => {
+      const after = { ...mark, id: mark.id ?? identifier() }, index = next.length;
+      next = replace(next, after.id, after, index);
+      return { after, index, label: 'Add signature', group };
+    });
+    if (!changes.length || !boundedMarks(next)) return false;
+    publish({ marks: next, past: [...current.past, ...changes].slice(-40), future: [] });
+    return true;
+  }
   function undo() {
-    const current = latest.current, change = current.past.at(-1); if (!change) return;
-    const id = change.before?.id ?? change.after?.id; if (!id) return;
-    publish({ marks: replace(current.marks, id, change.before, change.index), past: current.past.slice(0, -1), future: [...current.future, change] });
-    return change.before?.page ?? change.after?.page;
+    let current = latest.current, page: number | undefined;
+    const group = current.past.at(-1)?.group;
+    do {
+      const change = current.past.at(-1); if (!change) break;
+      const id = change.before?.id ?? change.after?.id; if (!id) break;
+      current = { marks: replace(current.marks, id, change.before, change.index), past: current.past.slice(0, -1), future: [...current.future, change] };
+      page = change.before?.page ?? change.after?.page;
+    } while (group && current.past.at(-1)?.group === group);
+    if (current !== latest.current) publish(current);
+    return page;
   }
   function redo() {
-    const current = latest.current, change = current.future.at(-1); if (!change) return;
-    const id = change.after?.id ?? change.before?.id; if (!id) return;
-    publish({ marks: replace(current.marks, id, change.after, change.index), past: [...current.past.slice(-39), change], future: current.future.slice(0, -1) });
-    return change.after?.page ?? change.before?.page;
+    let current = latest.current, page: number | undefined;
+    const group = current.future.at(-1)?.group;
+    do {
+      const change = current.future.at(-1); if (!change) break;
+      const id = change.after?.id ?? change.before?.id; if (!id) break;
+      current = { marks: replace(current.marks, id, change.after, change.index), past: [...current.past, change].slice(-40), future: current.future.slice(0, -1) };
+      page = change.after?.page ?? change.before?.page;
+    } while (group && current.future.at(-1)?.group === group);
+    if (current !== latest.current) publish(current);
+    return page;
   }
   function restore(marks: PdfMark[]) {
     // A persisted draft is input, not a trusted native canvas payload.
@@ -137,5 +163,5 @@ export function useMarkHistory() {
     }
     publish({ marks: snapshot.marks, past: snapshot.past, future: snapshot.future }); return true;
   }
-  return { marks: state.marks, snapshot: state, canUndo: !!state.past.length, canRedo: !!state.future.length, commit, remove, update, duplicate, undo, redo, restore, restoreSnapshot, clear: () => publish(empty()) };
+  return { marks: state.marks, snapshot: state, canUndo: !!state.past.length, canRedo: !!state.future.length, commit, commitGroup, remove, update, duplicate, undo, redo, restore, restoreSnapshot, clear: () => publish(empty()) };
 }

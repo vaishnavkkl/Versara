@@ -12,7 +12,7 @@ import java.io.File
 /** Folder browsing inside shared storage. Metadata only; listings are capped so huge folders stay responsive. */
 internal object FileExplorer {
   private const val MAX_ENTRIES = 4000
-  private const val MAX_COUNTED_FOLDERS = 400
+  private const val MAX_COUNTED_FOLDERS = 200
 
   private fun storageRoot(): File = Environment.getExternalStorageDirectory().canonicalFile
 
@@ -40,14 +40,15 @@ internal object FileExplorer {
     require(folder.path == root.path || folder.path.startsWith(root.path + "/")) { "This folder is outside your storage." }
     require(folder.isDirectory) { "This folder is no longer available." }
     val children = folder.listFiles() ?: throw IllegalStateException("Versara cannot read this folder.")
+    // One stat per child: comparators would otherwise re-query isDirectory on every comparison.
     val visible = children.asSequence()
       .filter { showHidden || !it.name.startsWith(".") }
-      .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
+      .map { it to it.isDirectory }
+      .sortedWith(compareBy<Pair<File, Boolean>>({ !it.second }, { it.first.name.lowercase() }))
       .take(MAX_ENTRIES)
       .toList()
     var counted = 0
-    val items = visible.map { file ->
-      val directory = file.isDirectory
+    val items = visible.map { (file, directory) ->
       val count = if (directory && counted++ < MAX_COUNTED_FOLDERS) file.list()?.count { showHidden || !it.startsWith(".") } ?: 0 else -1
       entry(file, directory, count)
     }

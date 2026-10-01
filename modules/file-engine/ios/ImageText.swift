@@ -1,4 +1,5 @@
 import UIKit
+import CoreText
 import Vision
 import ImageIO
 import UniformTypeIdentifiers
@@ -69,8 +70,9 @@ enum ImageText {
     }
   }
 
-  static func recognize(uri: String, operation: Recognition) throws -> [String: Any] {
+  static func recognize(uri: String, operation: Recognition, fonts: [String: String] = [:]) throws -> [String: Any] {
     try checkRecognition(operation)
+    let candidates = standardFonts.map { ($0, "") } + fonts.sorted { $0.key < $1.key }.prefix(64).map { ($0.key, $0.value) }
     guard let image = ImageEditing.load(uri: uri, maxPixels: analysisSize) else { throw ImageEditing.EditError.invalid("This image format cannot be read on your device.") }
     let request = operation.request
     request.recognitionLevel = .accurate
@@ -91,6 +93,7 @@ enum ImageText {
         let colors = sample(pixels, CGRect(x: rect.minX * CGFloat(pixels.width), y: rect.minY * CGFloat(pixels.height), width: rect.width * CGFloat(pixels.width), height: rect.height * CGFloat(pixels.height)))
         line["color"] = colors.text; line["background"] = colors.background
         line["backgroundLeft"] = colors.left; line["backgroundRight"] = colors.right
+        if let style = inkStyle(pixels, rect, candidate.string, colors, candidates: fonts.isEmpty || lines.count >= shapeMatchLines ? [] : candidates) { line.merge(style) { $1 } }
       } else {
         line["color"] = 0x101010; line["background"] = 0xFFFFFF; line["backgroundLeft"] = 0xFFFFFF; line["backgroundRight"] = 0xFFFFFF
       }
@@ -140,8 +143,148 @@ enum ImageText {
     return (background, median(leftEdge.isEmpty ? border : leftEdge), median(rightEdge.isEmpty ? border : rightEdge), text)
   }
 
-  /// Maps the standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) to iOS faces.
-  static func font(_ name: String, size: CGFloat) -> UIFont {
+  /// Estimates the line's face from its pixels: the tight ink box sets size, baseline and start,
+  /// measured against the recognized text's own glyph bounds; the typical stem width sets the weight.
+  /// `rect` is normalised; sizes are pixels of the analysed image, matching the edit reference width.
+  private static let standardFonts = [
+    "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+    "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
+    "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
+  ]
+  private static let shapeMatchLines = 120
+  private static let shapeGrid = 28
+
+  private static func inkStyle(_ pixels: Pixels, _ rect: CGRect, _ text: String, _ colors: (background: Int, left: Int, right: Int, text: Int), candidates: [(String, String)] = []) -> [String: Any]? {
+    let contrast = distance(colors.text, colors.background)
+    guard contrast >= 40 else { return nil }
+    let threshold = Int(contrast * contrast * 0.25)
+    // Vision boxes can clip descenders, so search slightly beyond them.
+    let pad = rect.height * CGFloat(pixels.height) * 0.08
+    let x0 = max(0, Int(rect.minX * CGFloat(pixels.width))), x1 = min(pixels.width - 1, Int(rect.maxX * CGFloat(pixels.width)))
+    let y0 = max(0, Int(rect.minY * CGFloat(pixels.height) - pad)), y1 = min(pixels.height - 1, Int(rect.maxY * CGFloat(pixels.height) + pad))
+    guard x1 - x0 >= 4, y1 - y0 >= 4 else { return nil }
+    let br = channel(colors.background, 16), bg = channel(colors.background, 8), bb = channel(colors.background, 0)
+    func ink(_ x: Int, _ y: Int) -> Bool {
+      let i = (y * pixels.width + x) * 4
+      let dr = Int(pixels.data[i]) - br, dg = Int(pixels.data[i + 1]) - bg, db = Int(pixels.data[i + 2]) - bb
+      return dr * dr + dg * dg + db * db >= threshold
+    }
+    let minimum = x1 - x0 > 20 ? 2 : 1
+    var top = -1, bottom = -1, left = x1 + 1, right = -1
+    for y in y0...y1 {
+      var count = 0
+      for x in x0...x1 where ink(x, y) { count += 1; left = min(left, x); right = max(right, x) }
+      if count >= minimum { if top < 0 { top = y }; bottom = y }
+    }
+    guard top >= 0, bottom - top >= 3, right > left else { return nil }
+    let inkHeight = CGFloat(bottom - top + 1)
+    var runs: [Int] = []
+    let from = top + (bottom - top + 1) * 3 / 10, to = top + (bottom - top + 1) * 7 / 10
+    for y in stride(from: from, through: to, by: max(1, (to - from) / 6)) {
+      var run = 0
+      for x in x0...x1 { if ink(x, y) { run += 1 } else if run > 0 { runs.append(run); run = 0 } }
+      if run > 0 { runs.append(run) }
+    }
+    let stroke = runs.isEmpty ? 0 : CGFloat(runs.sorted()[runs.count / 2])
+    func line(_ name: String, _ file: String = "") -> CTLine {
+      CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font(name, size: 100, file: file), NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true]))
+    }
+    func glyphs(_ name: String, _ file: String = "") -> (bounds: CGRect, width: CGFloat)? {
+      let bounds = CTLineGetBoundsWithOptions(line(name, file), .useGlyphPathBounds)
+      guard bounds.height > 0 else { return nil }
+      return (bounds, bounds.width)
+    }
+    guard let regular = glyphs("Helvetica") else { return nil }
+    let probe = 100 * inkHeight / regular.bounds.height
+    // Small text quantises stems to whole pixels, so it needs a clearer margin before reading as bold.
+    var bold = stroke / probe > (probe >= 16 ? 0.12 : 0.16)
+    let inkWidth = CGFloat(right - left + 1)
+    var best: (font: String, bounds: CGRect, size: CGFloat, ratio: CGFloat, miss: CGFloat)?
+    let inkRows = bottom - top + 1
+    if !candidates.isEmpty, inkRows >= 8, text.filter({ !$0.isWhitespace }).count >= 2 {
+      // Shape match: draw the recognized text in every face, stretched onto the same grid as the
+      // original ink, and keep the face whose glyphs overlap the ink most (intersection over union).
+      // Faces that need a large horizontal stretch to fit lose a little, so proportions still count.
+      let gh = min(shapeGrid, inkRows)
+      let gw = min(max(Int((CGFloat(gh) * inkWidth / CGFloat(inkRows)).rounded()), 8), 640)
+      var hits = [Int](repeating: 0, count: gw * gh), totals = hits
+      for y in top...bottom {
+        let gy = min((y - top) * gh / inkRows, gh - 1)
+        for x in left...right {
+          let cell = gy * gw + min((x - left) * gw / Int(inkWidth), gw - 1)
+          totals[cell] += 1; if ink(x, y) { hits[cell] += 1 }
+        }
+      }
+      let target = (0..<(gw * gh)).map { totals[$0] > 0 && hits[$0] * 2 >= totals[$0] }
+      if let context = CGContext(data: nil, width: gw, height: gh, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+         let data = context.data?.assumingMemoryBound(to: UInt8.self) {
+        let stride = context.bytesPerRow
+        var score = -CGFloat.greatestFiniteMagnitude
+        for (name, file) in candidates {
+          let drawn = line(name, file)
+          let bounds = CTLineGetBoundsWithOptions(drawn, .useGlyphPathBounds)
+          guard bounds.width > 0, bounds.height > 0 else { continue }
+          context.saveGState()
+          context.setFillColor(gray: 0, alpha: 1); context.fill(CGRect(x: 0, y: 0, width: gw, height: gh))
+          context.setFillColor(gray: 1, alpha: 1)
+          context.scaleBy(x: CGFloat(gw) / bounds.width, y: CGFloat(gh) / bounds.height)
+          context.translateBy(x: -bounds.minX, y: -bounds.minY)
+          context.textPosition = .zero
+          CTLineDraw(drawn, context)
+          context.restoreGState()
+          var both = 0, either = 0
+          for y in 0..<gh { for x in 0..<gw {
+            let mark = data[y * stride + x] >= 128, original = target[y * gw + x]
+            if mark && original { both += 1 }
+            if mark || original { either += 1 }
+          } }
+          guard either > 0 else { continue }
+          let fitted = 100 * inkHeight / bounds.height
+          let ratio = inkWidth / (bounds.width * fitted / 100)
+          let value = CGFloat(both) / CGFloat(either) - 0.25 * abs(log(ratio)) + (file.isEmpty ? 0.01 : 0)
+          if value > score { score = value; best = (name, bounds, fitted, ratio, 0) }
+        }
+      }
+      if let best { bold = best.font.contains("Bold") || best.font.contains("Black") }
+    }
+    if best == nil {
+      // The family whose glyphs, at the line's ink height, span the line's ink width most closely.
+      // Helvetica wins near-ties because most screenshots and documents use a sans face.
+      for candidate in bold ? ["Helvetica-Bold", "Times-Bold", "Courier-Bold"] : ["Helvetica", "Times-Roman", "Courier"] {
+        guard let face = glyphs(candidate), face.bounds.width > 0 else { continue }
+        let fitted = 100 * inkHeight / face.bounds.height
+        let width = face.bounds.width * fitted / 100
+        let miss = abs(log(inkWidth / width)) + (candidate.hasPrefix("Helvetica") ? 0 : 0.04)
+        if miss < best?.miss ?? .greatestFiniteMagnitude { best = (candidate, face.bounds, fitted, inkWidth / width, miss) }
+      }
+    }
+    guard let best else { return nil }
+    let scaleX = min(max(best.ratio, 0.7), 1.4)
+    let scale = best.size / 100
+    // Core Text bounds are y-up from the baseline, so minY is the depth of the lowest glyph.
+    let baseline = CGFloat(bottom + 1) + best.bounds.minY * scale
+    let start = max(0, CGFloat(left) - best.bounds.minX * scale * scaleX)
+    return ["size": Double(best.size), "baseline": Double(baseline / CGFloat(pixels.height)), "left": Double(start / CGFloat(pixels.width)),
+            "bold": bold, "font": best.font, "scaleX": Double(scaleX)]
+  }
+
+  private static let descriptorLock = NSLock()
+  private static var descriptors: [String: CTFontDescriptor] = [:]
+  /// Bundled fonts load from their file (no app-wide registration needed).
+  static func fileFont(_ file: String, size: CGFloat) -> UIFont? {
+    guard !file.isEmpty, let url = file.hasPrefix("file:") ? URL(string: file) : URL(fileURLWithPath: file) else { return nil }
+    descriptorLock.lock(); defer { descriptorLock.unlock() }
+    if descriptors[file] == nil {
+      guard let first = (CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor])?.first else { return nil }
+      if descriptors.count >= 64 { descriptors.removeAll() }
+      descriptors[file] = first
+    }
+    return descriptors[file].map { CTFontCreateWithFontDescriptor($0, size, nil) as UIFont }
+  }
+
+  /// Bundled fonts load from `file`; standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) map to iOS faces.
+  static func font(_ name: String, size: CGFloat, file: String = "") -> UIFont {
+    if let bundled = fileFont(file, size: size) { return bundled }
     let bold = name.contains("Bold"), italic = name.contains("Oblique") || name.contains("Italic")
     let face: String
     if name.hasPrefix("Times") {
@@ -212,11 +355,14 @@ enum ImageText {
         }
         if let text = edit["text"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
           let points = CGFloat((edit["size"] as? NSNumber)?.doubleValue ?? 16) * ratio
-          let face = font(edit["font"] as? String ?? "Helvetica", size: max(1, points))
+          let face = font(edit["font"] as? String ?? "Helvetica", size: max(1, points), file: edit["fontFile"] as? String ?? "")
           let x = CGFloat((edit["x"] as? NSNumber)?.doubleValue ?? 0) * size.width
           let baseline = CGFloat((edit["y"] as? NSNumber)?.doubleValue ?? 0) * size.height
           var attributes: [NSAttributedString.Key: Any] = [.font: face, .foregroundColor: color(edit["color"] as? Int ?? 0x101010)]
           if edit["underline"] as? Bool == true { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+          // `.expansion` takes the log of the horizontal stretch factor.
+          let scaleX = min(max((edit["scaleX"] as? NSNumber)?.doubleValue ?? 1, 0.5), 2)
+          if scaleX != 1 { attributes[.expansion] = log(scaleX) }
           for (line, value) in text.components(separatedBy: "\n").prefix(50).enumerated() where !value.isEmpty {
             (value as NSString).draw(at: CGPoint(x: x, y: baseline + CGFloat(line) * face.pointSize * 1.2 - face.ascender), withAttributes: attributes)
           }

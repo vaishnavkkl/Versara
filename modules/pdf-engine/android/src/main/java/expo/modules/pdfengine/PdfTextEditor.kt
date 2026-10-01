@@ -27,7 +27,7 @@ class PdfTextEditor {
       var searching = false
       try {
         val options = JSONObject(request)
-        searching = options.getString("action") == "search"
+        searching = options.getString("action") == "search" || options.getString("action") == "find_text"
         fun path(key: String, output: String) {
           val uri = Uri.parse(options.getString(key))
           if (searching && key == "uri" && uri.scheme == "content") {

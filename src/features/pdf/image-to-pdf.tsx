@@ -13,7 +13,8 @@ import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
-import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
+import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
+import { usePublishHeaderShare } from '@/components/header-share';
 import { savePdfResult } from '../files/save-file';
 import { openPdfScreen } from './open-pdf-screen';
 
@@ -27,12 +28,16 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<(PdfResult & { name: string }) | null>(null);
+  const [result, setResult] = useState<(PdfResult & { name: string }) | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const mounted = useRef(true);
   const locked = useRef(false);
   const job = useRef<string | null>(null);
   const nativeAvailable = !!PdfEngine?.imagesToPdf;
+  usePublishHeaderShare({ disabled: busy || !result, label: result ? 'Share new PDF' : 'Share is available after creating the PDF',
+    onShare: () => result && shareNamedFile({ uri: result.uri, name: result.name, size: result.size, mimeType: 'application/pdf' }),
+    save: { disabled: busy || (!result && (!files.length || !nativeAvailable)), label: result ? 'Save new PDF to device' : 'Create PDF',
+      onSave: () => result ? saveResult() : convert() } });
   useEffect(() => {
     mounted.current = true;
     const listener = nativeAvailable ? PdfEngine?.addListener('onConversionProgress', event => {

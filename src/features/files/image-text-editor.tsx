@@ -1,7 +1,7 @@
 import { useEditorDraft } from '../editor/use-editor-draft';
 import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { ThemedText } from '@/components/themed-text';
@@ -9,10 +9,12 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { ScreenHeader } from '@/components/screen-header';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { showDialog } from '@/components/app-dialog';
-import { AppLoader, withLoading } from '@/components/app-loader';
+import { withLoading } from '@/components/app-loader';
 import { ColorSwatches } from '@/components/color-swatches';
-import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, TextStyleMenu, type TextStyle } from '@/components/text-style-controls';
-import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
+import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
+import { fontCatalog, fontFile, loadEditFonts, useEditFonts, withFontFiles } from '@/constants/edit-fonts';
+import { OptionCard, OptionSheet } from '@/components/option-sheet';
+import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { toast } from '@/components/toast';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s } from '@/theme/dashboard';
@@ -20,12 +22,12 @@ import { useScreenActive } from '@/hooks/use-screen-active';
 import { FileEngine, type RecognizedImageText, type RecognizedTextLine } from '../../../modules/file-engine';
 import NativeEditCanvas from '../../../modules/pdf-engine/src/PdfEditCanvasView';
 import { type RecentFile } from './recent-files';
-import { formatSize, shareFile } from './file-storage';
+import { shareNamedFile, shareRenderedFile } from './file-storage';
 
 type Erase = { x: number; y: number; width: number; height: number; background: number; left: number; right: number };
 /** Sizes are pixels of the analysed image, which is `analysis.width` wide. */
 /** `font` is a standard PDF font name (Helvetica-Bold, Times-Italic, …); `text` may hold several lines. */
-type TextEdit = { lineId?: number; erase?: Erase; text: string; font: string; size: number; color: number; x: number; y: number; underline?: boolean };
+type TextEdit = { lineId?: number; erase?: Erase; text: string; font: string; size: number; color: number; x: number; y: number; underline?: boolean; scaleX?: number };
 type Preview = { uri: string; width: number; height: number };
 
 type TextDraft = { edits: TextEdit[]; history: TextEdit[][]; future: TextEdit[][]; refWidth: number };
@@ -38,10 +40,10 @@ function validTextDraft(value: unknown): value is TextDraft {
 
 const PREVIEW_SIZE = 1600;
 const MAX_HISTORY = 30;
-const outputDirectory = () => new Directory(Paths.document, 'Versara Images');
 
-/** Line boxes include ascenders and descenders; this maps them to a font size and baseline. */
+/** Uses the native ink fit when present; otherwise maps the line box, which includes ascenders and descenders, to a size and baseline. */
 function lineMetrics(line: RecognizedTextLine, analysis: RecognizedImageText) {
+  if (line.size && line.baseline !== undefined && line.left !== undefined) return { size: line.size, x: line.left, y: line.baseline };
   const heightPx = line.height * analysis.height;
   const size = Math.max(4, heightPx / 1.15);
   return { size, x: line.x, y: (line.y * analysis.height + heightPx - size * 0.2) / analysis.height };
@@ -68,6 +70,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const [editing, setEditing] = useState<number | null>(null);
   const adding = addOnly;
   const [placement, setPlacement] = useState<{ x: number; y: number } | null>(null);
+  const [initial, setInitial] = useState<{ text: string; font: string; size: number; ink: number; x: number; y: number } | null>(null);
   const [text, setText] = useState('');
   const [textStyle, setTextStyle] = useState<TextStyle>(DEFAULT_TEXT_STYLE);
   const [sizeInput, setSizeInput] = useState('32');
@@ -106,7 +109,10 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
         const result = await withLoading(addOnly ? 'Opening your image…' : 'Finding text in your image…', async () => {
           session.create({ intermediates: true, idempotent: true });
           recognitionUri.current = addOnly ? null : value.uri;
-          const found = addOnly ? null : await engine.recognizeImageText(value.uri);
+          await loadEditFonts().catch(() => {});
+          const found = addOnly ? null : (engine.nativeImageTextVersion ?? 0) >= 2
+            ? await engine.recognizeImageText(value.uri, JSON.stringify(fontCatalog()))
+            : await engine.recognizeImageText(value.uri);
           recognitionUri.current = null;
           if (cancelled) return null;
           const first = await engine.renderImageText(JSON.stringify({ uri: value.uri, outputUri: new File(session, `preview-${++ticket.current}.jpg`).uri, refWidth: found?.width ?? 1, edits: [], maxSize: PREVIEW_SIZE, preview: true }));
@@ -140,17 +146,25 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   const size = Math.min(2000, Math.max(4, Number(sizeInput) || 4));
   const underline = textStyle.underline;
   const indentStep = analysis ? Math.max(8, Math.round(analysis.width / 32)) : 24;
+  // The detected font is stretched to the original's letter width; choosing another font drops the stretch.
+  const lineScale = line && initial && font === initial.font ? line.scaleX ?? 1 : 1;
+  const stretch = useMemo(() => lineScale !== 1 ? { scaleX: lineScale } : {}, [lineScale]);
+  // A just-selected line keeps its original pixels until something is changed, so selecting never restyles it.
+  const untouched = !!line && editing === null && !!initial && !!placement && text === initial.text && font === initial.font && size === initial.size
+    && ink === initial.ink && !underline && placement.x === initial.x && placement.y === initial.y;
   // Existing text is replaced in the native live preview; only Add text uses an on-page input box.
   const draftEdits = useMemo(() => {
     const base = editing === null ? edits : edits.filter((_, index) => index !== editing);
-    return line && placement ? [...base, { lineId: line.id, erase: eraseFor(line), text, font, size, color: ink, underline, ...placement }] : base;
-  }, [edits, editing, line, placement, text, font, size, ink, underline]);
+    return line && placement && !untouched ? [...base, { lineId: line.id, erase: eraseFor(line), text, font, size, color: ink, underline, ...stretch, ...placement }] : base;
+  }, [edits, editing, line, placement, text, font, size, ink, underline, untouched, stretch]);
   function changeIndent(next: number) {
     const value = Math.max(0, Math.min(indentStep * 20, next));
     if (placement && analysis) setPlacement({ ...placement, x: Math.max(0, Math.min(1, placement.x + (value - indent) / analysis.width)) });
     setIndent(value);
   }
-  const annotations = useMemo(() => JSON.stringify(draftEdits), [draftEdits]);
+  const fontsReady = useEditFonts();
+  // Re-sent once bundled fonts are copied, so marks drawn earlier switch to their real typeface.
+  const annotations = useMemo(() => JSON.stringify(withFontFiles(draftEdits)), [draftEdits, fontsReady]); // eslint-disable-line react-hooks/exhaustive-deps
   function closeBox() { Keyboard.dismiss(); setShowFormatting(false); setLine(null); setEditing(null); setPlacement(null); setText(''); setIndent(0); }
   function selectLine(lineId: number) {
     if (!analysis || busy || !recovery.ready || addOnly) return;
@@ -159,13 +173,17 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
     const index = edits.findIndex(edit => edit.lineId === lineId);
     const existing = index >= 0 ? edits[index] : null;
     const metrics = lineMetrics(target, analysis);
+    const detectedFont = target.font ?? (target.bold ? 'Helvetica-Bold' : 'Helvetica');
+    const start = existing && existing.text ? { x: existing.x, y: existing.y } : { x: metrics.x, y: metrics.y };
+    const startSize = Math.round(existing?.size ?? metrics.size);
     setShowFormatting(false); setLine(target); setEditing(index >= 0 ? index : null); setError('');
     setText(existing?.text ?? target.text);
-    setTextStyle(styleFromFont(existing?.font ?? 'Helvetica', existing?.underline));
-    setSizeInput(String(Math.round(existing?.size ?? metrics.size)));
+    setTextStyle(styleFromFont(existing?.font ?? detectedFont, existing?.underline));
+    setSizeInput(String(startSize));
     setIndent(0);
     setInk(existing?.color ?? target.color);
-    setPlacement(existing && existing.text ? { x: existing.x, y: existing.y } : { x: metrics.x, y: metrics.y });
+    setPlacement(start);
+    setInitial({ text: target.text, font: detectedFont, size: startSize, ink: target.color, ...start });
   }
   function place(point: { x: number; y: number }) {
     if (busy || !recovery.ready || !adding) return;
@@ -179,10 +197,11 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   }
   function apply(value = text) {
     if (busy || !boxOpen || !placement || (!adding && !line)) return;
+    if (untouched && value === text) { closeBox(); return; }
     if (/[\r\t]/.test(value)) { setError('Tabs are not supported. Use Indent instead.'); return; }
     if (value.split('\n').length > 50) { setError('Use up to 50 lines in one text box.'); return; }
     if (!line && !value.trim()) { setError('Type some text first.'); return; }
-    const edit: TextEdit = { lineId: line?.id, erase: line ? eraseFor(line) : undefined, text: value, font, size, color: ink, ...(underline ? { underline } : {}), ...placement };
+    const edit: TextEdit = { lineId: line?.id, erase: line ? eraseFor(line) : undefined, text: value, font, size, color: ink, ...(underline ? { underline } : {}), ...stretch, ...placement };
     commit(editing === null ? [...edits, edit] : edits.map((item, index) => index === editing ? edit : item));
   }
   function removeText() {
@@ -207,8 +226,8 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   function requestClose() {
     if (busy) return;
     if (boxOpen) { closeBox(); return; }
-    if (!edits.length && !workspace.changed) { close(); return; }
-    showDialog('Discard text edits?', 'Your changes to this image have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void Promise.all([recovery.clear(), workspace.discard()]).then(close).catch(cause => setError((cause as Error).message)); } }], { ios: 'textformat', android: 'text-fields' });
+    if (!edits.length) { close(); return; }
+    showDialog('Discard text edits?', 'Text changes in this tool have not been applied. Changes applied earlier stay.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void recovery.clear().then(close).catch(cause => setError((cause as Error).message)); } }], { ios: 'textformat', android: 'text-fields' });
   }
   useEffect(() => { closeRef.current = requestClose; });
 
@@ -217,77 +236,72 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
     if (!edits.length) return;
     Keyboard.dismiss(); setBusy(true);
     try {
-      await workspace.apply(outputUri => FileEngine!.renderImageText(JSON.stringify({ uri: file.uri, outputUri, refWidth: analysis.width, edits, format: 'png', quality: 100 })), file);
+      await workspace.apply(outputUri => FileEngine!.renderImageText(JSON.stringify({ uri: file.uri, outputUri, refWidth: analysis.width, edits: withFontFiles(edits), format: 'png', quality: 100 })), file);
       await recovery.clear();
     } finally { if (mounted.current) setBusy(false); }
   }
-  async function save() {
-    if (!file || !analysis || !FileEngine || busy || !recovery.ready || (!edits.length && !workspace.changed)) return;
-    if (boxOpen) { showDialog('Text box still open', 'Apply or cancel this text before saving the image.', undefined, { ios: 'character.textbox', android: 'text-fields' }); return; }
+  // The open text box counts as a change, so sharing never drops what is shown on the image.
+  const shareEdits = boxOpen && adding && !line && placement && text.trim()
+    ? [...(editing === null ? edits : edits.filter((_, index) => index !== editing)), { text, font, size, color: ink, ...(underline ? { underline } : {}), ...placement }]
+    : draftEdits;
+  async function shareImage() {
+    if (!file || !analysis || !FileEngine || busy || !recovery.ready) return;
+    if (!shareEdits.length) { await shareNamedFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size }); return; }
     const engine = FileEngine;
     const png = file.mimeType === 'image/png';
-    const options = await askSaveOptions(file.name, png ? 'image/png' : 'image/jpeg', newFileName(file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '') + (png ? '.png' : '.jpg')));
-    if (!options || !mounted.current) return;
-    const { mode } = options;
-    setBusy(true); setError('');
-    const base = file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) || 'Image';
-    const stamp = new Date().toISOString().replace(/[T:.]/g, '-').replace(/Z$/, '');
-    const name = `${base}-text-${stamp}${png ? '.png' : '.jpg'}`;
+    const base = file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '').slice(0, 80) || 'Image';
+    const edited = shareEdits;
+    Keyboard.dismiss(); setBusy(true);
     try {
-      const directory = outputDirectory();
-      directory.create({ intermediates: true, idempotent: true });
-      const output = new File(directory, name);
-      const { result, saved } = await withLoading('Saving your image…', async () => {
-        const rendered = await engine.renderImageText(JSON.stringify({ uri: file.uri, outputUri: output.uri, refWidth: analysis.width, edits, format: png ? 'png' : 'jpeg', quality: 92 }));
-        const stored = await saveEditedOutput({ output: rendered.uri, mimeType: rendered.mimeType, kind: 'image', mode, origin: workspace.origin ?? file, name: options.name });
-        return { result: rendered, saved: stored };
-      });
-      await recovery.clear(); await workspace.discard();
-      toast(`Saved to ${saved.device.location}`);
-      if (!mounted.current) return;
-      if (mode === 'replace' && saved.recent) { router.replace({ pathname: '/file-preview', params: { id: saved.recent.id } }); return; }
-      showDialog('Image saved', `${saved.file.name}\n${result.width} × ${result.height} · ${formatSize(result.size)}\nSaved to ${saved.device.location}`, [
-        { text: 'Keep editing', style: 'cancel' },
-        { text: 'Share', onPress: () => { void shareFile({ uri: saved.file.uri, mimeType: result.mimeType }).catch(() => {}); } },
-        ...(saved.recent ? [{ text: 'Open', onPress: () => router.replace({ pathname: '/file-preview', params: { id: saved.recent!.id } }) }] : []),
-      ], { ios: 'checkmark.circle', android: 'check-circle' });
-    } catch (cause) {
-      if (mounted.current) setError((cause as Error).message || 'Could not save the image.');
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
+      await shareRenderedFile(`${base} - text${png ? '.png' : '.jpg'}`, png ? 'image/png' : 'image/jpeg',
+        outputUri => engine.renderImageText(JSON.stringify({ uri: file.uri, outputUri, refWidth: analysis.width, edits: withFontFiles(edited), format: png ? 'png' : 'jpeg', quality: 92 })));
+    } finally { if (mounted.current) setBusy(false); }
+  }
+  /** Applies the text changes to the working image and returns to its preview, where everything is saved once. */
+  async function applyAndReturn() {
+    if (boxOpen) { showDialog('Text box still open', 'Apply or cancel this text first.', undefined, { ios: 'character.textbox', android: 'text-fields' }); return; }
+    try {
+      await applyToWorkspace();
+      if (mounted.current) router.dismissTo({ pathname: '/file-preview', params: { id } });
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not apply the text changes.'); }
   }
 
   const objectsJson = useMemo(() => JSON.stringify(analysis?.lines.map(item => ({ id: item.id, x: item.x, y: item.y, width: item.width, height: item.height })) ?? []), [analysis]);
   return <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.systemBackground }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-    <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}>
-      <HeaderHistoryButtons canUndo={history.length > 0} canRedo={future.length > 0} disabled={busy} onUndo={undo} onRedo={redo} />
-      <ImageWorkspaceTools id={id} current={addOnly ? 'text' : 'edit_text'} disabled={!file || busy || !recovery.ready || boxOpen} onApply={applyToWorkspace} />
-      {boxOpen ? <Pressable accessibilityRole="button" accessibilityLabel={addOnly ? 'Apply added text' : 'Apply text change'}
-        disabled={busy || (addOnly && !text.trim())} onPress={() => apply()}
-        style={[styles.save, getGradients(colors).module, (busy || (addOnly && !text.trim())) && styles.disabled]}>
-        <UniversalIcon ios="checkmark" android="check" size={24} color={colors.moduleText} />
-      </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Save image with text changes" disabled={(!edits.length && !workspace.changed) || busy || !recovery.ready} onPress={() => { void save(); }}
-        style={[styles.save, getGradients(colors).module, ((!edits.length && !workspace.changed) || busy || !recovery.ready) && styles.disabled]}>
-        <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText>
-      </Pressable>}
-    </ScreenHeader>
+    <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}
+      share={{ onPress: shareImage, disabled: !file || !analysis || busy || !recovery.ready, label: shareEdits.length ? 'Share edited image' : 'Share image' }}
+      save={{ onPress: applyAndReturn, disabled: !edits.length || busy || !recovery.ready || boxOpen, label: 'Apply text changes and return to the image' }} />
+    <ToolActionRow
+      left={<HeaderHistoryButtons canUndo={history.length > 0} canRedo={future.length > 0} disabled={busy} onUndo={undo} onRedo={redo} />}
+      right={<>
+        {boxOpen && <ToolRowButton caption label="Style" icon={{ ios: 'textformat', android: 'text-format' }} selected={showFormatting} expanded={showFormatting} disabled={busy}
+          onPress={() => { Keyboard.dismiss(); setShowFormatting(true); }} />}
+        <ImageWorkspaceTools id={id} current={addOnly ? 'text' : 'edit_text'} disabled={!file || busy || !recovery.ready || boxOpen} onApply={applyToWorkspace} />
+        {boxOpen ? <Pressable accessibilityRole="button" accessibilityLabel={addOnly ? 'Apply added text' : 'Apply text change'}
+          disabled={busy || (addOnly && !text.trim())} onPress={() => apply()}
+          style={[styles.save, getGradients(colors).module, (busy || (addOnly && !text.trim())) && styles.disabled]}>
+          <UniversalIcon ios="checkmark" android="check" size={24} color={colors.moduleText} />
+        </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Apply text changes and return to the image" disabled={!edits.length || busy || !recovery.ready} onPress={() => { void applyAndReturn(); }}
+          style={[styles.save, getGradients(colors).module, (!edits.length || busy || !recovery.ready) && styles.disabled]}>
+          <UniversalIcon ios="checkmark" android="check" size={18} color={colors.moduleText} />
+          <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Apply</ThemedText>
+        </Pressable>}
+      </>} />
     {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error || recovery.error}</ThemedText>}
-    {!analysis || !preview || !file ? <View style={styles.center}>{!error && <AppLoader size="large" />}</View> : <View style={styles.grow}>
+    {!analysis || !preview || !file ? <View style={styles.center} /> : <View style={styles.grow}>
       <View style={styles.grow}>
         {active && NativeEditCanvas && <NativeEditCanvas key={file.uri} style={styles.grow} source={preview.uri}
           pageLayout={JSON.stringify({ width: preview.width, height: preview.height, pointWidth: analysis.width })}
           objects={objectsJson} annotations={annotations} selectedId={line?.id ?? -1} adding={adding} disabled={busy} placement={placement ? JSON.stringify(placement) : ''}
-          textBox={JSON.stringify({ visible: boxOpen && adding, text: adding ? text : '', font, size, color: ink, underline })}
+          textBox={JSON.stringify({ visible: boxOpen && adding, text: adding ? text : '', font, fontFile: fontFile(font), size, color: ink, underline })}
           focus={line ? JSON.stringify({ x: line.x, y: line.y, width: line.width, height: line.height }) : ''}
           onSelectObject={({ nativeEvent }) => selectLine(nativeEvent.id)}
           onPlace={({ nativeEvent }) => place(nativeEvent)}
           onTextChange={({ nativeEvent }) => setText(nativeEvent.text)}
           onSubmitText={({ nativeEvent }) => apply(nativeEvent.text)} />}
-        {boxOpen && <View style={{ position: 'absolute', top: 10, right: 10, maxWidth: '85%' }}><TextStyleMenu style={textStyle} onChange={setTextStyle} disabled={busy} /></View>}
       </View>
       {!keyboardOpen && <ThemedText numberOfLines={2} style={[styles.hint, { color: colors.secondaryLabel }]}>
-        {boxOpen ? adding ? 'Type on the image. Drag the blue handle to move it. Tap the top checkmark to apply.' : 'Your changes appear live on the image. Tap the top checkmark to apply.' : addOnly ? 'Tap where the new text should start. Pinch to zoom.' : analysis.lines.length ? 'Tap any outlined text to change it. Pinch to zoom.' : 'No text was found in this image. Use Add text to write new text instead.'}
+        {boxOpen ? adding ? 'Type on the image. Drag the blue handle to move it. Tap the checkmark above to apply.' : 'Your changes appear live on the image. Tap the checkmark above to apply.' : addOnly ? 'Tap where the new text should start. Pinch to zoom.' : analysis.lines.length ? 'Tap any outlined text to change it. Pinch to zoom.' : 'No text was found in this image. Use Add text to write new text instead.'}
       </ThemedText>}
       {boxOpen && <View style={[styles.row, styles.editorBar, { backgroundColor: colors.secondarySystemBackground }]}>
         {!!line ? <TextInput key={line.id} accessibilityLabel="Edit selected image text" autoFocus
@@ -295,11 +309,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           returnKeyType="done" submitBehavior="blurAndSubmit" disableFullscreenUI
           onSubmitEditing={({ nativeEvent }) => apply(nativeEvent.text)}
           style={[styles.textInput, styles.grow, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-          : <ThemedText numberOfLines={1} style={styles.grow}>Editing on the image</ThemedText>}
-        <Pressable accessibilityRole="button" accessibilityLabel="Text formatting" accessibilityState={{ expanded: showFormatting }} disabled={busy}
-          style={styles.icon} onPress={() => { Keyboard.dismiss(); setShowFormatting(value => !value); }}>
-          <UniversalIcon ios="textformat" android="text-format" size={24} color={colors.systemBlue} />
-        </Pressable>
+          : <ThemedText numberOfLines={1} style={[styles.grow, styles.editingLabel]}>Editing on the image</ThemedText>}
         {(line || editing !== null) && <Pressable accessibilityRole="button" accessibilityLabel="Delete selected text" disabled={busy} style={styles.icon} onPress={removeText}>
           <UniversalIcon ios="trash" android="delete-outline" size={22} color={colors.destructive} />
         </Pressable>}
@@ -307,12 +317,16 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           <UniversalIcon ios="xmark" android="close" size={20} color={colors.secondaryLabel} />
         </Pressable>
       </View>}
-      {boxOpen && showFormatting && <ScrollView style={styles.panel} contentContainerStyle={styles.panelContent} keyboardShouldPersistTaps="handled">
-        <TextStyleControls style={textStyle} onChange={setTextStyle} size={sizeInput} onSizeChange={setSizeInput} sizeUnit="px" minSize={4} maxSize={2000} disabled={busy}
-          indent={indent} indentStep={indentStep} onIndentChange={changeIndent} />
-        <ColorSwatches value={ink} disabled={busy} original={line ? { label: 'Original', value: line.color } : undefined} onChange={value => { if (value !== null) setInk(value); }} />
+      <OptionSheet title="Text style" icon={{ ios: 'textformat', android: 'text-format' }} isPresented={boxOpen && showFormatting} onClose={() => setShowFormatting(false)}>
+        <OptionCard title="Font" icon={{ ios: 'textformat.size', android: 'format-size' }}>
+          <TextStyleControls style={textStyle} onChange={setTextStyle} size={sizeInput} onSizeChange={setSizeInput} sizeUnit="px" minSize={4} maxSize={2000} disabled={busy}
+            indent={indent} indentStep={indentStep} onIndentChange={changeIndent} />
+        </OptionCard>
+        <OptionCard title="Colour" icon={{ ios: 'paintpalette', android: 'palette' }}>
+          <ColorSwatches value={ink} disabled={busy} original={line ? { label: 'Original', value: line.color } : undefined} onChange={value => { if (value !== null) setInk(value); }} />
+        </OptionCard>
         {!!line && <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>The old text is covered with the colour around it. This works best on plain backgrounds.</ThemedText>}
-      </ScrollView>}
+      </OptionSheet>
       {!boxOpen && !keyboardOpen && <View style={[styles.row, styles.wrap, styles.dock, { borderColor: colors.separator }]}>
           {!addOnly && !analysis.lines.length && <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.replace({ pathname: '/image-text', params: { id, mode: 'add' } })}
             style={[styles.action, { backgroundColor: colors.accentSurface }]}>
@@ -333,13 +347,12 @@ const styles = StyleSheet.create({
   textInput: { minHeight: 48, padding: s.md, borderRadius: radius.sm, fontSize: 16 },
   editorBar: { padding: 4, gap: 0, flexShrink: 0 },
   icon: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  save: { minHeight: 44, minWidth: 68, borderRadius: 20, paddingHorizontal: s.lg, alignItems: 'center', justifyContent: 'center' },
+  save: { minHeight: 44, minWidth: 68, borderRadius: 20, paddingHorizontal: s.lg, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.5 },
   hint: { fontSize: 12, textAlign: 'center', paddingVertical: 4, paddingHorizontal: s.md },
   dock: { borderTopWidth: StyleSheet.hairlineWidth, padding: s.sm },
-  panel: { maxHeight: '44%', flexGrow: 0 },
   wrap: { flexWrap: 'wrap' },
-  panelContent: { gap: s.sm, padding: s.sm },
+  editingLabel: { paddingHorizontal: s.sm, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', gap: s.sm },
   chipText: { fontSize: 13, fontWeight: '600' },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, borderRadius: radius.sm, paddingHorizontal: s.md },

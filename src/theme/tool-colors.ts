@@ -13,7 +13,7 @@ export function optionColorKey(label: string) {
 
 // Stable tool identities shared by the quick rail, toolbox and editor controls.
 const families = [
-  { ids: ['edit_text', 'text', 'rename', 'extract_text', 'ocr'], light: '#7050AF', dark: '#C4A4F3' },
+  { ids: ['edit_text', 'text', 'replace_text', 'rename', 'extract_text', 'ocr'], light: '#7050AF', dark: '#C4A4F3' },
   { ids: ['crop', 'resize', 'social', 'extract', 'split', 'to_image'], light: '#247A58', dark: '#7FD4B1' },
   { ids: ['rotate', 'flip_h', 'flip_v', 'perspective', 'reorder', 'orientation'], light: '#286EAD', dark: '#94C4F3' },
   { ids: ['adjust', 'brightness', 'exposure', 'temperature', 'highlight', 'numbers'], light: '#3968B8', dark: '#A6C5FA' },

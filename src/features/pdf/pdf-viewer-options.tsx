@@ -25,7 +25,7 @@ export function PdfViewerOptions({ visible, name, pageCount, vertical, onClose, 
       { id: 'fit', title: 'Fit page', subtitle: 'Reset the zoom', ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' },
       { id: 'focus', title: 'Focus view', subtitle: 'Hide controls for more reading space', ios: 'arrow.up.left.and.arrow.down.right', android: 'fullscreen' },
       { id: 'info', title: 'Document details', subtitle: 'File name, size and page count', ios: 'info.circle', android: 'info-outline' },
-      { id: 'save', title: 'Save a copy', subtitle: 'Export this PDF to your device', ios: 'square.and.arrow.down', android: 'save-alt' },
+      { id: 'save', title: 'Save a copy', subtitle: 'Export this PDF to your device', ios: 'square.and.arrow.down', android: 'save' },
       { id: 'open', title: 'Open another PDF', subtitle: 'Choose a different document', ios: 'folder', android: 'folder-open' },
     ];
     const tools = PDF_SECTIONS.filter(section => section.title !== 'Read & explore').map(section => ({

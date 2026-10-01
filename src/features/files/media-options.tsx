@@ -17,7 +17,7 @@ export function MediaOptions({ file, visible, onClose, onAction }: { file: Recen
   const sections = useMemo(() => {
     const available: Action[] = [
       ...(file.kind === 'image' ? [{ id: 'pdf', title: 'Create PDF', subtitle: 'Use this image and add more if needed', ios: 'doc.richtext', android: 'picture-as-pdf' } as Action] : []),
-      { id: 'save', title: 'Save to device', subtitle: 'Keep a copy in your device folders', ios: 'square.and.arrow.down', android: 'save-alt' },
+      { id: 'save', title: 'Save to device', subtitle: 'Keep a copy in your device folders', ios: 'square.and.arrow.down', android: 'save' },
       { id: 'share', title: 'Share', subtitle: 'Send with another app', ios: 'square.and.arrow.up', android: 'share' },
       { id: 'info', title: 'File details', subtitle: 'Name, file type and size', ios: 'info.circle', android: 'info-outline' },
     ];

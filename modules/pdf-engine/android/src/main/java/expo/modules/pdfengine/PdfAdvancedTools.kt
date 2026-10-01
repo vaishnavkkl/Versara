@@ -172,7 +172,7 @@ class PdfAdvancedTools {
                     val hasText = r.optBoolean("skipExistingText", true) && hasSelectableText(pdf, page, check)
                     val words = JSONArray()
                     if (!hasText) {
-                      val bitmap = render(page, 160f)
+                      val bitmap = render(page, 220f)
                       try {
                         tess!!.setImage(bitmap); tess.utF8Text; check()
                         val iterator = tess.resultIterator
@@ -209,7 +209,7 @@ class PdfAdvancedTools {
                   pages.forEachIndexed { index, page ->
                     check(); writer.write("--- Page ${page + 1} ---\n")
                     val text = if (tess == null) PDFTextStripper().apply { startPage = page + 1; endPage = page + 1; sortByPosition = true }.getText(pdf) else {
-                      val bitmap = render(page, 160f)
+                      val bitmap = render(page, 220f)
                       try { tess.setImage(bitmap); tess.utF8Text ?: "" } finally { tess.clear(); bitmap.recycle() }
                     }
                     writer.write(text); writer.write("\n\n"); check(); progress(index + 1, pages.size)

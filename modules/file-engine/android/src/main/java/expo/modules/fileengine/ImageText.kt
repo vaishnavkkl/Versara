@@ -12,12 +12,22 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.googlecode.tesseract.android.TessBaseAPI
 import org.json.JSONObject
 import java.io.File
+import java.nio.ByteBuffer
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.atan
+import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -134,13 +144,54 @@ internal object ImageText {
             "angle" to (angles[raw.take(4).joinToString(",")] ?: 0.0),
             "color" to (sample.text and 0xFFFFFF), "background" to (sample.background and 0xFFFFFF),
             "backgroundLeft" to (sample.left and 0xFFFFFF), "backgroundRight" to (sample.right and 0xFFFFFF),
-          )
+          ) + (inkStyle(bitmap, box, text, sample) ?: emptyMap())
         } while (lines.size < MAX_LINES && iterator.next(level))
       } finally { iterator.delete() }
       return mapOf("width" to bitmap.width, "height" to bitmap.height, "lines" to lines)
     } finally {
       synchronized(recognitionLock) { request.engine = null }
       recognizer?.recycle()
+      bitmap.recycle()
+    }
+  }
+
+  /**
+   * Edit text uses Google ML Kit's bundled Latin recognizer: its line boxes and angles are what the
+   * editor's size and baseline mapping were tuned for. Privacy scans and PDF OCR stay on Tesseract.
+   */
+  fun recognizeForEditing(context: Context, uri: String, request: Recognition, fonts: Map<String, String> = emptyMap()): Map<String, Any> {
+    checkRecognition(request)
+    val candidates = candidates(fonts)
+    val bitmap = ImageProcessing.decode(context, Uri.parse(uri), ANALYSIS_SIZE)
+    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    try {
+      val task = recognizer.process(InputImage.fromBitmap(bitmap, 0))
+      while (!task.isComplete) {
+        checkRecognition(request)
+        try { Tasks.await(task, 200, TimeUnit.MILLISECONDS) } catch (_: TimeoutException) { /* Poll for cancellation. */ }
+      }
+      checkRecognition(request)
+      val result = Tasks.await(task)
+      val w = bitmap.width.toFloat(); val h = bitmap.height.toFloat()
+      val lines = ArrayList<Map<String, Any>>()
+      for (block in result.textBlocks) for (line in block.lines) {
+        if (lines.size >= MAX_LINES) break
+        val box = line.boundingBox ?: continue
+        if (box.width() < 2 || box.height() < 2 || line.text.isBlank()) continue
+        val sample = sample(bitmap, box.left, box.top, box.right, box.bottom)
+        val pad = (box.height() * 0.08f).roundToInt()
+        val region = Rect(box.left.coerceAtLeast(0), (box.top - pad).coerceAtLeast(0), box.right.coerceAtMost(bitmap.width), (box.bottom + pad).coerceAtMost(bitmap.height))
+        lines += mapOf(
+          "id" to lines.size, "text" to line.text,
+          "x" to box.left / w.toDouble(), "y" to box.top / h.toDouble(), "width" to box.width() / w.toDouble(), "height" to box.height() / h.toDouble(),
+          "angle" to line.angle.toDouble(),
+          "color" to (sample.text and 0xFFFFFF), "background" to (sample.background and 0xFFFFFF),
+          "backgroundLeft" to (sample.left and 0xFFFFFF), "backgroundRight" to (sample.right and 0xFFFFFF),
+        ) + (inkStyle(bitmap, region, line.text, sample, if (lines.size < SHAPE_MATCH_LINES) candidates else emptyList()) ?: emptyMap())
+      }
+      return mapOf("width" to bitmap.width, "height" to bitmap.height, "lines" to lines)
+    } finally {
+      recognizer.close()
       bitmap.recycle()
     }
   }
@@ -171,6 +222,140 @@ internal object ImageText {
     return Sample(background, median(leftEdge.ifEmpty { border }), median(rightEdge.ifEmpty { border }), text)
   }
 
+  /**
+   * Estimates the line's face from its pixels: the tight ink box sets size, baseline and start,
+   * measured against the recognized text's own glyph bounds; the typical stem width sets the weight.
+   * Sizes are pixels of the analysed image, matching the edit reference width.
+   */
+  private class Candidate(val font: String, val file: String, val face: Typeface)
+  private val STANDARD_FONTS = listOf(
+    "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+    "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
+    "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
+  )
+  private const val SHAPE_MATCH_LINES = 120
+  private const val SHAPE_GRID = 28
+  /** Standard faces plus the bundled fonts the app can also draw and embed. */
+  private fun candidates(fonts: Map<String, String>): List<Candidate> =
+    STANDARD_FONTS.map { Candidate(it, "", typeface(it)) } +
+      fonts.entries.sortedBy { it.key }.take(64).map { (name, file) -> Candidate(name, file, typeface(name, file)) }
+
+  private fun inkStyle(bitmap: Bitmap, box: Rect, text: String, sample: Sample, candidates: List<Candidate> = emptyList()): Map<String, Any>? {
+    val contrast = distance(sample.text, sample.background)
+    if (contrast < 40f || box.width() < 4 || box.height() < 4) return null
+    val threshold = contrast * contrast * 0.25f
+    val bw = box.width(); val bh = box.height()
+    val pixels = IntArray(bw * bh)
+    bitmap.getPixels(pixels, 0, bw, box.left, box.top, bw, bh)
+    val bg = sample.background
+    fun ink(index: Int): Boolean {
+      val c = pixels[index]
+      val dr = channel(c, 16) - channel(bg, 16); val dg = channel(c, 8) - channel(bg, 8); val db = channel(c, 0) - channel(bg, 0)
+      return dr * dr + dg * dg + db * db >= threshold
+    }
+    val minimum = if (bw > 20) 2 else 1
+    var top = -1; var bottom = -1; var left = bw; var right = -1
+    for (y in 0 until bh) {
+      var count = 0
+      for (x in 0 until bw) if (ink(y * bw + x)) { count++; if (x < left) left = x; if (x > right) right = x }
+      if (count >= minimum) { if (top < 0) top = y; bottom = y }
+    }
+    if (top < 0 || bottom - top < 3 || right <= left) return null
+    val inkHeight = bottom - top + 1
+    val runs = ArrayList<Int>()
+    val from = top + inkHeight * 3 / 10; val to = top + inkHeight * 7 / 10
+    for (y in from..to step max(1, (to - from) / 6)) {
+      var run = 0
+      for (x in 0 until bw) {
+        if (ink(y * bw + x)) run++ else if (run > 0) { runs += run; run = 0 }
+      }
+      if (run > 0) runs += run
+    }
+    val stroke = if (runs.isEmpty()) 0f else runs.sorted()[runs.size / 2].toFloat()
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 100f }
+    val bounds = Rect()
+    fun fit(font: String): Float {
+      paint.typeface = typeface(font)
+      paint.getTextBounds(text, 0, text.length, bounds)
+      return if (bounds.height() > 0) 100f * inkHeight / bounds.height() else 0f
+    }
+    val probe = fit("Helvetica")
+    if (probe <= 0f) return null
+    // Small text quantises stems to whole pixels, so it needs a clearer margin before reading as bold.
+    var bold = stroke / probe > if (probe >= 16f) 0.12f else 0.16f
+    val inkWidth = (right - left + 1).toFloat()
+    var font = ""; var fontFile = ""; var size = 0f; var ratio = 1f
+    val inkHeightPx = bottom - top + 1
+    if (candidates.isNotEmpty() && inkHeightPx >= 8 && text.count { !it.isWhitespace() } >= 2) {
+      // Shape match: draw the recognized text in every face, stretched onto the same grid as the
+      // original ink, and keep the face whose glyphs overlap the ink most (intersection over union).
+      // Faces that need a large horizontal stretch to fit lose a little, so proportions still count.
+      val gh = min(SHAPE_GRID, inkHeightPx)
+      val gw = (gh * inkWidth / inkHeightPx).roundToInt().coerceIn(8, 640)
+      val target = BooleanArray(gw * gh)
+      val hits = IntArray(gw * gh); val totals = IntArray(gw * gh)
+      for (y in top..bottom) {
+        val gy = ((y - top) * gh / inkHeightPx).coerceAtMost(gh - 1)
+        for (x in left..right) {
+          val cell = gy * gw + ((x - left) * gw / inkWidth.toInt()).coerceAtMost(gw - 1)
+          totals[cell]++; if (ink(y * bw + x)) hits[cell]++
+        }
+      }
+      for (i in target.indices) target[i] = totals[i] > 0 && hits[i] * 2 >= totals[i]
+      val glyphs = Bitmap.createBitmap(gw, gh, Bitmap.Config.ALPHA_8)
+      try {
+        val canvas = Canvas(glyphs)
+        val stride = glyphs.rowBytes
+        val buffer = ByteArray(stride * gh)
+        var best = -Float.MAX_VALUE
+        for (candidate in candidates) {
+          paint.typeface = candidate.face
+          paint.getTextBounds(text, 0, text.length, bounds)
+          if (bounds.width() <= 0 || bounds.height() <= 0) continue
+          glyphs.eraseColor(Color.TRANSPARENT)
+          canvas.save()
+          canvas.scale(gw.toFloat() / bounds.width(), gh.toFloat() / bounds.height())
+          canvas.drawText(text, -bounds.left.toFloat(), -bounds.top.toFloat(), paint)
+          canvas.restore()
+          glyphs.copyPixelsToBuffer(ByteBuffer.wrap(buffer))
+          var both = 0; var either = 0
+          for (y in 0 until gh) for (x in 0 until gw) {
+            val drawn = (buffer[y * stride + x].toInt() and 255) >= 128; val original = target[y * gw + x]
+            if (drawn && original) both++
+            if (drawn || original) either++
+          }
+          if (either == 0) continue
+          val fitted = 100f * inkHeightPx / bounds.height()
+          val stretch = inkWidth / (bounds.width() * fitted / 100f)
+          val score = both.toFloat() / either - 0.25f * abs(ln(stretch)) + if (candidate.file.isEmpty()) 0.01f else 0f
+          if (score > best) { best = score; font = candidate.font; fontFile = candidate.file; size = fitted; ratio = stretch }
+        }
+      } finally { glyphs.recycle() }
+      if (font.isNotEmpty()) bold = font.contains("Bold") || font.contains("Black")
+    }
+    if (font.isEmpty()) {
+      // The family whose glyphs, at the line's ink height, span the line's ink width most closely.
+      // Helvetica wins near-ties because most screenshots and documents use a sans face.
+      var error = Float.MAX_VALUE
+      for (candidate in if (bold) listOf("Helvetica-Bold", "Times-Bold", "Courier-Bold") else listOf("Helvetica", "Times-Roman", "Courier")) {
+        val fitted = fit(candidate)
+        if (fitted <= 0f || bounds.width() <= 0) continue
+        val width = bounds.width() * fitted / 100f
+        val miss = abs(ln(inkWidth / width)) + if (candidate.startsWith("Helvetica")) 0f else 0.04f
+        if (miss < error) { error = miss; font = candidate; size = fitted; ratio = inkWidth / width }
+      }
+    }
+    if (font.isEmpty()) return null
+    paint.typeface = typeface(font, fontFile)
+    paint.getTextBounds(text, 0, text.length, bounds)
+    val scaleX = ratio.coerceIn(0.7f, 1.4f)
+    val scale = size / 100f
+    val baseline = box.top + bottom + 1 - bounds.bottom * scale
+    val start = box.left + left - bounds.left * scale * scaleX
+    return mapOf("size" to size.toDouble(), "baseline" to baseline / bitmap.height.toDouble(), "left" to max(0f, start) / bitmap.width.toDouble(),
+      "bold" to bold, "font" to font, "scaleX" to scaleX.toDouble())
+  }
+
   private fun channel(color: Int, shift: Int) = color shr shift and 255
   private fun median(colors: List<Int>): Int {
     if (colors.isEmpty()) return 0xFFFFFFFF.toInt()
@@ -188,8 +373,17 @@ internal object ImageText {
   }
   private fun luminance(color: Int) = (0.299f * channel(color, 16) + 0.587f * channel(color, 8) + 0.114f * channel(color, 0)) / 255f
 
-  /** Maps the standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) to system faces. */
-  fun typeface(font: String): Typeface {
+  private val fileFaces = HashMap<String, Typeface>()
+  /** Bundled fonts load from their file; standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) map to system faces. */
+  fun typeface(font: String, file: String = ""): Typeface {
+    if (file.isNotEmpty()) synchronized(fileFaces) {
+      fileFaces[file]?.let { return it }
+      runCatching { Typeface.createFromFile(Uri.parse(file).path ?: file) }.getOrNull()?.let { face ->
+        if (fileFaces.size >= 64) fileFaces.clear()
+        fileFaces[file] = face
+        return face
+      }
+    }
     val base = when {
       font.startsWith("Times") -> Typeface.SERIF
       font.startsWith("Courier") -> Typeface.MONOSPACE
@@ -238,10 +432,11 @@ internal object ImageText {
         }
         val text = edit.optString("text")
         if (text.isNotBlank()) {
-          ink.typeface = typeface(edit.optString("font", "Helvetica"))
+          ink.typeface = typeface(edit.optString("font", "Helvetica"), edit.optString("fontFile"))
           ink.textSize = max(1f, edit.optDouble("size", 16.0).toFloat() * ratio)
           ink.color = 0xFF000000.toInt() or edit.optInt("color", 0x101010)
           ink.isUnderlineText = edit.optBoolean("underline", false)
+          ink.textScaleX = edit.optDouble("scaleX", 1.0).toFloat().coerceIn(0.5f, 2f)
           val x = (edit.optDouble("x") * w).toFloat()
           val y = (edit.optDouble("y") * h).toFloat()
           text.split('\n').take(50).forEachIndexed { line, value ->

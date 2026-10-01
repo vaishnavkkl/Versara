@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 /// iOS apps can only browse their own sandbox, so the explorer is rooted at Documents (also visible in the Files app).
 enum FileExplorer {
   private static let maxEntries = 4000
+  private static let maxCountedFolders = 200
   private static let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey]
 
   private static func root() -> URL {
@@ -29,8 +30,13 @@ enum FileExplorer {
     let sorted = children.map { ($0, (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false) }
       .sorted { $0.1 != $1.1 ? $0.1 : $0.0.lastPathComponent.localizedStandardCompare($1.0.lastPathComponent) == .orderedAscending }
       .prefix(maxEntries)
+    var counted = 0
     let items = sorted.map { url, directory -> [String: Any] in
-      let count = directory ? ((try? FileManager.default.contentsOfDirectory(atPath: url.path).filter { showHidden || !$0.hasPrefix(".") }.count) ?? 0) : -1
+      var count = -1
+      if directory && counted < maxCountedFolders {
+        counted += 1
+        count = (try? FileManager.default.contentsOfDirectory(atPath: url.path).filter { showHidden || !$0.hasPrefix(".") }.count) ?? 0
+      }
       return entry(url, directory: directory, count: count)
     }
     return ["path": folder.path, "parent": folder.path == base.path ? NSNull() : folder.deletingLastPathComponent().path, "items": items, "truncated": children.count > maxEntries]

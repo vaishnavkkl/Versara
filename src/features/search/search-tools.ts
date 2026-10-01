@@ -8,19 +8,16 @@ import { hasNativeImageEditor } from '../../../modules/file-engine/src/ImageEdit
 import { hasNativeEditCanvas } from '../../../modules/pdf-engine/src/PdfEditCanvasView';
 import { ADVANCED_IMAGE_TOOLS } from '../files/image-tools';
 import { getPrivacyTool, PRIVACY_SECTIONS } from '../privacy/privacy-tools';
-import { DOCUMENT_SECTIONS } from '../documents/document-tools';
-import { isDocEditorAvailable } from '../../../modules/doc-engine';
-
 export type SearchTool = Method & { key: string; module: string; keywords?: string; availability: 'ready' | 'build' | 'soon' };
 const catalogs: { module: string; sections: readonly MethodSection[] }[] = [
-  { module: 'PDF', sections: PDF_SECTIONS }, { module: 'Documents', sections: DOCUMENT_SECTIONS }, { module: 'Image', sections: IMAGE_SECTIONS }, { module: 'Privacy', sections: PRIVACY_SECTIONS },
+  { module: 'PDF', sections: PDF_SECTIONS }, { module: 'Image', sections: IMAGE_SECTIONS }, { module: 'Privacy', sections: PRIVACY_SECTIONS },
 ];
 function availability(module: string, id: string): SearchTool['availability'] {
   // The privacy workflow explains native availability after entry, including on older builds.
-  if (module === 'Documents') return isDocEditorAvailable ? 'ready' : 'build';
   if (module === 'Privacy' && getPrivacyTool(id)) return 'ready';
   if (module === 'PDF' && implementedPdfTools.has(id)) {
     const supported = advancedPdfTools.has(id) ? (PdfEngine?.nativeAdvancedToolsVersion ?? 0) >= (['highlight', 'draw', 'shapes', 'sign', 'numbers'].includes(id) ? 2 : 1) : id === 'viewer' ? isPdfEngineAvailable
+      : id === 'replace_text' ? !!PdfEngine?.nativeFindReplaceVersion
       : ['text', 'edit_text', 'remove_text'].includes(id) ? !!PdfEngine?.editPdfText
       : id === 'from_image' ? !!PdfEngine?.imagesToPdf : !!PdfEngine?.organizePdfs;
     return supported ? 'ready' : 'build';

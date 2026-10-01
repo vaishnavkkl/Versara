@@ -62,7 +62,7 @@
       }
       NSURL *source = [options[@"uri"] isKindOfClass:NSString.class] ? [NSURL URLWithString:options[@"uri"]] : nil;
       BOOL preview = [options[@"action"] isEqual:@"preview"];
-      BOOL searching = [options[@"action"] isEqual:@"search"];
+      BOOL searching = [options[@"action"] isEqual:@"search"] || [options[@"action"] isEqual:@"find_text"];
       NSString *outputKey = preview ? @"imageUri" : @"outputUri";
       NSURL *output = [options[outputKey] isKindOfClass:NSString.class] ? [NSURL URLWithString:options[outputKey]] : nil;
       if (![options isKindOfClass:NSMutableDictionary.class] || !source.isFileURL || (!searching && !output.isFileURL)) {

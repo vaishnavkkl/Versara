@@ -1,9 +1,0 @@
-# Read-only DOCX viewer
-
-Existing `.docx` files use `/doc-reader` on both Android and iOS. Blank Word documents and text files still use the existing `/doc-editor` and retain its creation and editing features. A saved blank Word document reopens in the read-only viewer. Legacy Word 97 `.doc` remains unsupported; its binary format cannot be rendered by this DOCX package.
-
-The reader uses `docx-renderer` 0.2.2 (Apache 2.0) inside `react-native-webview`. The renderer supports paginated sections, headers, footers, drawing images and text wrapping. `jszip` (MIT or GPL), `lodash` (MIT), and `konva` (MIT) are bundled locally. These are copied from installed packages by `scripts/prepare-doc-reader.mjs` into `.script.html` app assets, an Expo built-in asset type, and copied with `.js` names into a private cache directory before the WebView opens. This avoids a custom Metro resolver extension. The directory contains only the scripts and a copy of the selected DOCX. No document bytes travel through the React Native bridge or to a network endpoint. The cache directory is removed when the screen closes.
-
-The viewer shows a clear error for files over 25 MB and handles WebView renderer termination. Its CSP and navigation guard prevent the document from opening remote resources. Actual fidelity depends on browser font availability and the renderer's support for each Word layout feature. The complex user sample has floating drawings and section layouts; its exact appearance cannot be claimed without device inspection. HTML rendering cannot guarantee pixel-for-pixel equivalence to Microsoft Word.
-
-Sources: [docx-renderer](https://github.com/recon-vcs/docx-renderer), [React Native WebView](https://github.com/react-native-webview/react-native-webview), [Expo WebView SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/webview/).

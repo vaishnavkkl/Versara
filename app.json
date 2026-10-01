@@ -21,12 +21,38 @@
     "android": {
       "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
+        "backgroundColor": "#F4F5FD",
         "foregroundImage": "./assets/images/app-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "package": "com.versara.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": [
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "content",
+              "mimeType": "application/pdf"
+            },
+            {
+              "scheme": "file",
+              "mimeType": "application/pdf"
+            },
+            {
+              "scheme": "content",
+              "mimeType": "image/*"
+            },
+            {
+              "scheme": "file",
+              "mimeType": "image/*"
+            }
+          ]
+        }
+      ],
       "permissions": [
         "android.permission.MANAGE_EXTERNAL_STORAGE",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -34,10 +60,10 @@
         "android.permission.READ_MEDIA_IMAGES"
       ]
     },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/app-icon.png"
-    },
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "plugins": [
       "./plugins/with-pdf-storage",
       "./plugins/with-local-storage",
@@ -63,8 +89,14 @@
               {
                 "fontFamily": "Sora",
                 "fontDefinitions": [
-                  { "path": "./node_modules/@expo-google-fonts/sora/600SemiBold/Sora_600SemiBold.ttf", "weight": 600 },
-                  { "path": "./node_modules/@expo-google-fonts/sora/800ExtraBold/Sora_800ExtraBold.ttf", "weight": 800 }
+                  {
+                    "path": "./node_modules/@expo-google-fonts/sora/600SemiBold/Sora_600SemiBold.ttf",
+                    "weight": 600
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/sora/800ExtraBold/Sora_800ExtraBold.ttf",
+                    "weight": 800
+                  }
                 ]
               }
             ]
@@ -87,7 +119,8 @@
           "recordAudioAndroid": false,
           "enableBackgroundPlayback": false
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

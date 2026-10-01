@@ -6,13 +6,13 @@ import { usePalette } from '@/theme/colors';
 import { requestThumbnail } from '@/features/files/thumbnail-cache';
 import type { FileKind } from '@/features/files/recent-files';
 
-const icons = { pdf: ['doc.richtext', 'picture-as-pdf'], document: ['doc.text.fill', 'description'], image: ['photo', 'image'], video: ['play.rectangle', 'smart-display'], audio: ['waveform', 'graphic-eq'] } as const;
+const icons = { pdf: ['doc.richtext', 'picture-as-pdf'], image: ['photo', 'image'], video: ['play.rectangle', 'smart-display'], audio: ['waveform', 'graphic-eq'] } as const;
 export const FileThumbnail = memo(function FileThumbnail({ uri, kind, page = 0, active = true }: { uri: string; kind: FileKind; page?: number; active?: boolean }) {
   const colors = usePalette();
   const [thumbnail, setThumbnail] = useState<{ source: string; page: number; uri: string } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
-    if (!active || kind === 'image' || kind === 'document') return;
+    if (!active || kind === 'image') return;
     let current = true;
     const request = requestThumbnail(uri, kind, page);
     void request.promise.then(result => { if (current && result) setThumbnail({ source: uri, page, uri: result }); });

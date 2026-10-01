@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { IMAGE_SECTIONS } from '@/constants/image-methods';
 import { VIDEO_SECTIONS } from '@/constants/video-methods';
 import type { Method, MethodSection } from '@/constants/pdf-methods';
@@ -32,12 +33,12 @@ const AVAILABLE: Record<Kind, Tool[]> = {
     ...editorTools,
     ...(FileEngine?.nativeImageToolsVersion ? IMAGE_SECTIONS.flatMap(section => section.tools as readonly Method[]).filter(tool => ADVANCED_IMAGE_TOOLS.has(tool.id)).map(tool => ({ id: tool.id, title: tool.title.replace(/ Image$/, ''), ios: tool.ios, android: tool.android })) : []),
     { id: 'pdf', title: 'Create PDF', ios: 'doc.richtext', android: 'picture-as-pdf' },
-    { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save-alt' },
+    { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save' },
     { id: 'share', title: 'Share', ios: 'square.and.arrow.up', android: 'share' },
     ...(!FileEngine?.nativeImageToolsVersion ? [{ id: 'info', title: 'Details', ios: 'info.circle' as const, android: 'info-outline' as const }] : []),
   ],
   video: [
-    { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save-alt' },
+    { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save' },
     { id: 'share', title: 'Share', ios: 'square.and.arrow.up', android: 'share' },
     { id: 'info', title: 'Details', ios: 'info.circle', android: 'info-outline' },
   ],
@@ -52,14 +53,22 @@ const TOOLS: Record<Kind, Tool[]> = {
   video: [...AVAILABLE.video, ...upcoming('video', VIDEO_SECTIONS)],
 };
 
-type Props = { kind: Kind; busy: boolean; landscape: boolean; onToggleLandscape: () => void; onAction: (id: string) => void; side?: 'left' | 'right' };
+/** Every tool for the kind, grouped by its method section; unavailable ones are marked `soon`. */
+export function mediaTools(kind: Kind): RailTool[] {
+  return TOOLS[kind].map(tool => ({ ...tool, category: (kind === 'image' ? IMAGE_SECTIONS : VIDEO_SECTIONS).find(section => section.tools.some(item => item.id === tool.id))?.title }));
+}
+
+type Props = {
+  kind: Kind; busy: boolean; landscape: boolean; onToggleLandscape: () => void; onAction: (id: string) => void; side?: 'left' | 'right';
+  quickIds?: string[]; toolsButton?: ComponentProps<typeof ToolRail>['toolsButton'];
+};
 
 /** Bottom tool row in portrait; a side rail in landscape so the preview keeps its height. */
-export function MediaToolbar({ kind, busy, landscape, onToggleLandscape, onAction, side = 'right' }: Props) {
+export function MediaToolbar({ kind, busy, landscape, onToggleLandscape, onAction, side = 'right', quickIds, toolsButton }: Props) {
   const tools: RailTool[] = [
     { id: 'orientation', title: landscape ? 'Portrait' : 'Landscape', ios: landscape ? 'rectangle.portrait' : 'rectangle', android: 'screen-rotation', highlighted: true, accessibilityLabel: `Switch to ${landscape ? 'portrait' : 'landscape'} view` },
-    ...TOOLS[kind].map(tool => ({ ...tool, category: (kind === 'image' ? IMAGE_SECTIONS : VIDEO_SECTIONS).find(section => section.tools.some(item => item.id === tool.id))?.title })),
+    ...mediaTools(kind),
   ];
-  return <ToolRail tools={tools} side={side} showToolbox={side !== 'left'} quickIds={landscape ? side === 'left' ? ['orientation', 'crop', 'rotate', 'resize'] : ['edit_text', 'text', 'filters', 'save'] : undefined} busyId={busy ? 'pdf' : null} disabled={busy} landscape={landscape}
-    onAction={id => { if (id === 'orientation') onToggleLandscape(); else onAction(id); }} />;
+  return <ToolRail tools={tools} side={side} showToolbox={side !== 'left'} quickIds={landscape && side === 'left' ? ['orientation', 'crop', 'rotate', 'resize'] : quickIds ?? (landscape ? ['edit_text', 'text', 'filters', 'save'] : undefined)} busyId={busy ? 'pdf' : null} disabled={busy} landscape={landscape}
+    toolsButton={side === 'left' ? undefined : toolsButton} onAction={id => { if (id === 'orientation') onToggleLandscape(); else onAction(id); }} />;
 }

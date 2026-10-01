@@ -13,6 +13,8 @@ import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { EditorOption } from '@/components/editor-option';
 import { ScreenHeader } from '@/components/screen-header';
+import { ToolActionRow } from '@/components/tool-action-row';
+import { FitSlotButton } from '@/components/fit-slot';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -25,7 +27,7 @@ import { getRecentFile, rememberFile } from '../files/recent-files';
 import { askNewFileName, saveToDevice } from '../files/save-file';
 import { ZoomableImage } from '../files/zoomable-image';
 import { PdfDocumentPreview } from '../pdf/pdf-document-preview';
-import { PdfPreviewToolbar, PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
+import { PdfPreviewBody, PdfPreviewToolbar, PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
 import { usePdfScreenActive } from '../pdf/use-pdf-screen-active';
 
 type Mode = 'scan' | 'pdf_scan' | 'redact' | 'metadata';
@@ -364,10 +366,12 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   const renderFinding = useCallback(({ item }: { item: Finding }) => <PrivacyFindingRow item={item} selected={selectedFindingIds.has('scan-' + item.id)} busy={busy} onToggle={toggleFindingRow} />, [selectedFindingIds, busy, toggleFindingRow]);
   const secondaryText = { color: colors.secondaryLabel };
   const totalSelected = scan?.findings.filter(finding => selectedFindingIds.has('scan-' + finding.id)).length ?? 0;
+  const historyButtons = mode !== 'metadata' && <HeaderHistoryButtons canUndo={history.canUndo} canRedo={history.canRedo} disabled={busy} onUndo={() => restoreHistory(false)} onRedo={() => restoreHistory(true)} />;
   return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <ScreenHeader title={TITLES[mode]} onBack={close}>
-      {mode !== 'metadata' && <HeaderHistoryButtons canUndo={history.canUndo} canRedo={history.canRedo} disabled={busy} onUndo={() => restoreHistory(false)} onRedo={() => restoreHistory(true)} />}
-    </ScreenHeader>
+    <ScreenHeader title={TITLES[mode]} onBack={close} share={{ onPress: () => image && shareNamedFile(image), disabled: busy || !image,
+      label: saved ? 'Share private copy' : preview ? 'Share previewed private copy' : 'Preview the private copy before sharing' }}
+      save={{ onPress: () => saved ? publishToDevice() : saveCopy(), disabled: busy || (!saved && !preview),
+        label: saved ? 'Save private copy to device' : preview ? 'Save private copy' : 'Preview the private copy before saving' }} />
     {!available ? <View style={styles.empty}>
       <UniversalIcon ios="lock.shield" android="security" size={36} color={colors.privacyInk} />
       <ThemedText>Update the app build to use native privacy scanning and export.</ThemedText>
@@ -384,7 +388,8 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
         <ThemedText numberOfLines={1} style={styles.grow}>{source.name}</ThemedText>
         <ThemedText style={[styles.note, secondaryText]}>{info.width} × {info.height}</ThemedText>
       </View>
-      {isPdf && !image && <PdfPreviewToolbar page={page} count={pageCount} disabled={busy} onPageChange={changePage} />}
+      {!isPdf && !image && mode !== 'metadata' && <ToolActionRow left={<><FitSlotButton />{historyButtons}</>} />}
+      <PdfPreviewBody toolbar={isPdf && !image ? <PdfPreviewToolbar page={page} count={pageCount} disabled={busy} onPageChange={changePage} leading={historyButtons} /> : null}>
       {isPdf && image ? <PdfDocumentPreview uri={image.uri} count={pageCount} embedded onClose={close} /> : image ? <PdfPreviewStage hint={saved ? 'Saved PNG copy. Pinch to zoom and review.' : 'Final PNG preview. Review every cover before saving.'} onFit={() => setFit(value => value + 1)}>
         {active && <ZoomableImage key={image.uri + ':' + fit} uri={image.uri} onClose={close} />}
       </PdfPreviewStage>
@@ -397,6 +402,7 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
             disabled={busy || (!selecting && marks.length >= 300)} onMark={event => onMark(event.nativeEvent.mark)}
             onSelection={event => { try { setSelectedId(event.nativeEvent.mark ? (JSON.parse(event.nativeEvent.mark) as PdfMark).id : undefined); } catch { setSelectedId(undefined); } }} />}
         </PdfPreviewStage> : <PdfPagePreview image={basePreview} active={active} hint="Image preview. The exported PNG copy removes metadata." />}
+      </PdfPreviewBody>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.message}>{error}</ThemedText>}
       {mode !== 'metadata' && !PdfMarkupView && <ThemedText style={styles.message}>Update the app build to draw and review covers on the image.</ThemedText>}
       {!!notice && <ThemedText accessibilityLiveRegion="polite" style={[styles.message, secondaryText]}>{notice}</ThemedText>}

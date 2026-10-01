@@ -60,6 +60,19 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   var requestedZoom = 1f
   var zoomRevision = 0
   var dark = true
+  var focusCurrent = false
+  private fun applyRowFocus(row: ZoomImageView, animate: Boolean) {
+    val focused = !focusCurrent || !vertical || row.pageIndex == lastPage
+    val alpha = if (focused) 1f else 0.35f
+    if (animate) row.animate().alpha(alpha).setDuration(160).start() else { row.animate().cancel(); row.alpha = alpha }
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+      val radius = 10 * resources.displayMetrics.density
+      row.setRenderEffect(if (focused) null else android.graphics.RenderEffect.createBlurEffect(radius, radius, android.graphics.Shader.TileMode.CLAMP))
+    }
+  }
+  private fun updateFocus(animate: Boolean = true) {
+    for (i in 0 until list.childCount) (list.getChildAt(i) as? ZoomImageView)?.let { applyRowFocus(it, animate) }
+  }
   private var searchPage = -1
   private var searchRects = emptyList<RectF>()
   private var searchValue = ""
@@ -163,6 +176,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
       val row = (convertView as? ZoomImageView) ?: ZoomImageView(context)
       row.pageIndex = position
+      applyRowFocus(row, false)
       row.searchRects = if (position == searchPage) searchRects else emptyList()
       val binding = "${documentVersion.get()}:$position:$width"
       if (row.binding == binding) return row
@@ -214,6 +228,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         val current = if (top != null && top.bottom < (view.height / 2) && first + 1 < total) first + 1 else first
         if (current != lastPage) {
           lastPage = current
+          updateFocus()
           badge.text = "${current + 1} / $total"
           onPageChange(mapOf("page" to current, "pageCount" to total))
         }
@@ -302,6 +317,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       image.setZoom(requestedZoom)
       if (vertical) (list.getChildAt(0) as? ZoomImageView)?.setZoom(requestedZoom)
     }
+    updateFocus()
     revealSearch()
   }
 

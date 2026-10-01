@@ -7,7 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { createImportDirectory, disposeImports } from '../files/file-storage';
 import { usePdfScreenActive } from './use-pdf-screen-active';
-import { PdfPagePreview, PdfPreviewFooter, PdfPreviewStage, PdfPreviewToolbar, type PdfPreviewImage } from './pdf-preview';
+import { PdfPagePreview, PdfPreviewBody, PdfPreviewFooter, PdfPreviewStage, PdfPreviewToolbar, type PdfPreviewImage } from './pdf-preview';
 
 /** Read the native PNG's 24-byte header without decoding/caching another bitmap. */
 function previewDimensions(image: File) {
@@ -80,10 +80,11 @@ export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword 
     return () => { current = false; PdfEngine?.cancelTextEdit(id); };
   }, [uri, page, inputPassword, active, retry, directory]);
   return <View style={styles.screen}>
-    <PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>
+    <PdfPreviewBody pages={inputPassword ? null : { uri, count, page: page - 1, onSelect: target => { if (!disabled && target + 1 !== page) changePage(target + 1); } }} toolbar={<PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>}>
     {preview ? <PdfPagePreview image={preview} active={active} rotation={rotation} /> : <PdfPreviewStage hint="Original PDF">
       <View style={styles.empty}>{loading ? <><AppLoader /><ThemedText>Preparing page...</ThemedText></> : <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Retry preview" onPress={() => setRetry(value => value + 1)} /></>}</View>
     </PdfPreviewStage>}
+    </PdfPreviewBody>
     {!embedded && <PdfPreviewFooter><ThemedText>Original PDF - changes appear in the saved result.</ThemedText><ToolButton title="Back to tool" secondary onPress={onClose} /></PdfPreviewFooter>}
   </View>;
 }

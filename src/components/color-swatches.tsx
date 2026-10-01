@@ -1,6 +1,6 @@
 import { Host, Slider } from '@expo/ui';
 import { memo, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View, useColorScheme } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View, useColorScheme } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
@@ -64,7 +64,7 @@ export const ColorSwatches = memo(function ColorSwatches({ value, onChange, orig
     </Host></View>
   </View>;
   return <View>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.row}>
+    <View style={styles.row}>
       {items.map(item => {
         const selected = value === item.value;
         return <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={`${item.label} colour`} accessibilityState={{ selected, disabled }} disabled={disabled}
@@ -81,7 +81,7 @@ export const ColorSwatches = memo(function ColorSwatches({ value, onChange, orig
         </View>
         <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>Custom</ThemedText>
       </Pressable>
-    </ScrollView>
+    </View>
     {custom && <View style={[styles.picker, { borderColor: colors.separator }]}>
       <View style={styles.sliderRow}>
         <View style={[styles.preview, { backgroundColor: hexColor(fromHsv(hsv)), borderColor: colors.separator }]} />
@@ -101,7 +101,7 @@ export const ColorSwatches = memo(function ColorSwatches({ value, onChange, orig
 });
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 4, paddingVertical: 2 },
   hit: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   swatch: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   caption: { fontSize: 10, lineHeight: 12 },

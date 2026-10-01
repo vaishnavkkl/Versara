@@ -97,7 +97,7 @@ export function discardEditorDraft(id: string) {
 }
 
 export function pdfDraftId(uri: string, tool: string) {
-  return `pdf:${storedUri(uri)}:${['edit_text', 'text', 'remove_text'].includes(tool) ? 'text' : tool}`;
+  return `pdf:${storedUri(uri)}:${['edit_text', 'text', 'remove_text', 'replace_text'].includes(tool) ? 'text' : tool}`;
 }
 
 export function removeEditorDraft(id: string) {

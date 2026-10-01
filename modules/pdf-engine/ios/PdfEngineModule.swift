@@ -14,7 +14,11 @@ public class PdfEngineModule: Module {
     Constant("nativePdfPrivacyVersion") { 1 }
     Constant("nativeSignatureImageVersion") { 1 }
     Constant("nativeStrokePatternsVersion") { 1 }
+    Constant("nativeMarkupZoomVersion") { 1 }
+    Constant("nativeMarkupPanVersion") { 1 }
     Constant("nativeReaderSearchVersion") { 1 }
+    Constant("nativeFindReplaceVersion") { 1 }
+    Constant("nativeReaderFocusVersion") { 1 }
     Constant("nativeSearchableOcrVersion") { 1 }
     Constant("nativeMarkupEditingVersion") { 1 }
     Constant("nativeAnnotationsVersion") { 1 }
@@ -61,12 +65,14 @@ public class PdfEngineModule: Module {
       Prop("zoom") { (view: PdfEngineView, zoom: Double) in view.requestedZoom = zoom }
       Prop("zoomRevision") { (view: PdfEngineView, revision: Int) in view.zoomRevision = revision }
       Prop("dark") { (view: PdfEngineView, dark: Bool) in view.dark = dark }
+      Prop("focusCurrent") { (view: PdfEngineView, value: Bool) in view.focusCurrent = value }
       Prop("searchHighlights") { (view: PdfEngineView, value: String) in view.searchHighlights = value }
       OnViewDidUpdateProps { (view: PdfEngineView) in view.applyProps() }
     }
     View(PdfMarkupView.self) {
-      Events("onMark", "onSelection")
+      Events("onMark", "onSelection", "onZoom", "onPageSwipe")
       Prop("source") { (view: PdfMarkupView, value: String) in view.setSource(value) }
+      Prop("zoomRequest") { (view: PdfMarkupView, value: String) in view.requestZoom(value) }
       Prop("marks") { (view: PdfMarkupView, value: String) in view.setMarks(value) }
       Prop("mode") { (view: PdfMarkupView, value: String) in view.mode = value }
       Prop("inkColor") { (view: PdfMarkupView, value: String) in view.inkColor = value }

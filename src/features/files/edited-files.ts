@@ -29,11 +29,11 @@ export async function listEditedFiles(search = '', kind?: FileKind) {
   const database = await db();
   const rows = kind
     ? await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY modified DESC LIMIT ${EDITED_LIMIT}`, kind, search.trim())
-    : await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE instr(lower(name), lower(?)) > 0 ORDER BY modified DESC LIMIT ${EDITED_LIMIT}`, search.trim());
+    : await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind != 'document' AND instr(lower(name), lower(?)) > 0 ORDER BY modified DESC LIMIT ${EDITED_LIMIT}`, search.trim());
   return rows.map(restored);
 }
 export async function countEditedFiles() {
-  const row = await (await db()).getFirstAsync<{ total: number }>('SELECT COUNT(*) AS total FROM edited_files');
+  const row = await (await db()).getFirstAsync<{ total: number }>("SELECT COUNT(*) AS total FROM edited_files WHERE kind != 'document'");
   return row?.total ?? 0;
 }
 export async function findEditedFile(uri: string) {

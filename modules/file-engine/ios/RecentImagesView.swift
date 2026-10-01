@@ -4,7 +4,6 @@ import Photos
 import ImageIO
 import CoreGraphics
 import AVFoundation
-import QuickLookThumbnailing
 
 private struct RecentImage: Decodable {
   let id: String
@@ -53,6 +52,12 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   private lazy var listPixels = lowMemory ? 72 : 112
   private lazy var gridPixels = lowMemory ? 144 : 208
 
+  let onRefresh = EventDispatcher()
+  private let refresher = UIRefreshControl()
+  @objc private func pulled() { if disabled { refresher.endRefreshing() } else { onRefresh() } }
+  func setRefreshing(_ value: Bool) {
+    if value, !refresher.isRefreshing { refresher.beginRefreshing() } else if !value, refresher.isRefreshing { refresher.endRefreshing() }
+  }
   required init(appContext: AppContext) {
     super.init(appContext: appContext)
     worker.maxConcurrentOperationCount = lowMemory ? 1 : 2
@@ -68,6 +73,8 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
     list.isPrefetchingEnabled = false
     list.alwaysBounceVertical = true
     list.register(RecentImageCell.self, forCellWithReuseIdentifier: "image")
+    refresher.addTarget(self, action: #selector(pulled), for: .valueChanged)
+    list.refreshControl = refresher
     addSubview(list)
     list.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:))))
     memoryObserver = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
@@ -193,21 +200,6 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
             if operation?.isCancelled == false { finish(image ?? nil) }
             return
           }
-          if item.kind == "document" {
-            let image = try? PdfFolderAccess.withAccess(to: url) { () -> UIImage? in
-              let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: size, height: size), scale: 1, representationTypes: .thumbnail)
-              let done = DispatchSemaphore(value: 0)
-              var result: UIImage?
-              QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
-                result = representation?.uiImage
-                done.signal()
-              }
-              _ = done.wait(timeout: .now() + 8)
-              return result
-            }
-            if operation?.isCancelled == false { finish(image ?? nil) }
-            return
-          }
           if item.kind == "video" || item.kind == "audio" {
             let image = item.kind == "video" ? Self.videoFrame(url, size: size) : Self.audioArtwork(url, size: size)
             if operation?.isCancelled == false { finish(image) }
@@ -278,11 +270,11 @@ private final class RecentImageCell: UICollectionViewCell {
   func configure(_ item: RecentImage, grid: Bool, label: UIColor, secondary: UIColor, surface: UIColor) {
     releaseImage()
     self.grid = grid
-    image.contentMode = item.kind == "pdf" || item.kind == "document" ? .scaleAspectFit : .scaleAspectFill
+    image.contentMode = item.kind == "pdf" ? .scaleAspectFit : .scaleAspectFill
     contentView.backgroundColor = surface
     name.text = item.name; name.textColor = label
     detail.text = item.detail; detail.textColor = secondary
-    let symbol = item.kind == "pdf" ? "doc.richtext" : item.kind == "document" ? "doc.text" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
+    let symbol = item.kind == "pdf" ? "doc.richtext" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
     image.image = UIImage(systemName: symbol); image.tintColor = secondary
     remove.tintColor = grid ? .white : secondary.withAlphaComponent(0.55)
     remove.layer.shadowOpacity = grid ? 0.45 : 0

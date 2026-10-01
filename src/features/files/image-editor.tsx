@@ -19,16 +19,29 @@ import { toolColors } from '@/theme/tool-colors';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
+import { useSliderValue } from '@/hooks/use-slider-value';
 import ImageEditorView, { hasNativeImageEditor, type ImageCrop } from '../../../modules/file-engine/src/ImageEditorView';
 import { FileEngine } from '../../../modules/file-engine';
 import { type RecentFile } from './recent-files';
 import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
-import { formatSize, shareFile } from './file-storage';
+import { formatSize, shareFile, shareNamedFile, shareRenderedFile } from './file-storage';
+import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
+import { OptionSheet } from '@/components/option-sheet';
 
 export type EditorTab = 'crop' | 'rotate' | 'adjust' | 'filters' | 'resize' | 'export';
 type Edits = { rotation: number; flipH: boolean; flipV: boolean; brightness: number; contrast: number; saturation: number; warmth: number; filter: string };
 const NEUTRAL: Edits = { rotation: 0, flipH: false, flipV: false, brightness: 0, contrast: 1, saturation: 1, warmth: 0, filter: 'none' };
 
+// Form-like controls open in a sheet; chip rows and the single adjustment slider stay docked under the live preview.
+const SHEET_TABS = new Set<EditorTab>(['resize', 'export']);
+const ADJUSTMENTS = [
+  { id: 'brightness', label: 'Brightness', icon: { ios: 'sun.max', android: 'brightness-6' } },
+  { id: 'contrast', label: 'Contrast', icon: { ios: 'circle.lefthalf.filled', android: 'contrast' } },
+  { id: 'saturation', label: 'Saturation', icon: { ios: 'drop.halffull', android: 'opacity' } },
+  { id: 'warmth', label: 'Warmth', icon: { ios: 'thermometer.medium', android: 'thermostat' } },
+] as const;
+type Adjustment = (typeof ADJUSTMENTS)[number]['id'];
+const TOOL_ADJUSTMENT: Record<string, Adjustment> = { brightness: 'brightness', contrast: 'contrast', saturation: 'saturation', temperature: 'warmth' };
 const TABS: { id: EditorTab; title: string; ios: 'crop' | 'rotate.right' | 'slider.horizontal.3' | 'camera.filters' | 'arrow.up.left.and.arrow.down.right' | 'square.and.arrow.down'; android: 'crop' | 'rotate-right' | 'tune' | 'filter-vintage' | 'photo-size-select-large' | 'save-alt' }[] = [
   { id: 'crop', title: 'Crop', ios: 'crop', android: 'crop' },
   { id: 'rotate', title: 'Rotate', ios: 'rotate.right', android: 'rotate-right' },
@@ -89,9 +102,10 @@ const ImageAdjustmentSlider = memo(function ImageAdjustmentSlider({ setting, val
   const mode = useAppearance(state => state.mode);
   const config = SLIDERS[setting];
   const handleChange = useCallback((next: number) => onChange(setting, next), [onChange, setting]);
+  const [shown, change] = useSliderValue(value, handleChange, (config.max - config.min) / 200);
   return <View style={styles.sliderRow}>
     <ThemedText style={styles.sliderLabel}>{config.label}</ThemedText>
-    <View style={styles.grow}><Host colorScheme={mode} seedColor={colors.accent} matchContents={{ vertical: true }}><Slider value={value} min={config.min} max={config.max} onValueChange={handleChange} disabled={disabled} /></Host></View>
+    <View style={styles.grow}><Host colorScheme={mode} seedColor={colors.accent} matchContents={{ vertical: true }}><Slider value={shown} min={config.min} max={config.max} onValueChange={change} disabled={disabled} /></Host></View>
     <ThemedText style={[styles.sliderValue, { color: colors.secondaryLabel }]}>{config.format(value)}</ThemedText>
   </View>;
 });
@@ -108,7 +122,8 @@ function validDraft(value: unknown): value is EditorState {
 
 
 /** Controls in React; decoding, preview, crop handles and export all run natively. */
-export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; initialTab?: EditorTab }) {
+export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: string; initialTab?: EditorTab; tool?: string }) {
+  const [adjustment, setAdjustment] = useState<Adjustment>(TOOL_ADJUSTMENT[tool ?? ''] ?? 'brightness');
   const workspace = useImageWorkspace(id);
   const [formats, setFormats] = useState<Format[]>(Platform.OS === 'android' ? ['jpeg','png','webp'] : ['jpeg','png']);
   const colors = usePalette();
@@ -116,6 +131,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   const [file, setFile] = useState<RecentFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<EditorTab>(initialTab);
+  const [sheetOpen, setSheetOpen] = useState(SHEET_TABS.has(initialTab));
   const locked = useRef(false);
   const history = useEditHistory<EditorState>({ edits: NEUTRAL, aspect: initialTab === 'crop' ? 'free' : 'none', crop: null, resize: DEFAULT_RESIZE, format: 'jpeg', quality: initialTab === 'export' ? 80 : 92 });
   const historyUpdate = useRef(history.update);
@@ -147,7 +163,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   const restoreCrop = (value: ImageCrop | null) => setCropRequest(JSON.stringify({ ...(value ?? { reset: true }), revision: Date.now() }));
   const [busy, setBusy] = useState(false);
   const [landscape, setLandscape] = useState(false);
-  const { width, height: windowHeight, fontScale } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const sideWidth = Math.round(Math.min(440, Math.max(300, width * 0.4)));
   const mounted = useRef(true);
 
@@ -182,8 +198,15 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
   function requestClose() {
     if (locked.current || busy) return;
-    if (!changed && !workspace.changed) { close(); return; }
-    showDialog('Discard edits?', 'Your changes to this image have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void Promise.all([draft.clear(), workspace.discard()]).then(close).catch(cause => setError((cause as Error).message)); } }], { ios: 'photo', android: 'image' });
+    if (!changed) { close(); return; }
+    showDialog('Discard edits?', 'Changes in this tool have not been applied. Changes applied earlier stay.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void draft.clear().then(close).catch(cause => setError((cause as Error).message)); } }], { ios: 'photo', android: 'image' });
+  }
+  /** Applies this tool's edits to the working image and returns to its preview, where everything is saved once. */
+  async function applyAndReturn() {
+    try {
+      await applyToWorkspace();
+      if (mounted.current) router.dismissTo({ pathname: '/file-preview', params: { id } });
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not apply the changes.'); }
   }
   useEffect(() => { closeRef.current = requestClose; });
 
@@ -232,6 +255,22 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     }
   }
 
+  /** Shares a fresh render of the current edits, or the working image when nothing has changed. */
+  async function shareImage() {
+    if (!file || !FileEngine || locked.current || busy || !draft.ready) return;
+    const snapshot = history.getCurrent();
+    if (!hasChanges(snapshot)) { await shareNamedFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size }); return; }
+    const dimensions = hasResize(snapshot) ? resolveResize(resizeSourceFor(size, snapshot), snapshot.resize) : undefined;
+    if (hasResize(snapshot) && !dimensions) throw new Error('Wait for the image dimensions to load.');
+    const engine = FileEngine;
+    const base = file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '').slice(0, 80) || 'Image';
+    locked.current = true; setBusy(true); Keyboard.dismiss();
+    try {
+      await shareRenderedFile(`${base} - edited${EXTENSIONS[snapshot.format]}`, `image/${snapshot.format}`,
+        outputUri => engine.editImage(JSON.stringify({ uri: file.uri, outputUri, edits: snapshot.edits, crop: snapshot.crop, ...dimensions, format: snapshot.format, quality: snapshot.quality })));
+    } finally { locked.current = false; if (mounted.current) setBusy(false); }
+  }
+
   async function applyToWorkspace() {
     if (!file || !FileEngine || locked.current || busy || !draft.ready) throw new Error('Wait for the image to finish loading.');
     const snapshot = history.getCurrent();
@@ -252,9 +291,6 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     ? <View style={[styles.chips, styles.wrap]}>{children}</View>
     : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{children}</ScrollView>;
   const panel = <View style={styles.panel}>
-    {!!FileEngine?.nativeImageHistoryVersion && <View style={[styles.chips, styles.wrap]}>
-      <EditorOption label="Original" selected={compare} disabled={busy || !draft.ready} onPress={() => { if (locked.current) return; restoreCrop(compare ? crop : null); setCompare(value => !value); }} />
-    </View>}
     {!!draft.error && <ThemedText accessibilityRole="alert" style={styles.note}>{draft.error}</ThemedText>}
 
     {tab === 'crop' && chipRow(<>{ASPECTS.map(item => <EditorOption key={item.id} selected={aspect === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => { setAspect(item.id); if (item.id === 'none') setCrop(null); }} />)}</>)}
@@ -267,11 +303,11 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
     </>)}
     {tab === 'rotate' && !!FileEngine?.nativeImageToolsVersion && slider('straighten', straighten)}
     {tab === 'adjust' && <>
-      {slider('brightness', edits.brightness)}
-      {slider('contrast', edits.contrast)}
-      {slider('saturation', edits.saturation)}
-      {slider('warmth', edits.warmth)}
-      <View style={styles.chips}><EditorOption label="Reset adjustments" disabled={controlsDisabled} onPress={() => update({ brightness: 0, contrast: 1, saturation: 1, warmth: 0 })} /></View>
+      {chipRow(<>
+        {ADJUSTMENTS.map(item => <EditorOption key={item.id} compact selected={adjustment === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => setAdjustment(item.id)} />)}
+        <EditorOption compact label="Reset all" icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} disabled={controlsDisabled} onPress={() => update({ brightness: 0, contrast: 1, saturation: 1, warmth: 0 })} />
+      </>)}
+      {slider(adjustment, edits[adjustment])}
     </>}
     {tab === 'filters' && chipRow(<>{FILTERS.map(item => <EditorOption key={item.id} selected={edits.filter === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => update({ filter: item.id })} />)}</>)}
     {tab === 'resize' && <>
@@ -286,7 +322,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
   </View>;
 
   const tabs = <View style={landscape ? styles.tabColumn : [styles.tabRow, { flexDirection: 'row', flexWrap: 'wrap' }]}>
-    {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} disabled={!draft.ready || busy || compare} onPress={() => { if (locked.current) return; setTab(item.id); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={[styles.tab, !landscape && { width: fontScale >= 1.4 ? '31%' : '15.5%' }]}>
+    {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} disabled={!draft.ready || busy || compare} onPress={() => { if (locked.current) return; setTab(item.id); setSheetOpen(SHEET_TABS.has(item.id)); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={[styles.tab, !landscape && { width: fontScale >= 1.4 ? '31%' : '15.5%' }]}>
       <View style={[styles.tabIcon, { backgroundColor: tab === item.id ? toolColors(item.id, colors).ink : toolColors(item.id, colors).surface }]}>
         <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : toolColors(item.id, colors).ink} />
       </View>
@@ -296,16 +332,25 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
 
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
-    <ScreenHeader title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}>
-      <HeaderHistoryButtons canUndo={!!file && draft.ready && history.canUndo && !busy && !compare} canRedo={!!file && draft.ready && history.canRedo && !busy && !compare} disabled={!file || busy || !draft.ready || compare} onUndo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.undo().crop); }} onRedo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.redo().crop); }} />
-      <ImageWorkspaceTools id={id} current={tab} disabled={!file || busy || !draft.ready || compare} onApply={applyToWorkspace} />
-      <Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait view' : 'Switch to landscape view'} onPress={() => setLandscape(value => !value)} style={styles.headerButton}>
-        <UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.systemBlue} />
-      </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Save edited image" disabled={!file || busy || !draft.ready || compare} onPress={() => { void save(); }} style={[styles.save, getGradients(colors).module, (!file || busy || !draft.ready || compare) && styles.disabled]}>
-        {busy ? <AppLoader color={colors.moduleText} /> : <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText>}
-      </Pressable>
-    </ScreenHeader>
+    <ScreenHeader title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}
+      share={{ onPress: shareImage, disabled: !file || busy || !draft.ready, label: changed ? 'Share edited image' : 'Share image' }}
+      save={{ onPress: () => tab === 'export' ? save() : applyAndReturn(), disabled: !file || busy || !draft.ready || compare, label: tab === 'export' ? 'Save edited image' : 'Apply changes and return to the image' }} />
+    <ToolActionRow
+      left={<>
+        <HeaderHistoryButtons canUndo={!!file && draft.ready && history.canUndo && !busy && !compare} canRedo={!!file && draft.ready && history.canRedo && !busy && !compare} disabled={!file || busy || !draft.ready || compare} onUndo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.undo().crop); }} onRedo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.redo().crop); }} />
+        {!!FileEngine?.nativeImageHistoryVersion && <ToolRowButton label={compare ? 'Show changes' : 'Compare with original'} icon={{ ios: 'square.split.2x1', android: 'compare' }} selected={compare} disabled={!file || busy || !draft.ready} onPress={() => { if (locked.current) return; restoreCrop(compare ? crop : null); setCompare(value => !value); }} />}
+      </>}
+      right={<>
+        <ImageWorkspaceTools id={id} current={tab} disabled={!file || busy || !draft.ready || compare} onApply={applyToWorkspace} />
+        <ToolRowButton label={landscape ? 'Switch to portrait view' : 'Switch to landscape view'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={() => setLandscape(value => !value)} />
+        {tab === 'export'
+          ? <Pressable accessibilityRole="button" accessibilityLabel="Save edited image" disabled={!file || busy || !draft.ready || compare} onPress={() => { void save(); }} style={[styles.save, getGradients(colors).module, (!file || busy || !draft.ready || compare) && styles.disabled]}>
+            {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="square.and.arrow.down" android="save" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText></>}
+          </Pressable>
+          : <Pressable accessibilityRole="button" accessibilityLabel="Apply changes and return to the image" disabled={!file || busy || !draft.ready || compare} onPress={() => { void applyAndReturn(); }} style={[styles.save, getGradients(colors).module, (!file || busy || !draft.ready || compare) && styles.disabled]}>
+            {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="checkmark" android="check" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Apply</ThemedText></>}
+          </Pressable>}
+      </>} />
     {error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
     {!hasNativeImageEditor || !ImageEditorView ? <View style={styles.center}><ThemedText style={styles.note}>Install a new development build to edit images.</ThemedText></View>
       : !file ? <View style={styles.center}>{!error && <AppLoader />}</View>
@@ -316,8 +361,9 @@ export function ImageEditorScreen({ id, initialTab = 'crop' }: { id: string; ini
             onCropChange={({ nativeEvent }) => { if (!compare && draft.ready) setCrop(nativeEvent.width ? nativeEvent as ImageCrop : null); }} />}
         </View>
         <View style={[landscape ? [styles.side, { width: sideWidth }] : styles.bottom, { borderColor: colors.separator }]}>
-          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <><ScrollView style={{ maxHeight: windowHeight * 0.4, flexGrow: 0 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets keyboardDismissMode="on-drag">{panel}</ScrollView>{tabs}</>}
+          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{tabs}</>}
         </View>
+        {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
       </View>}
   </KeyboardAvoidingView>;
 }
@@ -329,7 +375,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: s.xl },
   error: { padding: s.md },
   headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  save: { minHeight: 40, minWidth: 68, borderRadius: 20, paddingHorizontal: s.lg, alignItems: 'center', justifyContent: 'center' },
+  save: { minHeight: 40, minWidth: 68, borderRadius: 20, paddingHorizontal: s.lg, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.5 },
   bottom: { borderTopWidth: StyleSheet.hairlineWidth },
   side: { borderLeftWidth: StyleSheet.hairlineWidth },

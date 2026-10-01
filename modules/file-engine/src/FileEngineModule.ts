@@ -4,6 +4,10 @@ import { NativeModule, requireOptionalNativeModule } from 'expo';
 export type RecognizedTextLine = {
   id: number; text: string; x: number; y: number; width: number; height: number; angle: number;
   color: number; background: number; backgroundLeft: number; backgroundRight: number;
+  /** Estimated from the line's ink when it contrasts with the background: size in analysed-image pixels, normalised baseline and start. */
+  size?: number; baseline?: number; left?: number; bold?: boolean;
+  /** Closest standard PDF font name, and the horizontal stretch that makes it span the original's width. */
+  font?: string; scaleX?: number;
 };
 export type RecognizedImageText = { width: number; height: number; lines: RecognizedTextLine[] };
 
@@ -75,7 +79,8 @@ declare class FileEngine extends NativeModule {
   readonly nativeVideoVersion?: number;
   readonly nativeImageEditorVersion?: number;
   readonly nativeImageTextVersion?: number;
-  recognizeImageText(uri: string): Promise<RecognizedImageText>;
+  /** `fonts` (version 2+) is a JSON map of bundled font names to local files, matched against each line's shapes. */
+  recognizeImageText(uri: string, fonts?: string): Promise<RecognizedImageText>;
   cancelImageTextRecognition?(uri: string): void;
   renderImageText(options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }>;
   editImage(options: string): Promise<{ uri: string; width: number; height: number; size: number; mimeType: string }>;
@@ -87,9 +92,6 @@ declare class FileEngine extends NativeModule {
   readonly nativeDeviceDeleteVersion?: number;
   /** Deletes a file listed from the device (MediaStore, Photos or a chosen folder). */
   deleteDeviceFile(uri: string): Promise<boolean>;
-  readonly nativeRecentDocumentsVersion?: number;
-  /** DOCX and TXT files, using the same all-files access (Android) or folder access (iOS) as PDFs. */
-  listRecentDocuments(limit: number, search: string): Promise<DeviceRecentFile[]>;
   getPdfAccessAsync(): Promise<FileAccessResult>;
   requestPdfAccessAsync(): Promise<FileAccessResult>;
   scanPdfFiles(id: string): Promise<number>;

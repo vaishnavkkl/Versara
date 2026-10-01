@@ -4,15 +4,15 @@ import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 import { FileEngine, type DeviceRecentFile } from '../../../modules/file-engine';
 import { retainPickerCopy } from '../pdf/pdf-cache';
 
-export type FileKind = 'pdf' | 'image' | 'video' | 'audio' | 'document';
+export type FileKind = 'pdf' | 'image' | 'video' | 'audio';
 export type RecentFile = { id: string; uri: string; name: string; kind: FileKind; mimeType: string; size: number; opened: number };
 export type LibraryItem = RecentFile & { source: 'library' };
 export type DeviceItem = DeviceRecentFile & { kind: FileKind; opened: number };
 export type RecentListItem = LibraryItem | DeviceItem;
 /** Libraries show only the most recent items; older files stay reachable through Open and search. */
 export const RECENT_LIMIT = 30;
-export const FILE_LABELS = { pdf: 'PDF', image: 'Image', video: 'Video', audio: 'Audio', document: 'Document' } as const;
-const mimeTypes = { pdf: 'application/pdf', image: 'image/*', video: 'video/*', audio: 'audio/*', document: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+export const FILE_LABELS = { pdf: 'PDF', image: 'Image', video: 'Video', audio: 'Audio' } as const;
+const mimeTypes = { pdf: 'application/pdf', image: 'image/*', video: 'video/*', audio: 'audio/*' };
 const library = () => new Directory(Paths.document, 'Versara Library');
 const documentRoot = () => Paths.document.uri.replace(/\/+$/, '') + '/';
 // iOS may change its sandbox prefix after an app update. Persist relative paths.
@@ -42,7 +42,7 @@ export async function listRecentFiles(kind: FileKind, search = '') {
 export async function listCategoryFiles(kind: FileKind, search = ''): Promise<RecentListItem[]> {
   const libraryFiles = (await listRecentFiles(kind, search)).map(file => ({ ...file, source: 'library' as const }));
   let device: DeviceItem[] = [];
-  if (FileEngine?.listDeviceRecents && !(kind === 'pdf' && FileEngine.nativePdfLibraryVersion) && kind !== 'document') {
+  if (FileEngine?.listDeviceRecents && !(kind === 'pdf' && FileEngine.nativePdfLibraryVersion)) {
     try {
       const items = await FileEngine.listDeviceRecents(kind, RECENT_LIMIT, search.trim());
       const libraryNames = new Set(libraryFiles.map(file => file.name.toLowerCase()));
@@ -82,12 +82,7 @@ export async function rememberFile(file: { uri: string; name: string; mimeType?:
 export async function importRecentFile(kind: FileKind): Promise<RecentFile | null> {
   let asset;
   if (kind === 'image' || kind === 'pdf') asset = (await selectFileAssets(kind, 1))[0];
-  else if (kind === 'document') {
-    const { getDocumentAsync } = await import('expo-document-picker');
-    const selection = await getDocumentAsync({ type: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'application/msword'], multiple: false, copyToCacheDirectory: true });
-    if (selection.canceled) return null;
-    asset = selection.assets[0];
-  } else {
+  else {
     const { getDocumentAsync } = await import('expo-document-picker');
     const selection = await getDocumentAsync({ type: mimeTypes[kind], multiple: false, copyToCacheDirectory: true });
     if (selection.canceled) return null;
@@ -99,9 +94,7 @@ export async function importRecentFile(kind: FileKind): Promise<RecentFile | nul
   const copy = new File(root, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
   try {
     root.create({ intermediates: true, idempotent: true });
-    const extensionName = asset.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0].toLowerCase() ?? '';
-    if (kind === 'document' && extensionName === '.doc') throw new Error('Word 97 .doc files aren\'t supported. Save the file as DOCX and open that.');
-    const expected = kind === 'document' ? extensionName === '.docx' || extensionName === '.txt' : kind === 'pdf' ? asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name) : asset.mimeType?.startsWith(kind + '/');
+    const expected = kind === 'pdf' ? asset.mimeType === 'application/pdf' || /\.pdf$/i.test(asset.name) : asset.mimeType?.startsWith(kind + '/');
     if (asset.mimeType && asset.mimeType !== 'application/octet-stream' && !expected) throw new Error(`Choose a ${FILE_LABELS[kind].toLowerCase()} file.`);
     await retainPickerCopy(asset.uri, copy);
     return await rememberFile({ uri: copy.uri, name: asset.name, mimeType: asset.mimeType, size: copy.size }, kind);
@@ -124,6 +117,40 @@ export async function importDeviceRecent(item: DeviceItem): Promise<RecentFile> 
     return await rememberFile({ uri: imported.uri, name: imported.name || item.name, mimeType: imported.mimeType, size: imported.size }, item.kind);
   } catch (error) {
     if (copy.exists) copy.delete();
+    throw error;
+  }
+}
+
+/** Imports a PDF or image another app asked Versara to open, detecting its type from the provider or the file header. */
+export async function importExternalFile(uri: string): Promise<RecentFile> {
+  if (!FileEngine?.importDeviceFile) throw new Error('Install a new development build to open files from other apps.');
+  const root = library();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const copy = new File(root, id);
+  let named: File | null = null;
+  try {
+    root.create({ intermediates: true, idempotent: true });
+    const imported = await FileEngine.importDeviceFile(uri, 'file', copy.uri);
+    const mimeType = imported.mimeType.toLowerCase();
+    let kind: FileKind | null = mimeType === 'application/pdf' ? 'pdf' : mimeType.startsWith('image/') ? 'image' : null;
+    if (!kind) {
+      const handle = copy.open();
+      let header: Uint8Array;
+      try { header = handle.readBytes(12); } finally { handle.close(); }
+      const ascii = String.fromCharCode(...header);
+      kind = ascii.startsWith('%PDF') ? 'pdf'
+        : header[0] === 0xff && header[1] === 0xd8 ? 'image'
+        : ascii.startsWith('\x89PNG') || ascii.startsWith('GIF8') || ascii.startsWith('BM') || (ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WEBP') ? 'image'
+        : null;
+    }
+    if (!kind) throw new Error('Versara opens PDFs and images. This file type is not supported.');
+    const name = imported.name && imported.name !== id ? imported.name : kind === 'pdf' ? 'Document.pdf' : 'Image.jpg';
+    const extension = name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0] ?? (kind === 'pdf' ? '.pdf' : '.jpg');
+    named = new File(root, id + extension);
+    await copy.move(named);
+    return await rememberFile({ uri: named.uri, name, mimeType: kind === 'pdf' ? 'application/pdf' : mimeType.startsWith('image/') ? mimeType : 'image/*', size: named.size }, kind);
+  } catch (error) {
+    for (const file of [copy, named]) { try { if (file?.exists) file.delete(); } catch { /* Library cleanup removes it later. */ } }
     throw error;
   }
 }

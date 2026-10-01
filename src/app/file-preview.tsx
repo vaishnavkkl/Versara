@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { BackHandler, Pressable, StyleSheet, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ScreenHeader } from '@/components/screen-header';
+import { HeaderOrientationButton } from '@/components/header-orientation';
 import { router, Stack, useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router';
 import { File } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,7 +13,10 @@ import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { ToolButton } from '@/components/tool-button';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
+import { handleReaderBack, handleReaderHelp } from '@/features/pdf/reader-back';
 import { MediaPreview } from '@/features/files/media-preview';
+import { ImageViewer } from '@/features/files/image-viewer';
+import { saveImageWorkspace, useImageWorkspace } from '@/features/files/image-workspace';
 import { MediaOptions } from '@/features/files/media-options';
 import { EDITOR_TOOL_TABS, MediaToolbar } from '@/features/files/media-toolbar';
 import { getRecentFile, touchRecentFile, type RecentFile } from '@/features/files/recent-files';
@@ -68,40 +72,92 @@ export default function FilePreviewScreen() {
     }).catch(cause => { if (!cancelled) setError((cause as Error).message || 'Could not open this file.'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; mounted.current = false; };
   }, [active, id, resultUri, revision, transitionReady]);
-  function close() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
+  // Image tools apply into a shared working copy; the preview shows it and saves everything once.
+  const workspace = useImageWorkspace(id ?? '');
+  const [working, setWorking] = useState<RecentFile | null>(null);
+  useEffect(() => {
+    if (resultUri || !active || file?.kind !== 'image') return;
+    let cancelled = false;
+    void workspace.resolve().then(value => { if (!cancelled) setWorking(workspace.changed && value ? value : null); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [active, file, resultUri, workspace]);
+  const shown = working ?? file;
+  function leave() { if (router.canGoBack()) router.back(); else router.replace('/(tabs)'); }
+  function close() {
+    if (handleReaderBack()) return;
+    if (working && !busy) {
+      showDialog('Save your changes?', 'Changes applied in image tools have not been saved yet.', [
+        { text: 'Keep editing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: () => { void workspace.discard().then(() => { setWorking(null); leave(); }).catch(cause => setError((cause as Error).message)); } },
+        { text: 'Save', onPress: () => { void saveChanges(); } },
+      ], { ios: 'photo', android: 'image' });
+      return;
+    }
+    leave();
+  }
+  const closeRef = useRef(close);
+  useEffect(() => { closeRef.current = close; });
+  useEffect(() => {
+    if (!working || !active) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => { closeRef.current(); return true; });
+    return () => subscription.remove();
+  }, [working, active]);
+  async function saveChanges() {
+    if (lock.current) return;
+    lock.current = true; setBusy(true); setError(null);
+    try {
+      const saved = await saveImageWorkspace(workspace);
+      if (!saved || !mounted.current) return;
+      setWorking(null);
+      toast(`Saved to ${saved.device.location}`);
+      if (saved.recent) router.replace({ pathname: '/file-preview', params: { id: saved.recent.id, revision: String(Date.now()) } });
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not save the image.'); }
+    finally { lock.current = false; if (mounted.current) setBusy(false); }
+  }
+  function discardChanges() {
+    showDialog('Discard all changes?', 'Every change applied in image tools since the last save will be removed.', [
+      { text: 'Keep', style: 'cancel' },
+      { text: 'Discard', style: 'destructive', onPress: () => { void workspace.discard().then(() => setWorking(null)).catch(cause => setError((cause as Error).message)); } },
+    ], { ios: 'arrow.uturn.backward', android: 'undo' });
+  }
   async function action(value: string) {
     if (!file || lock.current) return;
     setOptions(false);
+    if (value === 'save' && working) { await saveChanges(); return; }
     if (file.kind === 'image' && ADVANCED_IMAGE_TOOLS.has(value) && FileEngine?.nativeImageToolsVersion) { router.push({ pathname: '/image-tool', params: { id: file.id, tool: value } }); recordToolUse(`Image:${value}`); return; }
     if (value === 'text' || value === 'edit_text') { router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } }); recordToolUse(`Image:${value}`); return; }
-    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value] } }); recordToolUse(`Image:${value}`); return; }
+    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value], tool: value } }); recordToolUse(`Image:${value}`); return; }
     if (value === 'info') { showDialog('File details', `${file.name}\n${formatSize(file.size)}\n${file.mimeType}`, undefined, { ios: 'info.circle', android: 'info-outline' }); return; }
     lock.current = true; setBusy(true); setError(null);
     let session: string | null = null;
+    const target = working ?? file;
     try {
       if (value === 'pdf') {
         toast('Preparing PDF…');
-        session = await withLoading('Preparing your PDF…', () => createImagePdfToolForFile(file));
+        session = await withLoading('Preparing your PDF…', () => createImagePdfToolForFile(target));
         if (!mounted.current) { discardPdfToolSession(session); return; }
         router.push({ pathname: '/pdf-tool', params: { session } });
       } else if (value === 'save') {
-        const saved = await withLoading('Saving to your device…', () => saveToDevice(file.uri, file.name, concreteMimeType(file)));
+        const saved = await withLoading('Saving to your device…', () => saveToDevice(target.uri, target.name, concreteMimeType(target)));
         if (mounted.current) showDialog('Saved to your device', `${saved.name}\nSaved to ${saved.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
       } else if (value === 'share') {
         const Sharing = await import('expo-sharing');
         if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is not available on this device.');
-        if (mounted.current) await Sharing.shareAsync(file.uri, { mimeType: file.mimeType.includes('*') ? undefined : file.mimeType, dialogTitle: 'Share' });
+        if (mounted.current) await Sharing.shareAsync(target.uri, { mimeType: target.mimeType.includes('*') ? undefined : target.mimeType, dialogTitle: 'Share' });
       }
     } catch (cause) { if (session) discardPdfToolSession(session); if (mounted.current) setError((cause as Error).message || 'Could not complete this action. Try again.'); }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    <Stack.Screen options={{ ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
-    {!focused && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} /></ScreenHeader>}
+    <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
+    {!focused && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<HeaderOrientationButton />}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader>}
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} /> : <>
-        {file.kind === 'image' || file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
+        {file.kind === 'image' ? <ImageViewer file={shown ?? file} revision={revision} busy={busy} active={active} showImage={active && transitionReady} landscape={landscape}
+          changed={!!working} onSave={() => void saveChanges()} onDiscard={discardChanges}
+          onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} onClose={close} />
+        : file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
           {landscape && <MediaToolbar side="left" kind={file.kind} busy={busy} landscape onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />}
           {active && transitionReady ? <MediaPreview key={`${file.uri}:${revision ?? ''}`} file={file} onClose={close} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
           <MediaToolbar kind={file.kind} busy={busy} landscape={landscape} onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />

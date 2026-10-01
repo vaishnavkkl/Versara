@@ -11,7 +11,7 @@ const icons = {
   retry: { ios: 'arrow.clockwise', android: 'refresh' },
   close: { ios: 'xmark', android: 'close' },
   back: { ios: 'arrow.left', android: 'arrow-back' },
-  save: { ios: 'square.and.arrow.down', android: 'save-alt' },
+  save: { ios: 'square.and.arrow.down', android: 'save' },
   share: { ios: 'square.and.arrow.up', android: 'share' },
   apply: { ios: 'checkmark', android: 'check' },
   open: { ios: 'arrow.up.forward.square', android: 'open-in-new' },

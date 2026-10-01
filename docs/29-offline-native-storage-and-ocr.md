@@ -4,7 +4,9 @@ Implemented 2026-09-29 following the dependency/network audit. Changes reuse the
 
 ## Android image OCR
 
-`file-engine` now uses the already cached Tesseract4Android 4.9.0 dependency instead of Google ML Kit. The PDF engine already packages `tessdata/eng.traineddata`; image OCR copies that asset into its app-owned no-backup directory once. There is no runtime network fallback.
+Exception (2026-10-01, by product decision): Android image **Edit text** recognition uses Google ML Kit `text-recognition` 16.0.1 again, with its Latin model bundled in the app. The editor's size and baseline mapping were tuned to ML Kit line boxes, and Tesseract boxes did not keep the original text style. ML Kit is no-cost but proprietary, and Google documents SDK usage metrics, so the app must not claim to be fully FOSS or free of analytics. Image privacy scans and PDF OCR stay on Tesseract, and iOS uses Apple Vision.
+
+`file-engine` otherwise uses the already cached Tesseract4Android 4.9.0 dependency instead of Google ML Kit. The PDF engine already packages `tessdata/eng.traineddata`; image OCR copies that asset into its app-owned no-backup directory once. There is no runtime network fallback.
 
 The existing TypeScript result contract remains unchanged: analysis dimensions; up to 400 lines; normalized upright-image rectangles; text, angle, text color and sampled background colors. Line baselines in native hOCR provide skew angles, and the existing background/style sampling remains in use. Recognition runs on the native worker with the existing 2048-pixel analysis limit. Text edits still export from the source image, not from the analysis bitmap.
 

@@ -12,8 +12,15 @@ final class ImageTools {
   private var destroyed = false
   private let context = CIContext(options: [.cacheIntermediates: false])
   private let types: [String: String] = ["jpeg": "public.jpeg", "png": "public.png", "webp": "org.webmproject.webp", "heic": "public.heic", "tiff": "public.tiff"]
+  private let previewSize: Double = 1280
+  private let previewLock = NSLock()
+  private var previewKey = ""
+  private var previewSource: CGImage?
   func cancel(_ id: String) { lock.lock(); if jobs[id] != nil { jobs[id] = true }; lock.unlock() }
-  func destroy() { lock.lock(); destroyed = true; lock.unlock(); queue.async { self.context.clearCaches() } }
+  func destroy() {
+    lock.lock(); destroyed = true; lock.unlock()
+    queue.async { self.context.clearCaches(); self.previewLock.lock(); self.previewSource = nil; self.previewLock.unlock() }
+  }
   private func check(_ id: String) throws {
     lock.lock(); let stopped = destroyed || jobs[id] == true; lock.unlock()
     if stopped { throw Failure(message: "Image operation cancelled.") }
@@ -89,8 +96,15 @@ final class ImageTools {
     else { decodeScale = 1 }
     let decoded: CGImage
     if preview {
-      guard let image = ImageEditing.load(uri: input.absoluteString, maxPixels: 1440) else { throw Failure(message: "Could not decode the image.") }
-      decoded = image
+      // Live previews re-run every few frames on the same source; reuse one decoded copy.
+      let stamp = (try? input.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])).map { "\($0.contentModificationDate?.timeIntervalSince1970 ?? 0):\($0.fileSize ?? 0)" } ?? ""
+      let key = "\(input.path):\(stamp)"
+      previewLock.lock(); let cached = previewKey == key ? previewSource : nil; previewLock.unlock()
+      if let cached { decoded = cached } else {
+        guard let image = ImageEditing.load(uri: input.absoluteString, maxPixels: CGFloat(previewSize)) else { throw Failure(message: "Could not decode the image.") }
+        previewLock.lock(); previewSource = image; previewKey = key; previewLock.unlock()
+        decoded = image
+      }
     } else {
       decoded = try ImageEditing.loadExport(uri: input.absoluteString, maxPixels: resizing || target > 0 ? ceil(max(sourceWidth, sourceHeight) * decodeScale) : nil, budget: budget)
     }
@@ -124,7 +138,7 @@ final class ImageTools {
     if resizing {
       var width = outputWidth
       var height = outputHeight
-      let ratio = preview ? min(1, 1440 / max(width, height)) : 1
+      let ratio = preview ? min(1, previewSize / max(width, height)) : 1
       width = max(1, (width * ratio).rounded()); height = max(1, (height * ratio).rounded())
       try ImageEditing.requireExportSize(CGSize(width: width, height: height), budget: budget)
       let mode = r["resizeMode"] as? String ?? "fit"
@@ -151,8 +165,12 @@ final class ImageTools {
     }
     try ImageEditing.requireExportSize(image.extent.integral.size, budget: budget)
     guard let raster = context.createCGImage(image, from: image.extent.integral) else { throw Failure(message: "Could not render this image.") }
-    let format = r["format"] as? String ?? "jpeg"
-    guard supportedFormats().contains(format), let type = types[format] else { throw Failure(message: "Choose a format supported on this device.") }
+    let requested = r["format"] as? String ?? "jpeg"
+    // Lossless PNG encoding dominates a live preview frame; opaque previews (without a size
+    // target) use a fast JPEG instead. Image views detect the format from the bytes.
+    let opaqueSource = [.none, .noneSkipFirst, .noneSkipLast].contains(decoded.alphaInfo)
+    let format = preview && target == 0 && opaqueSource ? "jpeg" : requested
+    guard supportedFormats().contains(requested), let type = types[format] else { throw Failure(message: "Choose a format supported on this device.") }
     var rendered = try annotate(raster, r, opaque: format == "jpeg", id: id)
     guard target == 0 || !["png", "tiff"].contains(format) else { throw Failure(message: "Choose a lossy format for target-size compression.") }
     var quality = number(r, "quality", 90, 10...100)

@@ -47,21 +47,22 @@ class FileEngineModule : Module() {
       else imageTools.run(context, id, request, promise)
     }
     Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 3 }
+    Constant("nativeImageListVersion") { 4 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
     Constant("nativeImageEditorVersion") { 1 }
     Constant("nativeImageHistoryVersion") { 1 }
-    Constant("nativeImageTextVersion") { 1 }
+    Constant("nativeImageTextVersion") { 2 }
     Function("cancelImageTextRecognition") { uri: String -> ImageText.cancelRecognition(uri); Unit }
-    AsyncFunction("recognizeImageText") { uri: String, promise: Promise ->
+    AsyncFunction("recognizeImageText") { uri: String, fonts: String?, promise: Promise ->
+      val catalog = runCatching { org.json.JSONObject(fonts ?: "{}").let { json -> json.keys().asSequence().associateWith { json.getString(it) } } }.getOrDefault(emptyMap())
       val context = appContext.reactContext
       if (context == null) { promise.reject("IMAGE_TEXT_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
       val request = try { ImageText.prepareRecognition(uri) } catch (error: Throwable) { promise.reject("IMAGE_TEXT_BUSY", error.message, error); return@AsyncFunction }
       try {
         worker.execute {
-          try { promise.resolve(ImageText.recognize(context, uri, request)) }
+          try { promise.resolve(ImageText.recognizeForEditing(context, uri, request, catalog)) }
           catch (_: InterruptedException) { promise.reject("IMAGE_TEXT_CANCELLED", "Text recognition was cancelled.", null) }
           catch (_: OutOfMemoryError) { promise.reject("IMAGE_TEXT_MEMORY", "This image is too large to read on this device.", null) }
           catch (error: Throwable) { promise.reject("IMAGE_TEXT_FAILED", error.message ?: "Could not read text in this image.", error) }
@@ -92,8 +93,9 @@ class FileEngineModule : Module() {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView::class) {
-      Events("onOpen", "onRemove", "onLongPress")
+      Events("onOpen", "onRemove", "onLongPress", "onRefresh")
       Prop("items") { view: RecentImagesView, value: String -> view.setItems(value) }
+      Prop("refreshing") { view: RecentImagesView, value: Boolean -> view.setRefreshing(value) }
       Prop("grid") { view: RecentImagesView, value: Boolean -> view.setGrid(value) }
       Prop("palette") { view: RecentImagesView, value: String -> view.setPalette(value) }
       Prop("disabled") { view: RecentImagesView, value: Boolean -> view.disabled = value }
@@ -166,17 +168,6 @@ class FileEngineModule : Module() {
         catch (error: Throwable) { promise.reject("PDF_LIST_FAILED", error.message ?: "Could not list recent PDFs.", error) }
       }
     }
-    Constant("nativeRecentDocumentsVersion") { 1 }
-    AsyncFunction("listRecentDocuments") { limit: Int, search: String, promise: Promise ->
-      val context = appContext.reactContext
-      if (context == null) { promise.reject("FILE_UNAVAILABLE", "The app is not ready.", null); return@AsyncFunction }
-      if (!PdfDeviceLibrary.allowed(context)) { promise.resolve(emptyList<Map<String, Any?>>()); return@AsyncFunction }
-      worker.execute {
-        try { promise.resolve(library.recentDocuments(context, limit.coerceIn(1, 60), search.trim())) }
-        catch (error: Throwable) { promise.reject("DOCUMENT_LIST_FAILED", error.message ?: "Could not list recent documents.", error) }
-      }
-    }
-
     AsyncFunction("getFileAccessAsync") { promise: Promise ->
       access.get(appContext.permissions, promise)
     }
@@ -270,8 +261,6 @@ class FileEngineModule : Module() {
     OnActivityEntersBackground { privacy.cancelAll(); pdfs.cancelAll() }
   }
 }
-
-private const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 /** Runtime media/storage permission via Expo's activity-aware Permissions service. */
 internal class FileAccess {
@@ -372,10 +361,6 @@ internal class DeviceLibrary {
   fun recentPdfs(context: Context, limit: Int, search: String) =
     recentByType(context, limit, search, "pdf", listOf("application/pdf"), listOf("pdf"))
 
-  /** Newest Word and plain text documents from the system media index. */
-  fun recentDocuments(context: Context, limit: Int, search: String) =
-    recentByType(context, limit, search, "document", listOf(DOCX_MIME), listOf("docx", "txt"))
-
   private fun recentByType(context: Context, limit: Int, search: String, kind: String, mimes: List<String>, extensions: List<String>): List<Map<String, Any?>> {
     val collection = MediaStore.Files.getContentUri("external")
     val projection = arrayOf(
@@ -413,13 +398,11 @@ internal class DeviceLibrary {
       while (it.moveToNext() && results.size < limit) {
         val id = it.getLong(idIndex)
         val name = it.getString(nameIndex) ?: "Document.${extensions[0]}"
-        val extension = name.substringAfterLast('.', "").lowercase()
-        if (kind == "document" && extension !in extensions) continue
         results.add(mapOf(
           "id" to "device-$kind-$id",
           "uri" to ContentUris.withAppendedId(collection, id).toString(),
           "name" to name,
-          "mimeType" to (it.getString(mimeIndex)?.takeIf { value -> value.isNotEmpty() } ?: if (kind == "pdf") "application/pdf" else if (extension == "txt") "text/plain" else DOCX_MIME),
+          "mimeType" to (it.getString(mimeIndex)?.takeIf { value -> value.isNotEmpty() } ?: mimes[0]),
           "size" to it.getLong(sizeIndex).coerceAtLeast(0),
           "modified" to it.getLong(modifiedIndex) * 1000L,
           "kind" to kind,

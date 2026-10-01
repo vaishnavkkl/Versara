@@ -15,12 +15,30 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.*
 
+private const val PREVIEW_SIZE = 1280
+
 /** Serial offline raster jobs. No pixels or source image bytes cross the JS bridge. */
 internal class ImageTools {
   private val worker = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(2))
   private val jobs = ConcurrentHashMap<String, AtomicBoolean>()
+  // Live previews re-run every few frames on the same source; keep one decoded copy instead of
+  // decoding from disk each time. Only the single worker thread touches it.
+  private var previewKey = ""
+  private var previewSource: Bitmap? = null
   fun cancel(id: String) { jobs[id]?.set(true) }
-  fun destroy() { jobs.values.forEach { it.set(true) }; worker.shutdown() }
+  fun destroy() {
+    jobs.values.forEach { it.set(true) }
+    runCatching { worker.execute { previewSource?.recycle(); previewSource = null } }
+    worker.shutdown()
+  }
+  private fun decodePreview(context: Context, input: File, limit: Int): Bitmap {
+    val key = "${input.path}:${input.lastModified()}:${input.length()}:$limit"
+    previewSource?.takeIf { key == previewKey && !it.isRecycled }?.let { return requireNotNull(it.copy(Bitmap.Config.ARGB_8888, true)) { "Could not prepare the preview." } }
+    val decoded = ImageProcessing.decode(context, Uri.fromFile(input), limit)
+    previewSource?.recycle()
+    previewSource = decoded; previewKey = key
+    return requireNotNull(decoded.copy(Bitmap.Config.ARGB_8888, true)) { "Could not prepare the preview." }
+  }
   fun run(context: Context, id: String, request: String, promise: Promise) {
     val stopped = AtomicBoolean(false)
     if (jobs.putIfAbsent(id, stopped) != null) { promise.reject("IMAGE_BUSY", "This image job is already running.", null); return }
@@ -77,8 +95,8 @@ internal class ImageTools {
       targetBytes > 0 && sourceWidth.toLong() * sourceHeight > budget -> sqrt(budget.toDouble() / (sourceWidth.toDouble() * sourceHeight)) * .999
       else -> 1.0
     }
-    val limit = if (preview) 1440 else max(1, ceil(max(sourceWidth, sourceHeight) * decodeScale).toInt())
-    var bitmap = if (preview) ImageProcessing.decode(context, Uri.fromFile(input), limit)
+    val limit = if (preview) PREVIEW_SIZE else max(1, ceil(max(sourceWidth, sourceHeight) * decodeScale).toInt())
+    var bitmap = if (preview) decodePreview(context, input, limit)
       else ImageProcessing.decodeExport(context, Uri.fromFile(input), if (resizing || targetBytes > 0) limit else null, budget)
     fun swap(next: Bitmap) { if (next !== bitmap) { bitmap.recycle(); bitmap = next } }
     fun sized(w: Int, h: Int): Bitmap { ImageProcessing.requireExportSize(w, h, budget); return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }
@@ -123,7 +141,7 @@ internal class ImageTools {
       if (resizing) {
         val w = outputWidth
         val h = outputHeight
-        val ratio = if (preview) min(1.0, 1440.0 / max(w, h)) else 1.0
+        val ratio = if (preview) min(1.0, PREVIEW_SIZE.toDouble() / max(w, h)) else 1.0
         val next = sized(max(1, (w * ratio).roundToInt()), max(1, (h * ratio).roundToInt()))
         val mode = r.optString("resizeMode", "fit")
         val canvas = Canvas(next)
@@ -146,8 +164,12 @@ internal class ImageTools {
         if (!bitmap.isMutable || bitmap.config != Bitmap.Config.ARGB_8888) swap(bitmap.copy(Bitmap.Config.ARGB_8888, true))
         annotate(context, bitmap, r, check)
       }
-      val format = r.optString("format", "jpeg")
-      require(format in listOf("jpeg", "png", "webp")) { "Choose JPG, PNG or WebP on this device." }
+      val requested = r.optString("format", "jpeg")
+      require(requested in listOf("jpeg", "png", "webp")) { "Choose JPG, PNG or WebP on this device." }
+      // Lossless PNG encoding dominates a live preview frame; opaque previews (without a size
+      // target) use a fast JPEG instead. Image views detect the format from the bytes.
+      val format = if (preview && targetBytes == 0L && !bitmap.hasAlpha()) "jpeg" else requested
+      if (preview && format != requested) r.put("quality", 88)
       val compression = when(format) { "png" -> Bitmap.CompressFormat.PNG; "webp" -> if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP; else -> Bitmap.CompressFormat.JPEG }
       if (format == "jpeg" && bitmap.hasAlpha()) { val next = sized(bitmap.width, bitmap.height); Canvas(next).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }; swap(next) }
       target.parentFile?.mkdirs()

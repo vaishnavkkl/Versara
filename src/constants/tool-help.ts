@@ -23,6 +23,7 @@ export const TOOL_HELP: Record<string, readonly [string, string, string]> = {
   viewer: ['Open a PDF from Recents or choose one from Files.', 'Tap a page thumbnail below the preview. Pinch to zoom.', 'Tap Toolbox for editing tools, vertical scrolling or saving a copy.'],
   edit_text: ['Tap the text you want to change. Use Text list if it is hard to select.', 'Type your change and check the live preview. Tap Apply.', 'Tap Save, then Save to device / share to choose where to keep the copy.'],
   text: ['Tap the page where you want new text.', 'Type, choose the size and check the preview. Tap Add text.', 'Tap Save to create your edited copy.'],
+  replace_text: ['Type the text to find and what to replace it with.', 'Tap Find in all pages and check the matches.', 'Tap Replace all, review the pages, then Save a new copy. Undo reverts the whole replacement.'],
   remove_text: ['Tap the text you want to remove.', 'Tap Delete selected text. Undo brings it back.', 'Save a new copy. Text deletion is not secure redaction.'],
   merge: ['Choose two or more PDFs.', 'Put the files in the order you want.', 'Tap Merge, check the result and save your copy.'],
   split: ['Choose the PDF you want to separate.', 'Choose individual pages, groups or a page range, such as 1-3.', 'Create the new PDFs, then open or save them.'],

@@ -13,7 +13,8 @@ import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
-import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
+import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
+import { usePublishHeaderShare } from '@/components/header-share';
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -83,7 +84,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     setError(failure.code === 'PDF_CANCELLED' ? 'Cancelled. Your original PDF is unchanged.' : failure.message ?? 'Something went wrong. Please try again.');
   }
   useInitialFiles(initialSelection, available, choose);
-
+  const shareTarget = result ?? source;
   async function choose(initialFiles?: LocalFile[]) {
     if (locked.current || !PdfEngine) return;
     locked.current = true; setBusy(true); setError(''); setPhase('Opening your PDF…');
@@ -122,6 +123,10 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   }
   const outputCount = source ? extracting ? selected.size : source.pageCount - selected.size : 0;
   const canSave = available && !busy && selected.size > 0 && outputCount > 0;
+  usePublishHeaderShare({ active: !!shareTarget, disabled: busy, label: result ? 'Share new PDF' : 'Share original PDF',
+    onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
+    save: { disabled: busy || (!result && !canSave), label: result ? 'Save new PDF to device' : extracting ? 'Create PDF with selected pages' : 'Save PDF without selected pages',
+      onSave: () => result ? saveResult() : save() } });
   async function save() {
     if (!canSave || locked.current || !source || !PdfEngine) return;
     Keyboard.dismiss();

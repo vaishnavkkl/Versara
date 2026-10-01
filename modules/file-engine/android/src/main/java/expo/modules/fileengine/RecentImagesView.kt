@@ -93,6 +93,9 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private val onOpen by EventDispatcher()
   private val onRemove by EventDispatcher()
   private val onLongPress by EventDispatcher()
+  private val onRefresh by EventDispatcher()
+  private val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(context)
+  fun setRefreshing(value: Boolean) { if (swipe.isRefreshing != value) swipe.isRefreshing = value }
   private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String)
   private var items = emptyList<Item>()
   private var itemsJson = ""
@@ -166,12 +169,14 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       })
       adapter = this@RecentImagesView.adapter
     }
-    addView(list, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    swipe.addView(list, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    swipe.setOnRefreshListener { if (disabled || disposed) swipe.isRefreshing = false else onRefresh(mapOf<String, Any>()) }
+    addView(swipe, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-    list.measure(MeasureSpec.makeMeasureSpec(right - left, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(bottom - top, MeasureSpec.EXACTLY))
-    list.layout(0, 0, right - left, bottom - top)
+    swipe.measure(MeasureSpec.makeMeasureSpec(right - left, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(bottom - top, MeasureSpec.EXACTLY))
+    swipe.layout(0, 0, right - left, bottom - top)
   }
   private fun refresh() {
     adapter.notifyDataSetChanged()
@@ -216,7 +221,6 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     "video" -> android.R.drawable.ic_media_play
     "audio" -> android.R.drawable.ic_lock_silent_mode_off
     "pdf" -> android.R.drawable.ic_menu_agenda
-    "document" -> android.R.drawable.ic_menu_edit
     else -> android.R.drawable.ic_menu_gallery
   }
 
@@ -247,7 +251,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       name.maxLines = if (gridCell) 1 else 2
       name.ellipsize = TextUtils.TruncateAt.END
       detail.textSize = 11f
-      detail.maxLines = 1
+      detail.maxLines = if (gridCell) 2 else 1
       detail.ellipsize = TextUtils.TruncateAt.END
       remove.background = removeGlyph
       remove.isClickable = true
@@ -322,7 +326,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     }
 
     private fun show(bitmap: Bitmap, key: String) {
-      image.scaleType = if (item?.kind == "pdf" || item?.kind == "document") ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
+      image.scaleType = if (item?.kind == "pdf") ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
       image.setImageBitmap(bitmap)
       loaded = key
     }
@@ -336,7 +340,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       val request = ++token
       val size = if (gridCell) gridPixels else listPixels
       val job = FutureTask<Unit> {
-        val bitmap = try { if (current.kind == "document") DocumentPreview.render(context, Uri.parse(current.uri), current.name, size) else decode(current.uri, current.kind, size) } catch (_: Exception) { null } catch (_: OutOfMemoryError) { cache.evictAll(); null }
+        val bitmap = try { decode(current.uri, current.kind, size) } catch (_: Exception) { null } catch (_: OutOfMemoryError) { cache.evictAll(); null }
         main.post {
           if (!disposed && token == request && bitmap != null) {
             cache.put(key, bitmap)

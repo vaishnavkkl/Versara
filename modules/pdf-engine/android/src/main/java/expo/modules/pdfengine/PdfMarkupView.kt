@@ -21,6 +21,13 @@ import kotlin.math.roundToInt
 class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   private val onMark by EventDispatcher<Map<String, Any>>()
   private val onSelection by EventDispatcher<Map<String, Any>>()
+  private val onZoom by EventDispatcher<Map<String, Any>>()
+  private val onPageSwipe by EventDispatcher<Map<String, Any>>()
+  private var zoomSerial = ""
+  private var lastZoom = 1f
+  private var loupeVisible = false
+  private val loupeFinger = PointF()
+  private var grabX = 0f; private var grabY = 0f
   private val worker = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(1), ThreadPoolExecutor.DiscardOldestPolicy())
   private val main = Handler(Looper.getMainLooper())
   private val stampWorker = ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,ArrayBlockingQueue(1),ThreadPoolExecutor.DiscardOldestPolicy())
@@ -61,7 +68,7 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
       if (field == value) return
       finishErase(commit = false)
       selectionStart?.let { if (selected in 0 until marks.length()) { marks.put(selected, it); cachedRect.setEmpty() } }
-      field = value; points = JSONArray(); selectionStart = null
+      field = value; points = JSONArray(); selectionStart = null; loupeVisible = false; panning = false
       if (value != "select") { selected = -1; emitSelection() } else emitSelection()
       lastErase = null; erasedInGesture.clear(); invalidate()
     }
@@ -85,6 +92,9 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
   private var panX = 0f; private var panY = 0f
   private var lastX = 0f; private var lastY = 0f
   private var navigating = false
+  // In select mode a drag that starts away from every mark moves the page instead.
+  private var panning = false
+  private var panStartX = 0f; private var panStartY = 0f
   private val pinch = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
     override fun onScale(d: ScaleGestureDetector): Boolean {
       val next = (zoom * d.scaleFactor).coerceIn(1f, 6f); val ratio = next / zoom
@@ -92,7 +102,22 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
       panY = d.focusY - height / 2f - (d.focusY - height / 2f - panY) * ratio
       zoom = next; invalidate(); return true
     }
+    override fun onScaleEnd(d: ScaleGestureDetector) { emitZoom() }
   })
+  private fun emitZoom() { if (kotlin.math.abs(zoom - lastZoom) > .001f) { lastZoom = zoom; onZoom(mapOf("zoom" to zoom.toDouble())) } }
+  fun requestZoom(value: String) {
+    val serial = value.substringBefore(':'); val factor = value.substringAfter(':', "").toFloatOrNull()
+    if (serial == zoomSerial) return
+    val first = zoomSerial.isEmpty(); zoomSerial = serial
+    if (first || factor == null || !factor.isFinite() || factor <= 0f || closed || width <= 0 || rect.isEmpty) return
+    val next = (zoom * factor).coerceIn(1f, 6f); val ratio = next / zoom
+    var fx = width / 2f; var fy = height / 2f
+    if (selected in 0 until marks.length()) { val box = screenBox(boundsOf(marks.getJSONObject(selected))); fx = box.centerX(); fy = box.centerY() }
+    panX = fx - width / 2f - (fx - width / 2f - panX) * ratio
+    panY = fy - height / 2f - (fy - height / 2f - panY) * ratio
+    if (selected >= 0) { panX += width / 2f - fx; panY += height / 2f - fy }
+    zoom = next; invalidate(); emitZoom()
+  }
   var inkWidth = .005
   var disabled = false
   private val rect = RectF()
@@ -113,7 +138,7 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     val id = marks.optJSONObject(selected)?.optString("id")
     marks = runCatching { JSONArray(value) }.getOrDefault(JSONArray()); cachedRect.setEmpty()
     selected = if (id.isNullOrEmpty()) -1 else (0 until marks.length()).firstOrNull { marks.optJSONObject(it)?.optString("id") == id } ?: -1
-    val added = (marks.length()-1 downTo 0).firstOrNull { val mark=marks.optJSONObject(it); mark?.optString("kind") == "image" && mark.optString("id") !in previousIds }
+    val added = (marks.length()-1 downTo 0).firstOrNull { val mark=marks.optJSONObject(it); (mode == "select" || mark?.optString("kind") == "image") && mark?.optString("id") !in previousIds }
     if (added != null) selected = added
     if (selected < 0) selectionStart = null
     if (mode == "select") emitSelection()
@@ -129,23 +154,81 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     val w = image.width * scale * zoom; val h = image.height * scale * zoom
     panX = panX.coerceIn(-maxOf(0f, (w - width) / 2), maxOf(0f, (w - width) / 2)); panY = panY.coerceIn(-maxOf(0f, (h - height) / 2), maxOf(0f, (h - height) / 2))
     rect.set((width - w) / 2 + panX, (height - h) / 2 + panY, (width + w) / 2 + panX, (height + h) / 2 + panY)
-    paint.reset(); paint.isFilterBitmap = true; canvas.drawBitmap(image, null, rect, paint)
-    canvas.save(); canvas.clipRect(rect)
     if (cachedRect != rect || paths.size != marks.length()) {
       paths.clear()
       for (i in 0 until marks.length()) paths.add(markPath(marks.getJSONObject(i)))
       cachedRect.set(rect)
     }
+    val draft = if (points.length() >= 2) currentMark() else null
+    drawScene(canvas, image, draft, 1f)
+    if (loupeVisible) drawLoupe(canvas, image, draft)
+  }
+
+  private fun drawScene(canvas: Canvas, image: Bitmap, draft: JSONObject?, magnification: Float) {
+    paint.reset(); paint.isFilterBitmap = true; canvas.drawBitmap(image, null, rect, paint)
+    canvas.save(); canvas.clipRect(rect)
     for (i in 0 until marks.length()) drawMark(canvas, marks.optJSONObject(i) ?: continue, paths[i])
-    if (points.length() >= 2) drawMark(canvas, currentMark())
+    if (draft != null) drawMark(canvas, draft)
     canvas.restore()
-    if (mode == "select" && selected in 0 until marks.length()) {
-      val bounds = boundsOf(marks.getJSONObject(selected))
-      val box = RectF(rect.left + bounds.left * rect.width(), rect.top + bounds.top * rect.height(), rect.left + bounds.right * rect.width(), rect.top + bounds.bottom * rect.height())
-      paint.reset(); paint.isAntiAlias = true; paint.color = Color.rgb(57, 104, 225); paint.strokeWidth = 2 * resources.displayMetrics.density; paint.style = Paint.Style.STROKE
-      canvas.drawRect(box, paint); paint.style = Paint.Style.FILL
-      for (p in arrayOf(PointF(box.left, box.top), PointF(box.right, box.top), PointF(box.right, box.bottom), PointF(box.left, box.bottom))) canvas.drawCircle(p.x, p.y, 6 * resources.displayMetrics.density, paint)
+    if (mode == "select" && selected in 0 until marks.length()) drawSelection(canvas, marks.getJSONObject(selected), magnification)
+  }
+
+  private fun screenBox(bounds: RectF) = RectF(rect.left + bounds.left * rect.width(), rect.top + bounds.top * rect.height(), rect.left + bounds.right * rect.width(), rect.top + bounds.bottom * rect.height())
+  /** Corners first (0-3), then edge midpoints (4-7). Images resize from corners only to keep their shape. */
+  private fun handlePoints(box: RectF, image: Boolean): List<PointF> {
+    val corners = listOf(PointF(box.left, box.top), PointF(box.right, box.top), PointF(box.right, box.bottom), PointF(box.left, box.bottom))
+    return if (image) corners else corners + listOf(PointF(box.centerX(), box.top), PointF(box.right, box.centerY()), PointF(box.centerX(), box.bottom), PointF(box.left, box.centerY()))
+  }
+  /** The move handle sits in the middle, or below a box too small to hold it beside the resize handles. */
+  private fun moveHandle(box: RectF): PointF {
+    val density = resources.displayMetrics.density
+    if (box.width() >= 64 * density && box.height() >= 64 * density) return PointF(box.centerX(), box.centerY())
+    val below = box.bottom + 30 * density
+    return PointF(box.centerX(), if (below + 16 * density <= height) below else box.top - 30 * density)
+  }
+  private fun drawSelection(canvas: Canvas, mark: JSONObject, magnification: Float) {
+    val d = resources.displayMetrics.density / magnification
+    val box = screenBox(boundsOf(mark)); val outline = Color.rgb(124, 128, 176)
+    paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.25f * d; paint.color = outline
+    paint.pathEffect = DashPathEffect(floatArrayOf(4 * d, 3 * d), 0f); canvas.drawRect(box, paint); paint.pathEffect = null
+    val move = moveHandle(box)
+    if (!box.contains(move.x, move.y)) canvas.drawLine(box.centerX(), if (move.y > box.bottom) box.bottom else box.top, move.x, move.y, paint)
+    val half = 5 * d
+    for (p in handlePoints(box, mark.optString("kind") == "image")) {
+      paint.style = Paint.Style.FILL; paint.color = Color.WHITE; canvas.drawRect(p.x - half, p.y - half, p.x + half, p.y + half, paint)
+      paint.style = Paint.Style.STROKE; paint.color = outline; canvas.drawRect(p.x - half, p.y - half, p.x + half, p.y + half, paint)
     }
+    paint.style = Paint.Style.FILL; paint.color = Color.rgb(57, 104, 225); canvas.drawCircle(move.x, move.y, 13 * d, paint)
+    paint.style = Paint.Style.STROKE; paint.color = Color.WHITE; paint.strokeWidth = 1.6f * d; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
+    val arm = 7 * d; val tip = 2.6f * d
+    canvas.drawLine(move.x - arm, move.y, move.x + arm, move.y, paint); canvas.drawLine(move.x, move.y - arm, move.x, move.y + arm, paint)
+    for ((dx, dy) in listOf(1f to 0f, -1f to 0f, 0f to 1f, 0f to -1f)) {
+      val ex = move.x + dx * arm; val ey = move.y + dy * arm
+      canvas.drawLine(ex, ey, ex - dx * tip + dy * tip, ey - dy * tip + dx * tip, paint)
+      canvas.drawLine(ex, ey, ex - dx * tip - dy * tip, ey - dy * tip - dx * tip, paint)
+    }
+  }
+  /** A magnified view of the point being placed, shown only while a finger moves a shape or draws one. */
+  private fun drawLoupe(canvas: Canvas, image: Bitmap, draft: JSONObject?) {
+    val density = resources.displayMetrics.density; val size = 128 * density; val margin = 12 * density
+    var frame = RectF(width - margin - size, margin, width - margin.toFloat(), margin + size)
+    if (RectF(frame).apply { inset(-24 * density, -24 * density) }.contains(loupeFinger.x, loupeFinger.y)) frame = RectF(margin, margin, margin + size, margin + size)
+    var focus = PointF(loupeFinger.x, loupeFinger.y); var magnification = 2.5f
+    if (mode == "select" && selected in 0 until marks.length()) {
+      val box = screenBox(boundsOf(marks.getJSONObject(selected)))
+      if (handle < 0) { focus = PointF(box.centerX(), box.centerY()); magnification = (size * .6f / maxOf(box.width(), box.height(), 1f)).coerceIn(1.5f, 4f) }
+      else handlePoints(box, false).getOrNull(handle)?.let { focus = it }
+    } else if (draft != null && points.length() > 0) points.optJSONArray(points.length() - 1)?.let { focus = PointF(rect.left + it.optDouble(0).toFloat() * rect.width(), rect.top + it.optDouble(1).toFloat() * rect.height()) }
+    val radius = 16 * density; val clip = Path().apply { addRoundRect(frame, radius, radius, Path.Direction.CW) }
+    paint.reset(); paint.isAntiAlias = true; paint.color = Color.argb(60, 0, 0, 0); canvas.drawRoundRect(RectF(frame).apply { offset(0f, 2 * density) }, radius, radius, paint)
+    canvas.save(); canvas.clipPath(clip); canvas.drawColor(Color.rgb(230, 234, 242))
+    canvas.translate(frame.centerX(), frame.centerY()); canvas.scale(magnification, magnification); canvas.translate(-focus.x, -focus.y)
+    drawScene(canvas, image, draft, magnification)
+    canvas.restore()
+    paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f * density; paint.color = Color.WHITE
+    canvas.drawRoundRect(frame, radius, radius, paint)
+    paint.color = Color.argb(150, 57, 104, 225); paint.strokeWidth = density; val c = 6 * density
+    canvas.drawLine(frame.centerX() - c, frame.centerY(), frame.centerX() + c, frame.centerY(), paint); canvas.drawLine(frame.centerX(), frame.centerY() - c, frame.centerX(), frame.centerY() + c, paint)
   }
   private fun currentMark(): JSONObject {
     var output = points
@@ -210,29 +293,60 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     return result
   }
   private fun selectTouch(event: MotionEvent): Boolean {
-    val x = ((event.x - rect.left) / rect.width()).coerceIn(0f, 1f); val y = ((event.y - rect.top) / rect.height()).coerceIn(0f, 1f)
+    val rx = (event.x - rect.left) / rect.width(); val ry = (event.y - rect.top) / rect.height()
+    val x = rx.coerceIn(0f, 1f); val y = ry.coerceIn(0f, 1f)
+    if (panning) {
+      when (event.actionMasked) {
+        MotionEvent.ACTION_MOVE -> { panX += event.x - lastX; panY += event.y - lastY; lastX = event.x; lastY = event.y; invalidate() }
+        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          panning = false; parent?.requestDisallowInterceptTouchEvent(false)
+          val dx = event.x - panStartX; val dy = event.y - panStartY
+          if (event.actionMasked == MotionEvent.ACTION_UP && zoom <= 1.01f && kotlin.math.abs(dx) > 64 * resources.displayMetrics.density && kotlin.math.abs(dx) > 1.5f * kotlin.math.abs(dy))
+            onPageSwipe(mapOf("direction" to if (dx < 0) 1 else -1))
+        }
+      }
+      return true
+    }
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
         val tolerance = 24 * resources.displayMetrics.density
-        handle = -1
+        handle = -1; grabX = 0f; grabY = 0f
+        var grabbed = false
         if (selected in 0 until marks.length()) {
-          val b = boundsOf(marks.getJSONObject(selected)); val corners = arrayOf(PointF(b.left,b.top),PointF(b.right,b.top),PointF(b.right,b.bottom),PointF(b.left,b.bottom))
-          handle = corners.indexOfFirst { kotlin.math.abs(it.x-x)*rect.width() < tolerance && kotlin.math.abs(it.y-y)*rect.height() < tolerance }
+          val mark = marks.getJSONObject(selected); val box = screenBox(boundsOf(mark))
+          var best = tolerance
+          handlePoints(box, mark.optString("kind") == "image").forEachIndexed { index, p ->
+            val distance = kotlin.math.hypot(p.x - event.x, p.y - event.y)
+            if (distance < best) { best = distance; handle = index; grabbed = true; grabX = (p.x - event.x) / rect.width(); grabY = (p.y - event.y) / rect.height() }
+          }
+          val move = moveHandle(box)
+          if (kotlin.math.hypot(move.x - event.x, move.y - event.y) < minOf(best, 28 * resources.displayMetrics.density)) { handle = -1; grabbed = true; grabX = 0f; grabY = 0f }
         }
-        if (handle < 0) selected = (marks.length()-1 downTo 0).firstOrNull { val b = boundsOf(marks.getJSONObject(it)); b.inset(-tolerance/rect.width(),-tolerance/rect.height()); b.contains(x,y) } ?: -1
+        if (!grabbed) selected = (marks.length()-1 downTo 0).firstOrNull { val b = boundsOf(marks.getJSONObject(it)); b.inset(-tolerance/rect.width(),-tolerance/rect.height()); b.contains(x,y) } ?: -1
         selectionStart = if (selected >= 0) JSONObject(marks.getJSONObject(selected).toString()) else null
         emitSelection()
-        selectionPoint = PointF(x,y); parent?.requestDisallowInterceptTouchEvent(true)
+        if (selected < 0) {
+          panning = true; panStartX = event.x; panStartY = event.y; lastX = event.x; lastY = event.y
+          parent?.requestDisallowInterceptTouchEvent(true); invalidate(); return true
+        }
+        selectionPoint = PointF(rx,ry); loupeFinger.set(event.x, event.y); parent?.requestDisallowInterceptTouchEvent(true)
       }
       MotionEvent.ACTION_MOVE -> selectionStart?.let { original ->
+        loupeVisible = true; loupeFinger.set(event.x, event.y)
         val b = boundsOf(original); val target = RectF(b)
-        if (handle < 0) target.offset((x-selectionPoint.x).coerceIn(-b.left,1-b.right),(y-selectionPoint.y).coerceIn(-b.top,1-b.bottom))
-        else { if (handle == 0 || handle == 3) target.left = minOf(x,b.right-.005f) else target.right = maxOf(x,b.left+.005f); if (handle < 2) target.top = minOf(y,b.bottom-.005f) else target.bottom = maxOf(y,b.top+.005f) }
+        val hx = (rx + grabX).coerceIn(0f, 1f); val hy = (ry + grabY).coerceIn(0f, 1f)
+        if (handle < 0) target.offset((rx-selectionPoint.x).coerceIn(-b.left,1-b.right),(ry-selectionPoint.y).coerceIn(-b.top,1-b.bottom))
+        else {
+          if (handle == 0 || handle == 3 || handle == 7) target.left = minOf(hx, b.right - .005f)
+          if (handle == 1 || handle == 2 || handle == 5) target.right = maxOf(hx, b.left + .005f)
+          if (handle == 0 || handle == 1 || handle == 4) target.top = minOf(hy, b.bottom - .005f)
+          if (handle == 2 || handle == 3 || handle == 6) target.bottom = maxOf(hy, b.top + .005f)
+        }
         if (handle >= 0 && original.optString("kind") == "image") {
           val left = handle == 0 || handle == 3; val top = handle < 2
           val ax = if (left) b.right else b.left; val ay = if (top) b.bottom else b.top
           val maxScale = minOf((if (left) ax else 1-ax)/maxOf(.0001f,b.width()),(if (top) ay else 1-ay)/maxOf(.0001f,b.height()))
-          val scale = maxOf(kotlin.math.abs(x-ax)/maxOf(.0001f,b.width()),kotlin.math.abs(y-ay)/maxOf(.0001f,b.height())).coerceIn(minOf(.05f,maxScale),maxScale)
+          val scale = maxOf(kotlin.math.abs(hx-ax)/maxOf(.0001f,b.width()),kotlin.math.abs(hy-ay)/maxOf(.0001f,b.height())).coerceIn(minOf(.05f,maxScale),maxScale)
           val w=b.width()*scale; val h=b.height()*scale
           target.set(if (left) ax-w else ax,if (top) ay-h else ay,if (left) ax else ax+w,if (top) ay else ay+h)
         }
@@ -242,7 +356,7 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
       }
       MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
         selectionStart?.let { original -> if (event.actionMasked == MotionEvent.ACTION_CANCEL) marks.put(selected, original) else onMark(mapOf("mark" to marks.getJSONObject(selected).toString())) }
-        selectionStart = null; cachedRect.setEmpty(); parent?.requestDisallowInterceptTouchEvent(false)
+        selectionStart = null; loupeVisible = false; cachedRect.setEmpty(); parent?.requestDisallowInterceptTouchEvent(false)
         emitSelection()
       }
     }
@@ -303,13 +417,13 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     if (event.pointerCount > 1) {
       finishErase(commit = false)
       selectionStart?.let { if (selected >= 0) marks.put(selected, it) }; selectionStart = null; cachedRect.setEmpty()
-      points = JSONArray()
+      points = JSONArray(); loupeVisible = false; panning = false
       lastErase = null; erasedInGesture.clear()
       val cx = (event.getX(0) + event.getX(1)) / 2; val cy = (event.getY(0) + event.getY(1)) / 2
       if (navigating && event.actionMasked == MotionEvent.ACTION_MOVE) { panX += cx - lastX; panY += cy - lastY }
       lastX = cx; lastY = cy; navigating = true; parent?.requestDisallowInterceptTouchEvent(true); invalidate(); return true
     }
-    if (navigating) { if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) { navigating = false; parent?.requestDisallowInterceptTouchEvent(false) }; return true }
+    if (navigating) { if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) { navigating = false; parent?.requestDisallowInterceptTouchEvent(false); emitZoom() }; return true }
     if (mode == "select") return selectTouch(event)
     if (mode == "erase") {
       if (event.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -323,14 +437,14 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     val point = JSONArray().put(((event.x - rect.left) / rect.width()).coerceIn(0f, 1f).toDouble()).put(((event.y - rect.top) / rect.height()).coerceIn(0f, 1f).toDouble())
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> { if (!rect.contains(event.x, event.y)) return false; parent?.requestDisallowInterceptTouchEvent(true); points = JSONArray().put(point).put(point) }
-      MotionEvent.ACTION_MOVE -> { if (mode in listOf("highlight", "polygon", "line")) points.put(1, point) else if (points.length() < 4096) points.put(point) }
+      MotionEvent.ACTION_MOVE -> { if (mode in listOf("highlight", "polygon", "line")) { points.put(1, point); loupeVisible = true; loupeFinger.set(event.x, event.y) } else if (points.length() < 4096) points.put(point) }
       MotionEvent.ACTION_UP -> {
         if (points.length() < 2) return false
         // Fast strokes can finish before another MOVE; keep their final sample.
         if (mode in listOf("highlight", "polygon", "line")) points.put(1, point) else if (points.length() < 4096) points.put(point)
-        val mark = currentMark().put("id", java.util.UUID.randomUUID().toString()); marks.put(mark); cachedRect.setEmpty(); onMark(mapOf("mark" to mark.toString())); points = JSONArray(); parent?.requestDisallowInterceptTouchEvent(false); performClick()
+        val mark = currentMark().put("id", java.util.UUID.randomUUID().toString()); marks.put(mark); cachedRect.setEmpty(); onMark(mapOf("mark" to mark.toString())); points = JSONArray(); loupeVisible = false; parent?.requestDisallowInterceptTouchEvent(false); performClick()
       }
-      MotionEvent.ACTION_CANCEL -> { points = JSONArray(); parent?.requestDisallowInterceptTouchEvent(false) }
+      MotionEvent.ACTION_CANCEL -> { points = JSONArray(); loupeVisible = false; parent?.requestDisallowInterceptTouchEvent(false) }
     }
     invalidate(); return true
   }

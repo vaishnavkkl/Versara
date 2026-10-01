@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { FlatList, Keyboard, Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { BottomSheetFlatList, BottomSheetTextInput, type BottomSheetFlatListMethods } from '@gorhom/bottom-sheet';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import type { ToolSection } from './tool-grid';
@@ -27,7 +28,7 @@ export function ToolboxContent({ title, subtitle, sections, footer, onClose, onS
   const colors = usePalette();
   const { fontScale } = useWindowDimensions();
   const [query, setQuery] = useState('');
-  const list = useRef<FlatList<Row>>(null);
+  const list = useRef<BottomSheetFlatListMethods>(null);
   const select = useStableCallback((id: string) => { Keyboard.dismiss(); onSelect(id); });
   const rowHeight = Math.max(96, Math.ceil(58 + 34 * fontScale)) + s.sm;
   const headingHeight = Math.ceil(18 * fontScale + s.xl);
@@ -62,10 +63,10 @@ export function ToolboxContent({ title, subtitle, sections, footer, onClose, onS
     </View>
     {total > 9 && <View style={[styles.search, { backgroundColor: colors.fieldSurface, borderColor: colors.separator }]}>
       <UniversalIcon ios="magnifyingglass" android="search" size={19} color={colors.secondaryLabel} />
-      <TextInput accessibilityLabel="Search toolbox" placeholder="Find a tool" placeholderTextColor={colors.secondaryLabel} value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} returnKeyType="search" onSubmitEditing={Keyboard.dismiss} style={[styles.input, { color: colors.label }]} />
+      <BottomSheetTextInput accessibilityLabel="Search toolbox" placeholder="Find a tool" placeholderTextColor={colors.secondaryLabel} value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} returnKeyType="search" onSubmitEditing={Keyboard.dismiss} style={[styles.input, { color: colors.label }]} />
       {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => setQuery('')} style={styles.iconButton}><UniversalIcon ios="xmark.circle.fill" android="cancel" size={18} color={colors.secondaryLabel} /></Pressable>}
     </View>}
-    <FlatList ref={list} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemLayout={getItemLayout}
+    <BottomSheetFlatList ref={list} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemLayout={getItemLayout}
       style={styles.catalog} contentContainerStyle={styles.catalogContent} initialNumToRender={5} maxToRenderPerBatch={2} windowSize={3}
       nestedScrollEnabled keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator indicatorStyle={colors.systemBackground === '#000000' ? 'white' : 'black'}
       ListEmptyComponent={<View style={styles.empty}><UniversalIcon ios="magnifyingglass" android="search" size={28} color={colors.secondaryLabel} /><ThemedText>No matching tools</ThemedText><ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>Try another name or clear your search.</ThemedText></View>} />

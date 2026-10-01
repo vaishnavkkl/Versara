@@ -4,16 +4,18 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenHeader } from '@/components/screen-header';
 import { HelpButton } from '@/components/help-button';
+import { HeaderOrientationButton } from '@/components/header-orientation';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
+import { handleReaderBack, handleReaderHelp } from '@/features/pdf/reader-back';
 import { usePalette } from '@/theme/colors';
 
 export default function PdfViewerScreen() {
   const { uri, name, page, revision } = useLocalSearchParams<{ uri: string; name?: string; page?: string; revision?: string }>();
   const colors = usePalette();
   const [focused, setFocused] = useState(false);
-  function back() { if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
+  function back() { if (handleReaderBack()) return; if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    {!focused && <ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back}><HelpButton tool="viewer" /></ScreenHeader>}
+    {!focused && <ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} trailing={<HeaderOrientationButton />}><HelpButton tool="viewer" intercept={handleReaderHelp} /></ScreenHeader>}
     <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} />
   </SafeAreaView>;
 }

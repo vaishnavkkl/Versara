@@ -25,13 +25,13 @@ public class FileEngineModule: Module {
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 3 }
+    Constant("nativeImageListVersion") { 4 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
     Constant("nativeImageEditorVersion") { 1 }
     Constant("nativeImageHistoryVersion") { 1 }
-    Constant("nativeImageTextVersion") { 1 }
+    Constant("nativeImageTextVersion") { 2 }
     Function("cancelImageTextRecognition") { (uri: String) in ImageText.cancelRecognition(uri: uri) }
     Constant("nativeDeviceSaveVersion") { 2 }
     AsyncFunction("saveToDevice") { (sourceUri: String, name: String, mimeType: String, replaceUri: String, promise: Promise) in
@@ -40,12 +40,13 @@ public class FileEngineModule: Module {
         catch { promise.reject("SAVE_FAILED", error.localizedDescription) }
       }
     }
-    AsyncFunction("recognizeImageText") { (uri: String, promise: Promise) in
+    AsyncFunction("recognizeImageText") { (uri: String, fonts: String?, promise: Promise) in
+      let catalog = (try? JSONSerialization.jsonObject(with: Data((fonts ?? "{}").utf8))) as? [String: String] ?? [:]
       do {
         let operation = try ImageText.prepareRecognition(uri: uri)
         self.queue.async { autoreleasepool {
           defer { ImageText.finishRecognition(operation) }
-          do { promise.resolve(try ImageText.recognize(uri: uri, operation: operation)) }
+          do { promise.resolve(try ImageText.recognize(uri: uri, operation: operation, fonts: catalog)) }
           catch is CancellationError { promise.reject("IMAGE_TEXT_CANCELLED", "Text recognition was cancelled.") }
           catch { promise.reject("IMAGE_TEXT_FAILED", error.localizedDescription) }
         } }
@@ -61,8 +62,9 @@ public class FileEngineModule: Module {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView.self) {
-      Events("onOpen", "onRemove", "onLongPress")
+      Events("onOpen", "onRemove", "onLongPress", "onRefresh")
       Prop("items") { (view: RecentImagesView, value: String) in view.setItems(value) }
+      Prop("refreshing") { (view: RecentImagesView, value: Bool) in view.setRefreshing(value) }
       Prop("grid") { (view: RecentImagesView, value: Bool) in view.setGrid(value) }
       Prop("palette") { (view: RecentImagesView, value: String) in view.setPalette(value) }
       Prop("disabled") { (view: RecentImagesView, value: Bool) in view.disabled = value }
@@ -122,10 +124,6 @@ public class FileEngineModule: Module {
           promise.resolve(true)
         } catch { promise.reject("DELETE_FAILED", error.localizedDescription) }
       }
-    }
-    Constant("nativeRecentDocumentsVersion") { 1 }
-    AsyncFunction("listRecentDocuments") { (limit: Int, search: String, promise: Promise) in
-      self.pdfs.recent(limit: max(1, min(limit, 60)), search: search.trimmingCharacters(in: .whitespacesAndNewlines), kind: "document", extensions: ["docx", "txt"], promise: promise)
     }
     Constant("nativeExplorerVersion") { 1 }
     AsyncFunction("getStorageRoots") { (promise: Promise) in promise.resolve(FileExplorer.roots()) }

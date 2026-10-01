@@ -13,6 +13,14 @@ dependencies {
   implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
 }
 
+def ocrModel = file('../vendor/android-assets/tessdata/eng.traineddata')
+tasks.register('checkOcrModel') {
+  doLast {
+    if (!ocrModel.isFile()) throw new GradleException('Offline OCR model is missing. Run: node scripts/prepare-pdf-ocr.mjs')
+  }
+}
+tasks.named('preBuild').configure { dependsOn 'checkOcrModel' }
+
 android {
   namespace "expo.modules.pdfengine"
   defaultConfig {

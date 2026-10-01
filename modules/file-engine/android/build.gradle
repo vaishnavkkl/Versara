@@ -18,7 +18,11 @@ android {
 }
 
 dependencies {
-  // Reuse the PDF engine's FOSS recognizer and packaged tessdata/eng.traineddata.
-  // Recognition never downloads models or initializes Google SDK telemetry.
+  // Privacy scans reuse the PDF engine's FOSS recognizer and packaged tessdata/eng.traineddata.
   implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
+  // Image Edit text only: Google ML Kit with the Latin model bundled in the app (no model download).
+  // ML Kit is no-cost but proprietary, and Google documents SDK usage metrics.
+  implementation 'com.google.mlkit:text-recognition:16.0.1'
+  // Pull to refresh on the native recent-files list (the same AndroidX library React Native's RefreshControl uses).
+  implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 }

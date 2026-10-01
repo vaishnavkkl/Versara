@@ -53,13 +53,14 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   private val onSubmitText by EventDispatcher<Map<String, Any>>()
 
   private class Box(val id: Int, val rect: RectF)
-  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean, val submitOnReturn: Boolean = false)
-  private class Mark(val erase: RectF?, val left: Int, val right: Int, val lines: List<String>, val font: String, val size: Float, val color: Int, val x: Float, val y: Float, val underline: Boolean)
+  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean, val submitOnReturn: Boolean = false, val fontFile: String = "")
+  private class Mark(val erase: RectF?, val left: Int, val right: Int, val lines: List<String>, val font: String, val size: Float, val color: Int, val x: Float, val y: Float, val underline: Boolean, val scaleX: Float = 1f, val fontFile: String = "")
   private var marks = emptyList<Mark>()
   private val typefaces = HashMap<String, Typeface>()
 
-  /** Standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) as system faces. */
-  private fun typefaceFor(font: String): Typeface = typefaces.getOrPut(font) {
+  /** Bundled fonts load from their file; standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) map to system faces. */
+  private fun typefaceFor(font: String, file: String = ""): Typeface = typefaces.getOrPut(if (file.isEmpty()) font else file) {
+    if (file.isNotEmpty()) runCatching { Typeface.createFromFile(Uri.parse(file).path ?: file) }.getOrNull()?.let { return@getOrPut it }
     val base = when {
       font.startsWith("Times") -> Typeface.SERIF
       font.startsWith("Courier") -> Typeface.MONOSPACE
@@ -199,7 +200,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   fun setTextBox(json: String) {
     val value = runCatching {
       val item = JSONObject(json)
-      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"), item.optBoolean("submitOnReturn"))
+      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"), item.optBoolean("submitOnReturn"), item.optString("fontFile"))
     }.getOrDefault(TextBox(false, "", "Helvetica", 16f, 0x101020, false))
     val previous = textBox
     val opening = value.visible && !previous.visible
@@ -210,7 +211,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       edit.imeOptions = if (value.submitOnReturn) EditorInfo.IME_ACTION_DONE else EditorInfo.IME_FLAG_NO_ENTER_ACTION
     }
     // Typing echoes the same text back from JS; only restyle when something actually changed.
-    if (opening || value.font != previous.font) edit.typeface = typefaceFor(value.font)
+    if (opening || value.font != previous.font || value.fontFile != previous.fontFile) edit.typeface = typefaceFor(value.font, value.fontFile)
     if (opening || value.underline != previous.underline) edit.paintFlags = if (value.underline) edit.paintFlags or Paint.UNDERLINE_TEXT_FLAG else edit.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
     if (opening || value.color != previous.color) edit.setTextColor(Color.rgb(value.color shr 16 and 255, value.color shr 8 and 255, value.color and 255))
     if (edit.text.toString() != value.text) {
@@ -240,7 +241,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
         val background = eraseJson?.optInt("background", 0xFFFFFF) ?: 0xFFFFFF
         Mark(erase, 0xFF000000.toInt() or (eraseJson?.optInt("left", background) ?: background), 0xFF000000.toInt() or (eraseJson?.optInt("right", background) ?: background),
           item.optString("text").let { if (it.isBlank()) emptyList() else it.split('\n').take(50) }, item.optString("font", "Helvetica"),
-          item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101010), item.optDouble("x").toFloat(), item.optDouble("y").toFloat(), item.optBoolean("underline"))
+          item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101010), item.optDouble("x").toFloat(), item.optDouble("y").toFloat(), item.optBoolean("underline"), item.optDouble("scaleX", 1.0).toFloat().coerceIn(0.5f, 2f), item.optString("fontFile"))
       }
     }.getOrDefault(emptyList())
     outlines.marksChanged()
@@ -252,18 +253,28 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   fun setFocus(json: String) {
     if (json == focusKey) return
     focusKey = json
+    val wasFocused = focusRect != null
     focusRect = runCatching {
       JSONObject(json).let { RectF(it.getDouble("x").toFloat(), it.getDouble("y").toFloat(), (it.getDouble("x") + it.getDouble("width")).toFloat(), (it.getDouble("y") + it.getDouble("height")).toFloat()) }
     }.getOrNull()
-    if (focusRect != null) post { focusOn() }
+    if (focusRect != null) post { focusOn(keepZoom = wasFocused) }
   }
-  private fun focusOn() {
+  /** Zooms to the focus once; later moves, typing and keyboard resizes keep the zoom and only pan when it is out of view. */
+  private fun focusOn(keepZoom: Boolean = false) {
     val rect = focusRect ?: return
     if (disposed || contentWidth <= 0 || width <= 0 || height <= 0) return
     if (tx.isNaN() || ty.isNaN()) clampTransform()
     val rw = max(1f, rect.width() * contentWidth); val rh = max(1f, rect.height() * contentHeight)
+    // A resize during the first zoom retargets that animation instead of stopping it part way.
+    val keep = keepZoom && zoom > 1.01f && animator?.isRunning != true
+    if (keep) {
+      val margin = 16 * density
+      val left = tx + rect.left * contentWidth * zoom; val top = ty + rect.top * contentHeight * zoom
+      val bottom = ty + rect.bottom * contentHeight * zoom
+      if (left >= margin && left < width - margin && top >= margin && bottom <= height - margin) return
+    }
     // Readable first: the line fills about 36dp of height; long lines start at the left edge.
-    val target = min(36 * density / rh, height * 0.45f / rh).coerceIn(1.5f, 4f)
+    val target = if (keep) zoom else min(36 * density / rh, height * 0.45f / rh).coerceIn(1.5f, 4f)
     val endTx = if (rw * target > width * 0.92f) width * 0.04f - rect.left * contentWidth * target else width / 2f - rect.centerX() * contentWidth * target
     val endTy = height * 0.38f - rect.centerY() * contentHeight * target
     val startZoom = zoom; val startTx = tx; val startTy = ty
@@ -311,7 +322,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       outlines.marksChanged()
     }
     applyTransform()
-    if (viewResized && focusRect != null) post { focusOn() }
+    if (viewResized && focusRect != null) post { focusOn(keepZoom = true) }
   }
 
   private fun clampTransform() {
@@ -595,10 +606,11 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
           canvas.drawRoundRect(scratch, pad, pad, patch)
         }
         if (mark.lines.isNotEmpty()) {
-          ink.typeface = typefaceFor(mark.font)
+          ink.typeface = typefaceFor(mark.font, mark.fontFile)
           ink.textSize = max(1f, mark.size * scale)
           ink.color = 0xFF000000.toInt() or mark.color
           ink.isUnderlineText = mark.underline
+          ink.textScaleX = mark.scaleX
           for (line in mark.lines.indices) {
             if (mark.lines[line].isNotEmpty()) canvas.drawText(mark.lines[line], mark.x * w, mark.y * h + line * ink.textSize * 1.2f, ink)
           }

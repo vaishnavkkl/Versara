@@ -13,7 +13,8 @@ import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
-import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, type LocalFile } from '../files/file-storage';
+import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
+import { usePublishHeaderShare } from '@/components/header-share';
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -76,7 +77,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     setError(failure.code === 'PDF_CANCELLED' ? 'Operation cancelled. Your source PDFs are unchanged.' : failure.message ?? 'Could not process these PDFs. Please try again.');
   }
   useInitialFiles(initialSelection, available, choose);
-
+  const shareTarget = results.length === 1 ? results[0] : !results.length && sources.length === 1 ? sources[0] : null;
   async function choose(initialFiles?: LocalFile[]) {
     if (locked.current || !PdfEngine?.inspectPdfs) return;
     locked.current = true; setBusy(true); setError(''); setPhase('Opening file browser…');
@@ -111,6 +112,11 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   }
   const pageCount = sources.reduce((sum, source) => sum + source.pageCount, 0);
   const canRun = available && !busy && (merge ? sources.length >= 2 : ranges.length > 0);
+  usePublishHeaderShare({ active: !!(results.length || sources.length), disabled: busy || !shareTarget,
+    label: results.length > 1 ? 'Share each PDF from its card' : results.length ? 'Share new PDF' : shareTarget ? 'Share original PDF' : 'Share is available after merging',
+    onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
+    save: { disabled: busy || (results.length ? results.length > 1 : !canRun), label: results.length > 1 ? 'Save each PDF from its card' : results.length ? 'Save new PDF to device' : merge ? 'Merge PDFs' : 'Split PDF',
+      onSave: () => results.length === 1 ? saveResult(results[0]) : results.length ? undefined : process() } });
 
   async function process() {
     if (!PdfEngine?.organizePdfs || locked.current || !canRun) return;

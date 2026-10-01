@@ -22,8 +22,8 @@ import { clearSearchHistory, hydrateSearchHistory, setSearchHistoryEnabled, useS
 
 type Icon = React.ComponentProps<typeof UniversalIcon>;
 const VERSION = Constants.expoConfig?.version ?? '1.0.0';
-const LICENSES = 'Versara is built with free and open-source software, including:\n\n• PDFium (BSD-3-Clause / Apache-2.0)\n• React Native (MIT)\n• Expo SDK (MIT)\n• React Native Reanimated (MIT)\n• Sora typeface (SIL Open Font License)\n• Material Icons (Apache-2.0)';
-const PRIVACY = 'Versara works offline. PDFs, documents and images are processed on this device and are never uploaded.\n\nThere is no account, no analytics and no ads. Your preferences are stored only on this phone.';
+const LICENSES = 'Versara is built with free and open-source software, including:\n\n• PDFium (BSD-3-Clause / Apache-2.0)\n• React Native (MIT)\n• Expo SDK (MIT)\n• React Native Reanimated (MIT)\n• Sora typeface (SIL Open Font License)\n• Text-editing fonts: Carlito, Caladea, Poppins, Archivo Black, Crimson Text, Zilla Slab, Courier Prime, Anton, Bebas Neue, Abril Fatface, Lobster, Pacifico, Great Vibes and Patrick Hand (SIL Open Font License)\n• Material Icons (Apache-2.0)\n\nOn Android, image text editing uses Google ML Kit text recognition, a no-cost proprietary library that runs on the device.';
+const PRIVACY = 'Versara works offline. PDFs, documents and images are processed on this device and are never uploaded.\n\nThere is no account, no ads and Versara collects no analytics. Your preferences are stored only on this phone.\n\nOn Android, Edit text in images uses Google ML Kit on this device. Your images and text stay on the device, but Google may receive usage metrics from that library.';
 
 function cacheBytes() {
   try { return unusedThumbnailBytes(); } catch { return 0; }

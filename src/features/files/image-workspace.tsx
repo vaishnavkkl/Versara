@@ -1,4 +1,6 @@
-import { AppLoader } from '@/components/app-loader';
+import { AppLoader, withLoading } from '@/components/app-loader';
+import { FileEngine } from '../../../modules/file-engine';
+import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Pressable } from 'react-native';
 import { router } from 'expo-router';
@@ -15,7 +17,7 @@ import { ADVANCED_IMAGE_TOOLS } from './image-tools';
 const tabs: Record<string, string> = { crop: 'crop', rotate: 'rotate', flip_h: 'rotate', flip_v: 'rotate', brightness: 'adjust', contrast: 'adjust', saturation: 'adjust', temperature: 'adjust', filters: 'filters', export: 'export' };
 type Draft = { uri: string; size: number; mimeType: string };
 type WorkspaceDraft = { version: 1; draft: RecentFile; files: string[] };
-class ImageWorkspace {
+export class ImageWorkspace {
   readonly directory: Directory;
   private draft?: RecentFile;
   origin?: RecentFile;
@@ -104,6 +106,41 @@ export function useImageWorkspace(id: string) {
   return workspace;
 }
 
+const NEUTRAL_EDITS = { rotation: 0, flipH: false, flipV: false, brightness: 0, contrast: 1, saturation: 1, warmth: 0, filter: 'none' };
+const ENCODINGS: Record<string, { format: 'jpeg' | 'png' | 'webp'; extension: string; mimeType: string }> = {
+  png: { format: 'png', extension: '.png', mimeType: 'image/png' },
+  webp: { format: 'webp', extension: '.webp', mimeType: 'image/webp' },
+  jpeg: { format: 'jpeg', extension: '.jpg', mimeType: 'image/jpeg' },
+};
+
+/**
+ * Saves every change applied in image tools as one file, in the original's format where the device can encode it.
+ * Returns null when there is nothing to save or the user cancelled.
+ */
+export async function saveImageWorkspace(workspace: ImageWorkspace) {
+  const draft = await workspace.resolve();
+  const origin = workspace.origin;
+  if (!draft || !origin || !workspace.changed) return null;
+  if (!FileEngine) throw new Error('Install a new development build to save edited images.');
+  const engine = FileEngine;
+  const encoding = ENCODINGS[origin.mimeType.replace('image/', '')] ?? ENCODINGS.jpeg;
+  const base = origin.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '');
+  const options = await askSaveOptions(origin.name, encoding.mimeType, newFileName(base + encoding.extension));
+  if (!options) return null;
+  return withLoading('Saving your image…', async () => {
+    const folder = new Directory(Paths.document, 'Versara Images');
+    folder.create({ intermediates: true, idempotent: true });
+    const safe = base.replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) || 'Image';
+    const output = new File(folder, `${safe}-edited-${new Date().toISOString().replace(/[T:.]/g, '-').replace(/Z$/, '')}${encoding.extension}`);
+    let mimeType = encoding.mimeType;
+    if (draft.uri.toLowerCase().endsWith(encoding.extension)) new File(draft.uri).copy(output);
+    else mimeType = (await engine.editImage(JSON.stringify({ uri: draft.uri, outputUri: output.uri, edits: NEUTRAL_EDITS, crop: null, format: encoding.format, quality: 92 }))).mimeType;
+    const saved = await saveEditedOutput({ output: output.uri, mimeType, kind: 'image', mode: options.mode, origin, name: options.name });
+    await workspace.discard();
+    return saved;
+  });
+}
+
 export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: string; current: string; disabled: boolean; onApply: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -118,7 +155,7 @@ export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: st
     try {
       await onApply();
       if (!mounted.current) return;
-      if (tool in tabs) router.replace({ pathname: '/image-editor', params: { id, tab: tabs[tool] } });
+      if (tool in tabs) router.replace({ pathname: '/image-editor', params: { id, tab: tabs[tool], tool } });
       else if (tool === 'text' || tool === 'edit_text') router.replace({ pathname: '/image-text', params: { id, mode: tool === 'text' ? 'add' : 'edit' } });
       else router.replace({ pathname: '/image-tool', params: { id, tool } });
     } catch (cause) { if (mounted.current) { setError((cause as Error).message || 'Could not apply changes.'); setOpen(true); } }
@@ -126,6 +163,6 @@ export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: st
   }
   return <>
     <Pressable accessibilityRole="button" accessibilityLabel={switching ? 'Applying changes' : 'Switch image tool'} disabled={disabled || switching} onPress={() => setOpen(true)} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', opacity: disabled || switching ? .4 : 1 }}>{switching ? <AppLoader accessibilityLabel="Applying changes" /> : <UniversalIcon ios="square.grid.3x3" android="apps" size={24} color={colors.systemBlue} />}</Pressable>
-    <ToolboxSheet visible={open} title="Image tools" subtitle="Changes carry into the next tool. Export when you are ready." sections={sections} footer={<ThemedText accessibilityRole={error ? 'alert' : undefined}>{error || 'Your original image stays unchanged.'}</ThemedText>} onClose={() => setOpen(false)} onAction={tool => void choose(tool)} />
+    <ToolboxSheet visible={open} title="Image tools" subtitle="Changes carry into the next tool. Save once from the image preview." sections={sections} footer={<ThemedText accessibilityRole={error ? 'alert' : undefined}>{error || 'Your original image stays unchanged.'}</ThemedText>} onClose={() => setOpen(false)} onAction={tool => void choose(tool)} />
   </>;
 }

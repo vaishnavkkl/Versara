@@ -1,4 +1,5 @@
 import { EditorMenu } from '@/components/editor-menu';
+import { EditorOption } from '@/components/editor-option';
 
 const regular = (count: number, inner = 1): [number, number][] => Array.from({ length: count }, (_, i) => {
   const angle = i * Math.PI * 2 / count - Math.PI / 2, r = i % 2 ? inner : 1;
@@ -24,7 +25,9 @@ export const SHAPES: { id: string; label: string; points: [number, number][]; op
   { id: 'double-arrow', label: 'Double arrow', points: [[0,.5],[.3,0],[.3,.3],[.7,.3],[.7,0],[1,.5],[.7,1],[.7,.7],[.3,.7],[.3,1]] },
   { id: 'heart', label: 'Heart', points: [[.5,1],[.05,.5],[0,.25],[.1,.05],[.3,0],[.5,.2],[.7,0],[.9,.05],[1,.25],[.95,.5]] },
 ];
-export function ShapePicker({ value, onChange, disabled, compact = false }: { value: string; onChange: (id: string) => void; disabled: boolean; compact?: boolean }) {
-  return <EditorMenu label={`Shape: ${SHAPES.find(shape => shape.id === value)?.label ?? 'Rectangle'}`} compact={compact} icon={{ ios: 'square.on.circle', android: 'category' }} disabled={disabled}
+/** `inline` renders the shapes as options in place; use it inside a bottom sheet, where a second sheet would clash. */
+export function ShapePicker({ value, onChange, disabled, compact = false, iconOnly = false, inline = false, label }: { value: string; onChange: (id: string) => void; disabled: boolean; compact?: boolean; iconOnly?: boolean; inline?: boolean; label?: string }) {
+  if (inline) return <>{SHAPES.map(shape => <EditorOption key={shape.id} compact label={shape.label} selected={shape.id === value} disabled={disabled} onPress={() => onChange(shape.id)} />)}</>;
+  return <EditorMenu label={label ?? `Shape: ${SHAPES.find(shape => shape.id === value)?.label ?? 'Rectangle'}`} compact={compact} iconOnly={iconOnly} grid={4} icon={{ ios: 'square.on.circle', android: 'category' }} disabled={disabled}
     items={SHAPES.map(shape => ({ id: shape.id, label: shape.label, selected: shape.id === value, onPress: () => onChange(shape.id) }))} />;
 }

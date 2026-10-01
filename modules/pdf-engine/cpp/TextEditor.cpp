@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <fstream>
+#include <iterator>
 #include <locale>
 #include <map>
 #include <memory>
@@ -135,9 +136,41 @@ static const std::set<std::string> standardFonts = {
   "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
   "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
 };
-static FPDF_PAGEOBJECT newText(FPDF_DOCUMENT doc, const std::string& font, float size) {
-  require(standardFonts.count(font) != 0, "Choose a supported font.");
+/** Bundled TrueType fonts embedded once per apply; closing only drops our reference. */
+struct FontCache {
+  FPDF_DOCUMENT doc;
+  std::map<std::string, FPDF_FONT> fonts;
+  explicit FontCache(FPDF_DOCUMENT doc) : doc(doc) {}
+  FontCache(const FontCache&) = delete;
+  ~FontCache() { for (auto& item : fonts) FPDFFont_Close(item.second); }
+  FPDF_FONT load(std::string path) {
+    if (path.rfind("file://", 0) == 0) path = path.substr(7);
+    auto found = fonts.find(path);
+    if (found != fonts.end()) return found->second;
+    const auto extension = lowercaseExtension(path);
+    require(extension == ".ttf" || extension == ".otf", "Choose a supported font.");
+    std::ifstream input(path, std::ios::binary);
+    require(input.good(), "This font is not available. Reopen the editor.", "PDF_FONT_UNSUPPORTED");
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    require(!data.empty() && data.size() <= 8 * 1024 * 1024, "This font cannot be embedded.", "PDF_FONT_UNSUPPORTED");
+    auto font = FPDFText_LoadFont(doc, data.data(), uint32_t(data.size()), FPDF_FONT_TRUETYPE, true);
+    require(font != nullptr, "This font cannot be embedded.", "PDF_FONT_UNSUPPORTED");
+    return fonts[path] = font;
+  }
+  static std::string lowercaseExtension(const std::string& path) {
+    auto value = fs::path(path).extension().string();
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return value;
+  }
+};
+static FPDF_PAGEOBJECT newText(FPDF_DOCUMENT doc, const std::string& font, float size, const std::string& fontFile = "", FontCache* cache = nullptr) {
   require(std::isfinite(size) && size >= 1 && size <= 400, "Choose a font size from 4 to 200.");
+  if (standardFonts.count(font) == 0) {
+    require(cache != nullptr && !fontFile.empty(), "Choose a supported font.");
+    auto object = FPDFPageObj_CreateTextObj(doc, cache->load(fontFile), size);
+    require(object != nullptr, "Could not create this text.");
+    return object;
+  }
   auto object = FPDFPageObj_NewTextObj(doc, font.c_str(), size);
   require(object != nullptr, "Could not create this text.");
   return object;
@@ -776,6 +809,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
   Verification verification;
   std::set<int> touched;
   bool changed = false;
+  FontCache fonts(doc);
   for (auto command : commands) {
     check();
     if (command.at("page").get<int>() != pageNumber) continue;
@@ -790,7 +824,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
       const float size = command.value("size", 11.0f), margin = command.value("margin", 24.0f);
       require(std::isfinite(size) && size >= 4 && size <= 72 && std::isfinite(margin) && margin >= 0 && margin <= 144, "Choose a valid size and margin.");
       const auto text = command.at("text").get<std::string>();
-      auto object = newText(doc, command.value("font", std::string("Helvetica")), size);
+      auto object = newText(doc, command.value("font", std::string("Helvetica")), size, command.value("fontFile", std::string()), &fonts);
       std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, decltype(&FPDFPageObj_Destroy)> owned(object, FPDFPageObj_Destroy);
       setText(object, text);
       float l = 0, b = 0, r = 0, t = 0; FPDFPageObj_GetBounds(object, &l, &b, &r, &t);
@@ -821,7 +855,8 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
       FS_MATRIX matrix{float(std::cos(angle)), float(std::sin(angle)), float(-std::sin(angle)), float(std::cos(angle)), float(px), float(py)};
       indentMatrix(matrix, indent);
       const auto color = command.value("color", 0x101020u);
-      writeLines(page, lines, matrix, size, nullptr, [&] { return newText(doc, font, size); },
+      const auto fontFile = command.value("fontFile", std::string());
+      writeLines(page, lines, matrix, size, nullptr, [&] { return newText(doc, font, size, fontFile, &fonts); },
                  (color >> 16) & 255, (color >> 8) & 255, color & 255, unsigned(std::clamp(command.value("opacity", 1.0), .05, 1.0) * 255), underlined, verification);
     } else {
       const int id = command.at("objectId");
@@ -889,7 +924,8 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
           ++fallbacks;
         }
       } else {
-        writeLines(page, lines, matrix, fontSize, nullptr, [&] { return newText(doc, font, fontSize); }, r, g, b, a, underlined, verification);
+        const auto fontFile = command.value("fontFile", std::string());
+        writeLines(page, lines, matrix, fontSize, nullptr, [&] { return newText(doc, font, fontSize, fontFile, &fonts); }, r, g, b, a, underlined, verification);
         require(FPDFPage_RemoveObject(page, object), "Could not remove the selected text.");
         FPDFPageObj_Destroy(object);
       }
@@ -1068,6 +1104,41 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
       command["pixelPath"] = safe.string();
     }
     for (const auto& command : commands) require(command.at("page").get<int>() >= 0 && command.at("page").get<int>() < count, "Invalid page number.");
+    if (options.at("action") == "find_text") {
+      // Lists editable text fragments containing the query on every page; JS builds the replace commands.
+      const auto query = options.value("query", std::string(""));
+      require(!query.empty() && query.size() <= 512, "Search for 1 to 128 characters.");
+      const bool matchCase = options.value("matchCase", false);
+      auto fold = [matchCase](std::string value) {
+        if (!matchCase) for (auto& c : value) if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+        return value;
+      };
+      const auto needle = fold(query);
+      Json pages = Json::array();
+      int total = 0, locked = 0;
+      bool truncated = false;
+      for (int number = 0; number < count && !truncated; ++number) {
+        check(); Page page(doc, number); TextPage text(page.value);
+        const int objectCount = FPDFPage_CountObjects(page.value);
+        require(objectCount <= 20000, "A page is too complex to search for text editing.");
+        Json found = Json::array();
+        for (int i = 0; i < objectCount; ++i) {
+          check();
+          auto object = FPDFPage_GetObject(page.value, i);
+          if (FPDFPageObj_GetType(object) != FPDF_PAGEOBJ_TEXT) continue;
+          auto value = textOf(object, text.value);
+          if (value.empty() || fold(value).find(needle) == std::string::npos) continue;
+          if (!editable(object)) { ++locked; continue; }
+          if (total >= 500) { truncated = true; break; }
+          found.push_back({{"id", i}, {"text", value}});
+          ++total;
+        }
+        if (!found.empty()) pages.push_back({{"page", number}, {"objects", found}});
+        if (number % 10 == 0 || number + 1 == count) progress(number + 1, count);
+      }
+      check();
+      return Json{{"pages", pages}, {"truncated", truncated}, {"locked", locked}}.dump();
+    }
     if (options.at("action") == "preview") {
       const int number = options.at("page");
       require(number >= 0 && number < count, "Choose an existing page.");

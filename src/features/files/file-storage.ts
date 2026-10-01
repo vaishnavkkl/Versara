@@ -47,18 +47,53 @@ export async function shareFile(file: { uri: string; mimeType?: string }) {
   await Sharing.shareAsync(file.uri, { mimeType: file.mimeType, dialogTitle: 'Save or share file', ...(file.mimeType === 'application/pdf' ? { UTI: 'com.adobe.pdf' } : {}) });
 }
 
-/** Keep named attachments after the Android chooser returns: receivers read them later. */
-export async function shareNamedFile(file: LocalFile) {
+/** A named file in the share cache. Receivers read attachments after the Android chooser returns, so they are kept. */
+export function createShareAttachment(name: string) {
   const root = new Directory(Paths.cache, 'versara-share');
   root.create({ intermediates: true, idempotent: true });
   const entries = root.list().filter((entry): entry is Directory => entry instanceof Directory)
     .sort((a, b) => b.name.localeCompare(a.name));
-  // Eight recent attachments at most. Avoid copying exceptionally large files into the cache.
+  // Eight recent attachments at most.
   for (const entry of entries.slice(7)) { try { entry.delete(); } catch { /* OS cache eviction remains available. */ } }
-  if (file.size > 32 * 1024 * 1024) return shareFile(file);
   const folder = new Directory(root, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   folder.create();
-  const attachment = new File(folder, file.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_'));
+  return new File(folder, name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(-120) || 'file');
+}
+
+export function discardShareAttachment(attachment: File) {
+  try { const folder = attachment.parentDirectory; if (folder.exists) folder.delete(); } catch { /* OS cache eviction remains available. */ }
+}
+
+export async function shareNamedFile(file: LocalFile) {
+  // Avoid copying exceptionally large files into the cache.
+  if (file.size > 32 * 1024 * 1024) return shareFile(file);
+  const attachment = createShareAttachment(file.name);
   try { await new File(file.uri).copy(attachment); await shareFile({ uri: attachment.uri, mimeType: file.mimeType }); }
-  catch (cause) { if (folder.exists) folder.delete(); throw cause; }
+  catch (cause) { discardShareAttachment(attachment); throw cause; }
+}
+
+/**
+ * Renders an edited copy into the share cache, then opens the share sheet.
+ * Renderers that only write inside one folder render into `staging` first.
+ */
+export async function shareRenderedFile(name: string, mimeType: string, render: (outputUri: string) => Promise<unknown>, staging?: Directory) {
+  const attachment = createShareAttachment(name);
+  const extension = name.match(/\.[a-z0-9]{1,5}$/i)?.[0] ?? '';
+  const target = staging ? new File(staging, `.share-${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`) : attachment;
+  try {
+    staging?.create({ intermediates: true, idempotent: true });
+    await render(target.uri);
+    if (!target.exists) throw new Error('Could not prepare the file to share.');
+    if (target !== attachment) await target.move(attachment);
+    await shareFile({ uri: attachment.uri, mimeType });
+  } catch (cause) {
+    if (target !== attachment) { try { if (target.exists) target.delete(); } catch { /* Removed with the next save cleanup. */ } }
+    discardShareAttachment(attachment);
+    throw cause;
+  }
+}
+
+/** Edited PDFs are written by the native editor, which only writes inside the saved PDF folder. */
+export function shareRenderedPdf(name: string, render: (outputUri: string) => Promise<unknown>) {
+  return shareRenderedFile(name, 'application/pdf', render, savedPdfDirectory());
 }

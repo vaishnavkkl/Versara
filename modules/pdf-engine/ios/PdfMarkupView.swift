@@ -5,6 +5,13 @@ import ImageIO
 final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   let onMark = EventDispatcher()
   let onSelection = EventDispatcher()
+  let onZoom = EventDispatcher()
+  let onPageSwipe = EventDispatcher()
+  private var zoomSerial = ""
+  private var lastZoom: CGFloat = 1
+  private var loupeVisible = false
+  private var loupeFinger = CGPoint.zero
+  private var grab = CGPoint.zero
   private var image: UIImage?
   private var source = ""
   private var version = 0
@@ -19,8 +26,8 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     didSet {
       guard mode != oldValue else { return }
       finishErase(commit: false)
-      cancelSelection()
-      points = []; selectionStart = nil
+      cancelSelection(); panning = false
+      points = []; selectionStart = nil; loupeVisible = false
       if mode != "select" { selected = -1; emitSelection() } else { emitSelection() }
       lastErase = nil; erasedInGesture.removeAll(); setNeedsDisplay()
     }
@@ -44,6 +51,10 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   private var zoom: CGFloat = 1
   private var pan = CGPoint.zero
   private var navigating = false
+  // In select mode a drag that starts away from every mark moves the page instead.
+  private var panning = false
+  private var panStart = CGPoint.zero
+  private var panLast = CGPoint.zero
   var inkWidth = 0.005
   var disabled = false
   required init(appContext: AppContext? = nil) {
@@ -58,12 +69,29 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
   @objc private func pinchPage(_ g: UIPinchGestureRecognizer) {
     cancelSelection()
     finishErase(commit: false)
-    points = []; let next = min(6, max(1, zoom * g.scale)), ratio = next / zoom, focus = g.location(in: self)
+    points = []; loupeVisible = false; let next = min(6, max(1, zoom * g.scale)), ratio = next / zoom, focus = g.location(in: self)
     pan.x = focus.x - bounds.midX - (focus.x - bounds.midX - pan.x) * ratio
     pan.y = focus.y - bounds.midY - (focus.y - bounds.midY - pan.y) * ratio
     zoom = next; g.scale = 1; setNeedsDisplay()
+    if g.state == .ended || g.state == .cancelled { emitZoom() }
   }
-  @objc private func movePage(_ g: UIPanGestureRecognizer) { cancelSelection(); finishErase(commit: false); points = []; let delta = g.translation(in: self); pan.x += delta.x; pan.y += delta.y; g.setTranslation(.zero, in: self); setNeedsDisplay() }
+  private func emitZoom() { if abs(zoom - lastZoom) > 0.001 { lastZoom = zoom; onZoom(["zoom": Double(zoom)]) } }
+  func requestZoom(_ value: String) {
+    let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+    let serial = parts.first ?? "", factor = parts.count > 1 ? Double(parts[1]) : nil
+    guard serial != zoomSerial else { return }
+    let first = zoomSerial.isEmpty; zoomSerial = serial
+    guard !first, let factor, factor.isFinite, factor > 0, !closed, bounds.width > 0, !pageRect.isEmpty else { return }
+    let next = min(6, max(1, zoom * CGFloat(factor))), ratio = next / zoom
+    var focus = CGPoint(x: bounds.midX, y: bounds.midY)
+    let hasSelection = marks.indices.contains(selected)
+    if hasSelection { let box = screenBox(boundsOf(marks[selected])); focus = CGPoint(x: box.midX, y: box.midY) }
+    pan.x = focus.x - bounds.midX - (focus.x - bounds.midX - pan.x) * ratio
+    pan.y = focus.y - bounds.midY - (focus.y - bounds.midY - pan.y) * ratio
+    if hasSelection { pan.x += bounds.midX - focus.x; pan.y += bounds.midY - focus.y }
+    zoom = next; setNeedsDisplay(); emitZoom()
+  }
+  @objc private func movePage(_ g: UIPanGestureRecognizer) { cancelSelection(); finishErase(commit: false); points = []; loupeVisible = false; if g.state == .ended { emitZoom() }; let delta = g.translation(in: self); pan.x += delta.x; pan.y += delta.y; g.setTranslation(.zero, in: self); setNeedsDisplay() }
   func setSource(_ value: String) {
     guard value != source, !closed else { return }
     source = value; version += 1; pendingSource = value; points = []; image = nil; setNeedsDisplay(); decodeNext()
@@ -118,7 +146,7 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     let id = marks.indices.contains(selected) ? marks[selected]["id"] as? String : nil
     marks = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [[String: Any]] ?? []; cachedRect = .zero
     selected = id.flatMap { id in marks.firstIndex { $0["id"] as? String == id } } ?? -1
-    if let added = marks.indices.reversed().first(where: { marks[$0]["kind"] as? String == "image" && !previousIds.contains(marks[$0]["id"] as? String ?? "") }) { selected=added }
+    if let added = marks.indices.reversed().first(where: { (mode == "select" || marks[$0]["kind"] as? String == "image") && !previousIds.contains(marks[$0]["id"] as? String ?? "") }) { selected=added }
     if selected < 0 { selectionStart = nil }
     if mode == "select" { emitSelection() }
     loadStamps()
@@ -133,17 +161,85 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     pan.x = min(max(0, (size.width - bounds.width) / 2), max(-max(0, (size.width - bounds.width) / 2), pan.x))
     pan.y = min(max(0, (size.height - bounds.height) / 2), max(-max(0, (size.height - bounds.height) / 2), pan.y))
     pageRect = CGRect(x: (bounds.width - size.width) / 2 + pan.x, y: (bounds.height - size.height) / 2 + pan.y, width: size.width, height: size.height)
-    image.draw(in: pageRect); context.saveGState(); context.clip(to: pageRect)
     if cachedRect != pageRect || paths.count != marks.count { paths = marks.map { markPath($0) }; cachedRect = pageRect }
-    for (index, mark) in marks.enumerated() { drawMark(mark, context, paths[index]) }
-    if points.count >= 2 { drawMark(currentMark(), context) }
+    let draft = points.count >= 2 ? currentMark() : nil
+    drawScene(image, context, draft, 1)
+    if loupeVisible { drawLoupe(image, context, draft) }
+  }
+  private func drawScene(_ image: UIImage, _ context: CGContext, _ draft: [String: Any]?, _ magnification: CGFloat) {
+    image.draw(in: pageRect); context.saveGState(); context.clip(to: pageRect)
+    for (index, mark) in marks.enumerated() where paths.indices.contains(index) { drawMark(mark, context, paths[index]) }
+    if let draft { drawMark(draft, context) }
     context.restoreGState()
-    if mode == "select", marks.indices.contains(selected) {
-      let box = boundsOf(marks[selected])
-      let area = CGRect(x: pageRect.minX + box.minX * pageRect.width, y: pageRect.minY + box.minY * pageRect.height, width: box.width * pageRect.width, height: box.height * pageRect.height)
-      context.setStrokeColor(UIColor.systemBlue.cgColor); context.setFillColor(UIColor.systemBlue.cgColor); context.setLineWidth(2); context.stroke(area)
-      for point in [CGPoint(x: area.minX,y: area.minY),CGPoint(x: area.maxX,y: area.minY),CGPoint(x: area.maxX,y: area.maxY),CGPoint(x: area.minX,y: area.maxY)] { context.fillEllipse(in: CGRect(x: point.x-6,y: point.y-6,width:12,height:12)) }
+    if mode == "select", marks.indices.contains(selected) { drawSelection(marks[selected], context, magnification) }
+  }
+  private func screenBox(_ box: CGRect) -> CGRect {
+    CGRect(x: pageRect.minX + box.minX * pageRect.width, y: pageRect.minY + box.minY * pageRect.height, width: box.width * pageRect.width, height: box.height * pageRect.height)
+  }
+  /// Corners first (0-3), then edge midpoints (4-7). Images resize from corners only to keep their shape.
+  private func handlePoints(_ box: CGRect, image: Bool) -> [CGPoint] {
+    let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY)]
+    return image ? corners : corners + [CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.maxX, y: box.midY), CGPoint(x: box.midX, y: box.maxY), CGPoint(x: box.minX, y: box.midY)]
+  }
+  /// The move handle sits in the middle, or below a box too small to hold it beside the resize handles.
+  private func moveHandle(_ box: CGRect) -> CGPoint {
+    if box.width >= 64 && box.height >= 64 { return CGPoint(x: box.midX, y: box.midY) }
+    let below = box.maxY + 30
+    return CGPoint(x: box.midX, y: below + 16 <= bounds.height ? below : box.minY - 30)
+  }
+  private func drawSelection(_ mark: [String: Any], _ context: CGContext, _ magnification: CGFloat) {
+    let d = 1 / magnification, box = screenBox(boundsOf(mark))
+    let outline = UIColor(red: 124/255, green: 128/255, blue: 176/255, alpha: 1).cgColor
+    context.saveGState()
+    context.setStrokeColor(outline); context.setLineWidth(1.25 * d); context.setLineDash(phase: 0, lengths: [4 * d, 3 * d]); context.stroke(box); context.setLineDash(phase: 0, lengths: [])
+    let move = moveHandle(box)
+    if !box.contains(move) { context.move(to: CGPoint(x: box.midX, y: move.y > box.maxY ? box.maxY : box.minY)); context.addLine(to: move); context.strokePath() }
+    let half = 5 * d
+    for p in handlePoints(box, image: mark["kind"] as? String == "image") {
+      let square = CGRect(x: p.x - half, y: p.y - half, width: half * 2, height: half * 2)
+      context.setFillColor(UIColor.white.cgColor); context.fill(square); context.stroke(square)
     }
+    context.setFillColor(UIColor(red: 57/255, green: 104/255, blue: 225/255, alpha: 1).cgColor)
+    context.fillEllipse(in: CGRect(x: move.x - 13 * d, y: move.y - 13 * d, width: 26 * d, height: 26 * d))
+    context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(1.6 * d); context.setLineCap(.round); context.setLineJoin(.round)
+    let arm = 7 * d, tip = 2.6 * d
+    context.move(to: CGPoint(x: move.x - arm, y: move.y)); context.addLine(to: CGPoint(x: move.x + arm, y: move.y))
+    context.move(to: CGPoint(x: move.x, y: move.y - arm)); context.addLine(to: CGPoint(x: move.x, y: move.y + arm))
+    for (dx, dy) in [(CGFloat(1), CGFloat(0)), (-1, 0), (0, 1), (0, -1)] {
+      let end = CGPoint(x: move.x + dx * arm, y: move.y + dy * arm)
+      context.move(to: end); context.addLine(to: CGPoint(x: end.x - dx * tip + dy * tip, y: end.y - dy * tip + dx * tip))
+      context.move(to: end); context.addLine(to: CGPoint(x: end.x - dx * tip - dy * tip, y: end.y - dy * tip - dx * tip))
+    }
+    context.strokePath(); context.restoreGState()
+  }
+  /// A magnified view of the point being placed, shown only while a finger moves a shape or draws one.
+  private func drawLoupe(_ image: UIImage, _ context: CGContext, _ draft: [String: Any]?) {
+    let size: CGFloat = 128, margin: CGFloat = 12, radius: CGFloat = 16
+    var frame = CGRect(x: bounds.width - margin - size, y: margin, width: size, height: size)
+    if frame.insetBy(dx: -24, dy: -24).contains(loupeFinger) { frame.origin.x = margin }
+    var focus = loupeFinger, magnification: CGFloat = 2.5
+    if mode == "select", marks.indices.contains(selected) {
+      let box = screenBox(boundsOf(marks[selected]))
+      if handle < 0 { focus = CGPoint(x: box.midX, y: box.midY); magnification = min(4, max(1.5, size * 0.6 / max(box.width, box.height, 1))) }
+      else if handlePoints(box, image: false).indices.contains(handle) { focus = handlePoints(box, image: false)[handle] }
+    } else if draft != nil, let last = points.last, last.count == 2 {
+      focus = CGPoint(x: pageRect.minX + CGFloat(last[0]) * pageRect.width, y: pageRect.minY + CGFloat(last[1]) * pageRect.height)
+    }
+    let clip = UIBezierPath(roundedRect: frame, cornerRadius: radius)
+    context.saveGState()
+    context.setShadow(offset: CGSize(width: 0, height: 2), blur: 8, color: UIColor.black.withAlphaComponent(0.25).cgColor)
+    context.setFillColor(UIColor(red: 0.9, green: 0.92, blue: 0.95, alpha: 1).cgColor); context.addPath(clip.cgPath); context.fillPath()
+    context.restoreGState()
+    context.saveGState(); context.addPath(clip.cgPath); context.clip()
+    context.translateBy(x: frame.midX, y: frame.midY); context.scaleBy(x: magnification, y: magnification); context.translateBy(x: -focus.x, y: -focus.y)
+    drawScene(image, context, draft, magnification)
+    context.restoreGState()
+    context.saveGState()
+    context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(1.5); context.addPath(clip.cgPath); context.strokePath()
+    context.setStrokeColor(UIColor(red: 57/255, green: 104/255, blue: 225/255, alpha: 0.6).cgColor); context.setLineWidth(1)
+    context.move(to: CGPoint(x: frame.midX - 6, y: frame.midY)); context.addLine(to: CGPoint(x: frame.midX + 6, y: frame.midY))
+    context.move(to: CGPoint(x: frame.midX, y: frame.midY - 6)); context.addLine(to: CGPoint(x: frame.midX, y: frame.midY + 6))
+    context.strokePath(); context.restoreGState()
   }
   private func currentMark() -> [String: Any] {
     var output = points
@@ -214,31 +310,45 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0, width: (xs.max() ?? 0)-(xs.min() ?? 0), height: (ys.max() ?? 0)-(ys.min() ?? 0))
   }
   private func beginSelection(_ touch: UITouch) {
-    let p = point(touch); let x = CGFloat(p[0]), y = CGFloat(p[1]); handle = -1
+    let location = touch.location(in: self), p = point(touch); let x = CGFloat(p[0]), y = CGFloat(p[1])
+    handle = -1; grab = .zero
+    var grabbed = false
     if marks.indices.contains(selected) {
-      let b = boundsOf(marks[selected]); let corners = [CGPoint(x:b.minX,y:b.minY),CGPoint(x:b.maxX,y:b.minY),CGPoint(x:b.maxX,y:b.maxY),CGPoint(x:b.minX,y:b.maxY)]
-      handle = corners.firstIndex { abs($0.x-x)*pageRect.width < 24 && abs($0.y-y)*pageRect.height < 24 } ?? -1
+      let mark = marks[selected], box = screenBox(boundsOf(mark))
+      var best: CGFloat = 24
+      for (index, point) in handlePoints(box, image: mark["kind"] as? String == "image").enumerated() {
+        let distance = hypot(point.x - location.x, point.y - location.y)
+        if distance < best { best = distance; handle = index; grabbed = true; grab = CGPoint(x: (point.x - location.x) / pageRect.width, y: (point.y - location.y) / pageRect.height) }
+      }
+      let move = moveHandle(box)
+      if hypot(move.x - location.x, move.y - location.y) < min(best, 28) { handle = -1; grabbed = true; grab = .zero }
     }
-    if handle < 0 { selected = marks.indices.reversed().first { boundsOf(marks[$0]).insetBy(dx:-24/pageRect.width,dy:-24/pageRect.height).contains(CGPoint(x:x,y:y)) } ?? -1 }
+    if !grabbed { selected = marks.indices.reversed().first { boundsOf(marks[$0]).insetBy(dx:-24/pageRect.width,dy:-24/pageRect.height).contains(CGPoint(x:x,y:y)) } ?? -1 }
     selectionStart = marks.indices.contains(selected) ? marks[selected] : nil
     emitSelection()
-    selectionPoint = CGPoint(x:x,y:y); setNeedsDisplay()
+    if selected < 0 { panning = true; panStart = location; panLast = location; setNeedsDisplay(); return }
+    selectionPoint = rawPoint(location); loupeFinger = location; setNeedsDisplay()
   }
+  private func rawPoint(_ location: CGPoint) -> CGPoint { CGPoint(x: (location.x - pageRect.minX) / pageRect.width, y: (location.y - pageRect.minY) / pageRect.height) }
   private func moveSelection(_ touch: UITouch) {
     guard let original = selectionStart, marks.indices.contains(selected) else { return }
-    let p = point(touch), b = boundsOf(original); var left = b.minX, right = b.maxX, top = b.minY, bottom = b.maxY
+    let location = touch.location(in: self); loupeVisible = true; loupeFinger = location
+    let raw = rawPoint(location), b = boundsOf(original); var left = b.minX, right = b.maxX, top = b.minY, bottom = b.maxY
+    let hx = min(1, max(0, raw.x + grab.x)), hy = min(1, max(0, raw.y + grab.y))
     if handle < 0 {
-      let dx = min(1-b.maxX,max(-b.minX,CGFloat(p[0])-selectionPoint.x)), dy = min(1-b.maxY,max(-b.minY,CGFloat(p[1])-selectionPoint.y))
+      let dx = min(1-b.maxX,max(-b.minX,raw.x-selectionPoint.x)), dy = min(1-b.maxY,max(-b.minY,raw.y-selectionPoint.y))
       left += dx; right += dx; top += dy; bottom += dy
     } else {
-      if handle == 0 || handle == 3 { left = min(CGFloat(p[0]),right - 0.005) } else { right = max(CGFloat(p[0]),left + 0.005) }
-      if handle < 2 { top = min(CGFloat(p[1]),bottom - 0.005) } else { bottom = max(CGFloat(p[1]),top + 0.005) }
+      if [0, 3, 7].contains(handle) { left = min(hx, right - 0.005) }
+      if [1, 2, 5].contains(handle) { right = max(hx, left + 0.005) }
+      if [0, 1, 4].contains(handle) { top = min(hy, bottom - 0.005) }
+      if [2, 3, 6].contains(handle) { bottom = max(hy, top + 0.005) }
     }
     if handle >= 0 && original["kind"] as? String == "image" {
       let isLeft=handle == 0 || handle == 3, isTop=handle < 2
       let ax=isLeft ? b.maxX : b.minX, ay=isTop ? b.maxY : b.minY
       let maximum=min((isLeft ? ax : 1-ax)/max(0.0001,b.width),(isTop ? ay : 1-ay)/max(0.0001,b.height))
-      let scale=min(maximum,max(min(0.05,maximum),max(abs(CGFloat(p[0])-ax)/max(0.0001,b.width),abs(CGFloat(p[1])-ay)/max(0.0001,b.height))))
+      let scale=min(maximum,max(min(0.05,maximum),max(abs(hx-ax)/max(0.0001,b.width),abs(hy-ay)/max(0.0001,b.height))))
       let w=b.width*scale,h=b.height*scale
       left=isLeft ? ax-w : ax; right=isLeft ? ax : ax+w; top=isTop ? ay-h : ay; bottom=isTop ? ay : ay+h
     }
@@ -301,27 +411,39 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     selectionStart = nil
   }
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-    if (event?.allTouches?.count ?? 0) > 1 { cancelSelection(); finishErase(commit: false); points = []; navigating = true; return }; navigating = false
+    if (event?.allTouches?.count ?? 0) > 1 { cancelSelection(); finishErase(commit: false); points = []; loupeVisible = false; panning = false; navigating = true; setNeedsDisplay(); return }; navigating = false
+    if mode == "select", !disabled, image != nil, !pageRect.isEmpty, let touch = touches.first { beginSelection(touch); return }
     guard !disabled, image != nil, let touch = touches.first, pageRect.contains(touch.location(in: self)) else { return }
-    if mode == "select" { beginSelection(touch); return }
     if mode == "erase" { eraseStart = marks; lastErase = nil; erasedInGesture.removeAll(); eraseAt(touch.location(in: self)); return }
     let p = point(touch); points = [p, p]; setNeedsDisplay()
   }
   override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
     if mode == "erase", !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, lastErase != nil, let touch = touches.first { eraseAt(touch.location(in: self)); return }
+    if mode == "select", panning, !navigating, (event?.allTouches?.count ?? 0) <= 1, let touch = touches.first {
+      let location = touch.location(in: self); pan.x += location.x - panLast.x; pan.y += location.y - panLast.y; panLast = location; setNeedsDisplay(); return
+    }
     if mode == "select", !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, let touch = touches.first { moveSelection(touch); return }
     guard !navigating, (event?.allTouches?.count ?? 0) <= 1, !disabled, !points.isEmpty, let touch = touches.first else { return }
-    if ["highlight", "polygon", "line"].contains(mode) { points[1] = point(touch) } else if points.count < 4096 { points.append(point(touch)) }
+    if ["highlight", "polygon", "line"].contains(mode) { points[1] = point(touch); loupeVisible = true; loupeFinger = touch.location(in: self) } else if points.count < 4096 { points.append(point(touch)) }
     setNeedsDisplay()
   }
   override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-    if mode == "select" { if selectionStart != nil, marks.indices.contains(selected) { emit(marks[selected]) }; selectionStart = nil; emitSelection(); return }
+    loupeVisible = false
+    if panning {
+      panning = false
+      if let touch = touches.first, !navigating, zoom <= 1.01 {
+        let location = touch.location(in: self), dx = location.x - panStart.x, dy = location.y - panStart.y
+        if abs(dx) > 64 && abs(dx) > 1.5 * abs(dy) { onPageSwipe(["direction": dx < 0 ? 1 : -1]) }
+      }
+      setNeedsDisplay(); return
+    }
+    if mode == "select" { if selectionStart != nil, marks.indices.contains(selected) { emit(marks[selected]) }; selectionStart = nil; emitSelection(); setNeedsDisplay(); return }
     if mode == "erase" { if !navigating, !disabled, lastErase != nil, let touch = touches.first { eraseAt(touch.location(in: self)) }; finishErase(commit: !navigating && !disabled); return }
     guard !points.isEmpty else { return }
     touchesMoved(touches, with: event)
     var mark = currentMark(); mark["id"] = UUID().uuidString; marks.append(mark); cachedRect = .zero
     emit(mark)
-    points = []; setNeedsDisplay()
+    points = []; loupeVisible = false; setNeedsDisplay()
   }
-  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { if let original = selectionStart, marks.indices.contains(selected) { marks[selected] = original; cachedRect = .zero }; selectionStart = nil; points = []; finishErase(commit: false); emitSelection(); setNeedsDisplay() }
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { loupeVisible = false; panning = false; if let original = selectionStart, marks.indices.contains(selected) { marks[selected] = original; cachedRect = .zero }; selectionStart = nil; points = []; finishErase(commit: false); emitSelection(); setNeedsDisplay() }
 }

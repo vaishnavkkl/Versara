@@ -4,12 +4,16 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { FileAccessPrompt } from '@/components/file-access-prompt';
 import { AnimatedSplash } from '@/components/animated-splash';
 import { DialogHost } from '@/components/app-dialog';
 import { LoadingHost } from '@/components/app-loader';
 import { recoverPendingAppSaves } from '@/features/files/save-recovery';
 import { SaveRecoveryNotice } from '@/features/files/save-recovery-notice';
+
+// Files opened from other apps still have Home beneath them, so Back stays in Versara.
+export const unstable_settings = { initialRouteName: '(tabs)' };
 
 void SplashScreen.preventAutoHideAsync();
 SplashScreen.setOptions({ fade: false, duration: 0 });
@@ -54,11 +58,13 @@ export default function RootLayout() {
     <GestureHandlerRootView onLayout={() => { void revealSplash(); }} style={{ flex: 1, backgroundColor: colors.systemBackground }}>
       <ThemeProvider value={{ ...theme, colors: { ...theme.colors, background: colors.systemBackground, card: colors.secondarySystemBackground, text: colors.label, primary: colors.systemBlue, border: colors.separator } }}>
         <StatusBar style={mode === 'dark' ? 'light' : 'dark'} hidden={false} />
+        <BottomSheetModalProvider>
         {/* Single stack — (tabs) group is its own child route */}
         <Stack screenOptions={{ headerShown: false, orientation: 'portrait' }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="(modules)" options={{ headerShown: false, animation: 'none' }} />
-          <Stack.Screen name="pdf-tool" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
+          {/* Tools opened from a landscape reader start in landscape, so they never flash portrait while loading. */}
+          <Stack.Screen name="pdf-tool" options={({ route }) => ({ headerShown: false, animation: 'none', gestureEnabled: false, orientation: (route.params as { landscape?: string } | undefined)?.landscape === '1' ? 'landscape' : 'portrait' })} />
           <Stack.Screen name="tool-preview" options={{ headerShown: false, animation: 'slide_from_right' }} />
           <Stack.Screen name="guide" options={{ headerShown: false }} />
           <Stack.Screen name="file-preview" options={{ headerShown: false, animation: 'slide_from_right' }} />
@@ -69,9 +75,9 @@ export default function RootLayout() {
           <Stack.Screen name="privacy-tool" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
           <Stack.Screen name="image-text" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
           <Stack.Screen name="edited-files" options={{ headerShown: false, animation: 'slide_from_right' }} />
-          <Stack.Screen name="doc-editor" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
-          <Stack.Screen name="doc-reader" options={{ headerShown: false, animation: 'slide_from_right' }} />
+          <Stack.Screen name="open-file" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
         </Stack>
+        </BottomSheetModalProvider>
         <FileAccessPrompt ready={splashDone} />
         <DialogHost />
         <LoadingHost />

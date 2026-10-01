@@ -12,6 +12,8 @@ export type PdfEngineViewProps = ViewProps & {
   zoomRevision: number;
   dark: boolean;
   searchHighlights?: string;
+  /** Scrolling stays free, but pages other than the current one are dimmed and blurred. */
+  focusCurrent?: boolean;
   onLoad: (event: { nativeEvent: PdfLoadEvent }) => void;
   onPageChange: (event: { nativeEvent: PdfPageEvent }) => void;
   onZoomChange: (event: { nativeEvent: { zoom: number } }) => void;

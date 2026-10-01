@@ -1,9 +1,21 @@
 import ExpoModulesCore
 import UIKit
+import CoreText
 import ImageIO
 
-/// Standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) as iOS faces.
-func versaraFont(_ name: String, _ size: CGFloat) -> UIFont {
+private let versaraDescriptorLock = NSLock()
+private var versaraDescriptors: [String: CTFontDescriptor] = [:]
+
+/// Bundled fonts load from `file`; standard PDF font names (Helvetica, Times, Courier with Bold/Oblique/Italic) map to iOS faces.
+func versaraFont(_ name: String, _ size: CGFloat, file: String = "") -> UIFont {
+  if !file.isEmpty, let url = file.hasPrefix("file:") ? URL(string: file) : URL(fileURLWithPath: file) {
+    versaraDescriptorLock.lock(); defer { versaraDescriptorLock.unlock() }
+    if versaraDescriptors[file] == nil, let first = (CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor])?.first {
+      if versaraDescriptors.count >= 64 { versaraDescriptors.removeAll() }
+      versaraDescriptors[file] = first
+    }
+    if let descriptor = versaraDescriptors[file] { return CTFontCreateWithFontDescriptor(descriptor, size, nil) as UIFont }
+  }
   let bold = name.contains("Bold"), italic = name.contains("Oblique") || name.contains("Italic")
   let face: String
   if name.hasPrefix("Times") {
@@ -27,7 +39,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   let onSubmitText = EventDispatcher()
 
   private struct Box { let id: Int; let rect: CGRect }
-  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false; var submitOnReturn = false }
+  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false; var submitOnReturn = false; var fontFile = "" }
 
   private let scroll = UIScrollView()
   private let page = UIView()
@@ -164,6 +176,8 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       mark.lines = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : Array(text.components(separatedBy: "\n").prefix(50))
       mark.underline = item["underline"] as? Bool ?? false
       mark.font = item["font"] as? String ?? "Helvetica"
+      mark.fontFile = item["fontFile"] as? String ?? ""
+      mark.scaleX = min(max(number(item["scaleX"]) ?? 1, 0.5), 2)
       mark.size = number(item["size"]) ?? 16
       mark.color = item["color"] as? Int ?? 0x101010
       mark.point = CGPoint(x: number(item["x"]) ?? 0, y: number(item["y"]) ?? 0)
@@ -177,17 +191,26 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   func setFocus(_ json: String) {
     guard json != focusKey else { return }
     focusKey = json
+    let wasFocused = focusRect != nil
     if let item = parse(json), let x = number(item["x"]), let y = number(item["y"]), let w = number(item["width"]), let h = number(item["height"]) {
       focusRect = CGRect(x: x, y: y, width: w, height: h)
-      DispatchQueue.main.async { self.focusOn() }
+      DispatchQueue.main.async { self.focusOn(keepZoom: wasFocused) }
     } else { focusRect = nil }
   }
-  private func focusOn() {
+  private var focusZoomStarted = Date.distantPast
+  /// Zooms to the focus once; later moves, typing and keyboard resizes keep the zoom and only pan when it is out of view.
+  private func focusOn(keepZoom: Bool = false) {
     guard let rect = focusRect, page.bounds.width > 0, scroll.bounds.width > 0 else { return }
     let base = page.bounds.size
     let rw = max(1, rect.width * base.width), rh = max(1, rect.height * base.height)
+    // A resize during the first zoom retargets that animation instead of stopping it part way.
+    let keep = keepZoom && scroll.zoomScale > 1.01 && Date().timeIntervalSince(focusZoomStarted) > 0.4
+    if keep {
+      let visible = page.convert(CGRect(x: rect.minX * base.width, y: rect.minY * base.height, width: rw, height: rh), to: self)
+      if visible.minX >= 16 && visible.minX < bounds.width - 16 && visible.minY >= 16 && visible.maxY <= bounds.height - 16 { return }
+    } else { focusZoomStarted = Date() }
     // Readable first: the line fills about 36pt of height; long lines start at the left edge.
-    let target = min(max(min(36 / rh, scroll.bounds.height * 0.45 / rh), 1.5), 4)
+    let target = keep ? scroll.zoomScale : min(max(min(36 / rh, scroll.bounds.height * 0.45 / rh), 1.5), 4)
     let size = CGSize(width: scroll.bounds.width / target, height: scroll.bounds.height / target)
     let x = rw * target > scroll.bounds.width * 0.92 ? rect.minX * base.width - size.width * 0.04 : rect.midX * base.width - size.width / 2
     scroll.zoom(to: CGRect(x: x, y: rect.midY * base.height - size.height * 0.38, width: size.width, height: size.height), animated: true)
@@ -212,6 +235,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       next.visible = item["visible"] as? Bool ?? false
       next.text = item["text"] as? String ?? ""
       next.font = item["font"] as? String ?? "Helvetica"
+      next.fontFile = item["fontFile"] as? String ?? ""
       next.size = number(item["size"]) ?? 16
       next.color = item["color"] as? Int ?? 0x101020
       next.underline = item["underline"] as? Bool ?? false
@@ -221,7 +245,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     let opening = next.visible && !previous.visible
     textBox = next
     field.returnKeyType = next.submitOnReturn ? .done : .default
-    let restyle = opening || next.color != previous.color || next.underline != previous.underline || next.font != previous.font || next.size != previous.size
+    let restyle = opening || next.color != previous.color || next.underline != previous.underline || next.font != previous.font || next.fontFile != previous.fontFile || next.size != previous.size
     if restyle { styleField() }
     if field.text != next.text || restyle {
       let selection = field.selectedRange
@@ -271,7 +295,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       scroll.contentOffset = CGPoint(x: min(max(x, minX), maxX), y: min(max(y, minY), maxY))
     }
     layoutField()
-    if focusRect != nil { DispatchQueue.main.async { self.focusOn() } }
+    if focusRect != nil { DispatchQueue.main.async { self.focusOn(keepZoom: true) } }
   }
 
   private func center() {
@@ -283,7 +307,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   private func textScale() -> CGFloat { page.bounds.width / (pointWidth > 0 ? pointWidth : 612) }
   private func styleField() {
     let scale = page.bounds.width > 0 ? textScale() : 1
-    fieldFont = versaraFont(textBox.font, max(1, textBox.size * scale))
+    fieldFont = versaraFont(textBox.font, max(1, textBox.size * scale), file: textBox.fontFile)
     lineHeight = fieldFont.pointSize * 1.2
     let paragraph = NSMutableParagraphStyle()
     paragraph.minimumLineHeight = lineHeight
@@ -429,7 +453,7 @@ private final class EditOverlay: UIView {
   var textVisible = false
   var placement: CGPoint?
   var zoom: CGFloat = 1
-  struct Mark { var erase: CGRect?; var left = 0xFFFFFF; var right = 0xFFFFFF; var lines: [String] = []; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101010; var point = CGPoint.zero; var underline = false }
+  struct Mark { var erase: CGRect?; var left = 0xFFFFFF; var right = 0xFFFFFF; var lines: [String] = []; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101010; var point = CGPoint.zero; var underline = false; var scaleX: CGFloat = 1; var fontFile = "" }
   var marks: [Mark] = []
   var pointWidth: CGFloat = 0
 
@@ -457,9 +481,11 @@ private final class EditOverlay: UIView {
         }
       }
       if !mark.lines.isEmpty {
-        let face = versaraFont(mark.font, max(1, mark.size * scale))
+        let face = versaraFont(mark.font, max(1, mark.size * scale), file: mark.fontFile)
         var attributes: [NSAttributedString.Key: Any] = [.font: face, .foregroundColor: color(mark.color)]
         if mark.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        // `.expansion` takes the log of the horizontal stretch factor.
+        if mark.scaleX != 1 { attributes[.expansion] = log(mark.scaleX) }
         for (index, line) in mark.lines.enumerated() where !line.isEmpty {
           (line as NSString).draw(at: CGPoint(x: mark.point.x * w, y: mark.point.y * h + CGFloat(index) * face.pointSize * 1.2 - face.ascender), withAttributes: attributes)
         }

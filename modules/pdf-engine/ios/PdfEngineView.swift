@@ -13,6 +13,25 @@ final class PdfEngineView: ExpoView {
   var requestedZoom = 1.0
   var zoomRevision = 0
   var dark = true
+  var focusCurrent = false
+  private var veilDark: Bool?
+  private let topVeil = UIVisualEffectView()
+  private let bottomVeil = UIVisualEffectView()
+  /// Blurs everything above and below the current page while scrolling stays free.
+  private func updateVeils() {
+    guard focusCurrent, vertical, let page = pdfView.currentPage else { topVeil.isHidden = true; bottomVeil.isHidden = true; return }
+    if veilDark != dark {
+      veilDark = dark
+      topVeil.effect = UIBlurEffect(style: dark ? .systemMaterialDark : .systemMaterialLight)
+      bottomVeil.effect = topVeil.effect
+    }
+    let rect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+    for (veil, frame) in [(topVeil, CGRect(x: 0, y: 0, width: bounds.width, height: max(0, rect.minY))),
+                          (bottomVeil, CGRect(x: 0, y: min(bounds.height, rect.maxY), width: bounds.width, height: max(0, bounds.height - rect.maxY)))] {
+      veil.frame = frame
+      veil.isHidden = frame.height < 1
+    }
+  }
   var searchHighlights = ""
   private var appliedSearch = ""
   private func applySearchHighlights() {
@@ -64,6 +83,10 @@ final class PdfEngineView: ExpoView {
     pdfView.displaysPageBreaks = true
     pdfView.accessibilityLabel = "PDF document. Pinch to zoom and scroll to read."
     addSubview(pdfView)
+    for veil in [topVeil, bottomVeil] {
+      veil.isUserInteractionEnabled = false; veil.isHidden = true; veil.alpha = 0.92
+      addSubview(veil)
+    }
     badge.font = .boldSystemFont(ofSize: 13)
     badge.textColor = .white
     badge.textAlignment = .center
@@ -100,6 +123,7 @@ final class PdfEngineView: ExpoView {
     super.layoutSubviews()
     pdfView.frame = bounds
     updateScrollThumb(reveal: false)
+    updateVeils()
     if bounds.size != lastSize {
       lastSize = bounds.size
       applyZoom()
@@ -124,6 +148,7 @@ final class PdfEngineView: ExpoView {
     }
     applyPageAndZoom()
     applySearchHighlights()
+    updateVeils()
   }
 
   private func openDocument() {
@@ -211,6 +236,7 @@ final class PdfEngineView: ExpoView {
     let index = document.index(for: page)
     onPageChange(["page": index, "pageCount": document.pageCount])
     showBadge(index: index, count: document.pageCount)
+    updateVeils()
   }
 
   /// PDFKit's own scroll view: keep its draggable indicator visible for fast scrolling.
@@ -223,6 +249,7 @@ final class PdfEngineView: ExpoView {
       observedScroll = scroll
       scrollObservation = scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
         self?.updateScrollThumb(reveal: true)
+        self?.updateVeils()
       }
     }
     updateScrollThumb(reveal: false)

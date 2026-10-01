@@ -14,7 +14,6 @@ import { FileEngine, type ExplorerEntry } from '../../../modules/file-engine';
 import { ExplorerRow } from '@/features/files/explorer-row';
 import { explorerAvailable, KIND_GLYPHS, openExplorerEntry } from '@/features/files/explorer';
 import { importRecentFile } from '@/features/files/recent-files';
-import { startNewDocument } from '@/features/documents/open-document';
 import { EDITOR_TOOL_TABS } from '@/features/files/media-toolbar';
 import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
 import { createImagePdfToolForFile } from '@/features/pdf/pdf-tool-session';
@@ -26,7 +25,7 @@ import { getPrivacyTool } from '@/features/privacy/privacy-tools';
 
 const QUICK_SEARCHES = [
   { label: 'PDFs', query: '.pdf', kind: 'pdf' }, { label: 'JPG photos', query: '.jpg', kind: 'image' },
-  { label: 'Word files', query: '.docx', kind: 'document' }, { label: 'ZIP archives', query: '.zip', kind: 'archive' },
+  { label: 'ZIP archives', query: '.zip', kind: 'archive' },
 ] as const;
 const MAX_FILES = 80;
 const EMPTY_FILES: ExplorerEntry[] = [];
@@ -95,9 +94,7 @@ export function SearchScreen() {
     busy.current = true; setOpening(tool.key); Keyboard.dismiss();
     let session: string | null = null;
     try {
-      if (tool.module === 'Documents') {
-        startNewDocument(tool.id === 'text' ? 'txt' : 'docx');
-      } else if (tool.module === 'Privacy') {
+      if (tool.module === 'Privacy') {
         const privacyTool = getPrivacyTool(tool.id);
         if (!privacyTool) throw new Error('This privacy tool is unavailable. Please choose another tool.');
         if (!(await openPrivacyTool(privacyTool.id, { current: () => mounted.current }))) return;
@@ -112,7 +109,7 @@ export function SearchScreen() {
         if (tool.id === 'text' || tool.id === 'edit_text') router.push({ pathname: '/image-text', params: { id: file.id, mode: tool.id === 'text' ? 'add' : 'edit' } });
         else if (tool.id === 'pdf') { session = await createImagePdfToolForFile(file); if (!mounted.current) { discardPdfToolSession(session); return; } router.push({ pathname: '/pdf-tool', params: { session } }); }
         else if (ADVANCED_IMAGE_TOOLS.has(tool.id)) router.push({ pathname: '/image-tool', params: { id: file.id, tool: tool.id } });
-        else router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[tool.id] } });
+        else router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[tool.id], tool: tool.id } });
       }
       recordSearch(term); recordToolUse(tool.key);
     } catch (cause) {

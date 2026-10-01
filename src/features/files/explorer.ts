@@ -22,21 +22,12 @@ export const KIND_GLYPHS: Record<ExplorerKind, Glyph> = {
 };
 
 let opening = false;
-/** Routes a device file to the matching Versara viewer; other types go to the system share sheet. */
+/** Routes a device file to the matching Versara viewer; other types show that they aren't supported. */
 export async function openExplorerEntry(entry: ExplorerEntry) {
   if (opening) return;
   opening = true;
   try {
     if (entry.kind === 'pdf') { openPdfScreen({ uri: entry.uri, name: entry.name }); return; }
-    if (entry.kind === 'document') {
-      const extension = entry.name.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0].toLowerCase() ?? '';
-      if (extension === '.doc') { toast('Word 97 .doc files aren\'t supported. Save the file as DOCX and open that.'); return; }
-      if (extension !== '.docx' && extension !== '.txt') { toast(`${entry.name} isn't supported in Versara yet.`); return; }
-      const file = await importDeviceRecent({ id: entry.path, uri: entry.uri, name: entry.name, mimeType: entry.mimeType, size: entry.size, modified: entry.modified, kind: 'document', source: 'device', opened: Date.now() });
-      const { openDocument } = await import('@/features/documents/open-document');
-      openDocument(file);
-      return;
-    }
     if (entry.kind === 'image' || entry.kind === 'video' || entry.kind === 'audio') {
       const file = await importDeviceRecent({ id: entry.path, uri: entry.uri, name: entry.name, mimeType: entry.mimeType, size: entry.size, modified: entry.modified, kind: entry.kind, source: 'device', opened: Date.now() });
       router.push({ pathname: '/file-preview', params: { id: file.id } });

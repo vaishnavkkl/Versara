@@ -1,6 +1,6 @@
 import type { PickerKind } from './file-picker-session';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
@@ -8,6 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { toast } from '@/components/toast';
 import { UniversalIcon } from '@/components/universal-icon';
 import { EditorMenu } from '@/components/editor-menu';
+import type { OptionIcon } from '@/theme/editor-icons';
 import { usePalette } from '@/theme/colors';
 import { getGradients, gradient, spacing as s, typography as t } from '@/theme/dashboard';
 import { FileEngine, type DirectoryListing, type ExplorerEntry, type StorageRoot } from '../../../modules/file-engine';
@@ -18,6 +19,29 @@ import { RecentFilesSection } from './recent-files-section';
 const LISTING_CACHE = 24;
 const listings = new Map<string, DirectoryListing>();
 type SortField = 'name' | 'modified' | 'size' | 'type';
+const SORT_LABELS: Record<SortField, string> = { name: 'Name', modified: 'Date modified', size: 'Size', type: 'Type' };
+const SORT_ICONS: Record<SortField, OptionIcon> = {
+  name: { ios: 'textformat', android: 'sort-by-alpha' },
+  modified: { ios: 'calendar', android: 'calendar-today' },
+  size: { ios: 'internaldrive', android: 'storage' },
+  type: { ios: 'square.grid.2x2', android: 'category' },
+};
+const ORDER_LABELS: Record<SortField, readonly [string, string]> = {
+  name: ['A to Z', 'Z to A'],
+  modified: ['Oldest first', 'Newest first'],
+  size: ['Smallest first', 'Largest first'],
+  type: ['A to Z', 'Z to A'],
+};
+
+type PickerRowProps = { entry: ExplorerEntry; height: number; checked?: boolean; tint: string; onPress: (entry: ExplorerEntry) => void; onSelect?: (entry: ExplorerEntry) => void };
+const PickerRow = memo(function PickerRow({ entry, height, checked, tint, onPress, onSelect }: PickerRowProps) {
+  return <View style={[styles.itemRow, { height }]}>
+    <View style={styles.grow}><ExplorerRow entry={entry} onPress={onPress} /></View>
+    {checked !== undefined && onSelect && <Pressable accessibilityRole="checkbox" accessibilityLabel={`Select ${entry.name}`} accessibilityState={{ checked }} onPress={() => onSelect(entry)} style={styles.back}>
+      <UniversalIcon ios={checked ? 'checkmark.circle.fill' : 'circle'} android={checked ? 'check-circle' : 'radio-button-unchecked'} size={22} color={tint} />
+    </Pressable>}
+  </View>;
+});
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function remember(listing: DirectoryListing) {
   listings.delete(listing.path);
@@ -37,6 +61,7 @@ function formatBytes(bytes: number) {
 
 export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; selected: ExplorerEntry[]; onSelect: (file: ExplorerEntry) => void } } = {}) {
   const colors = usePalette();
+  const { fontScale } = useWindowDimensions();
   const available = explorerAvailable();
   const [roots, setRoots] = useState<StorageRoot[]>([]);
   const [path, setPath] = useState<string | null>(null);
@@ -106,10 +131,13 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
     try { await FileEngine?.requestPdfAccessAsync(); } catch (cause) { showDialog('File access', (cause as Error).message); } finally { loadRoots(); }
   }
 
-  const renderItem = useCallback(({ item }: { item: ExplorerEntry }) => <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-    <View style={{ flex: 1 }}><ExplorerRow entry={item} onPress={press} /></View>
-    {picker && !item.directory && <Pressable accessibilityRole="checkbox" accessibilityLabel={`Select ${item.name}`} accessibilityState={{ checked: picker.selected.some(file => file.path === item.path) }} onPress={() => picker.onSelect(item)} style={styles.back}><UniversalIcon ios={picker.selected.some(file => file.path === item.path) ? 'checkmark.circle.fill' : 'circle'} android={picker.selected.some(file => file.path === item.path) ? 'check-circle' : 'radio-button-unchecked'} size={22} color={colors.systemBlue} /></Pressable>}
-  </View>, [press, picker, colors.systemBlue]);
+  // Fixed row heights let the list jump to any offset without measuring rows.
+  const rowHeight = Math.max(64, Math.ceil(38 * fontScale) + 20);
+  const selectedPaths = useMemo(() => new Set(picker?.selected.map(file => file.path)), [picker?.selected]);
+  const onSelect = picker?.onSelect;
+  const renderItem = useCallback(({ item }: { item: ExplorerEntry }) => <PickerRow entry={item} height={rowHeight} checked={onSelect && !item.directory ? selectedPaths.has(item.path) : undefined} onPress={press} onSelect={onSelect} tint={colors.systemBlue} />,
+    [press, onSelect, selectedPaths, rowHeight, colors.systemBlue]);
+  const getItemLayout = useCallback((_: unknown, index: number) => ({ length: rowHeight, offset: rowHeight * index, index }), [rowHeight]);
 
   const pickerKind = picker?.kind;
   const items = useMemo(() => listing?.path === path ? listing.items.filter(item => !pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind) : [], [listing, path, pickerKind]);
@@ -179,15 +207,11 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           <ThemedText numberOfLines={1} style={[styles.folder, { color: colors.label }]}>{crumbs[crumbs.length - 1] ?? 'Folder'}</ThemedText>
           <ThemedText numberOfLines={1} ellipsizeMode="head" style={[styles.caption, { color: colors.secondaryLabel }]}>{crumbs.join(' › ')}</ThemedText>
         </View>
-        <EditorMenu compact icon={{ ios: 'arrow.up.arrow.down', android: 'sort' }} label={`Sort by ${{ name: 'name', modified: 'date modified', size: 'size', type: 'type' }[sortField]}`} items={[
-          { id: 'name', label: 'Name', selected: sortField === 'name', onPress: () => setSortField('name') },
-          { id: 'modified', label: 'Date modified', selected: sortField === 'modified', onPress: () => setSortField('modified') },
-          { id: 'size', label: 'Size', selected: sortField === 'size', onPress: () => setSortField('size') },
-          { id: 'type', label: 'Type', selected: sortField === 'type', onPress: () => setSortField('type') },
+        <EditorMenu iconOnly icon={{ ios: 'arrow.up.arrow.down', android: 'sort' }} label={`Sort: ${SORT_LABELS[sortField]}, ${ORDER_LABELS[sortField][ascending ? 0 : 1]}`} items={[
+          ...(Object.keys(SORT_LABELS) as SortField[]).map(field => ({ id: field, label: SORT_LABELS[field], icon: SORT_ICONS[field], selected: sortField === field, onPress: () => { setSortField(field); setAscending(field === 'name' || field === 'type'); } })),
+          { id: 'ascending', label: ORDER_LABELS[sortField][0], icon: { ios: 'arrow.up', android: 'arrow-upward' }, selected: ascending, onPress: () => setAscending(true) },
+          { id: 'descending', label: ORDER_LABELS[sortField][1], icon: { ios: 'arrow.down', android: 'arrow-downward' }, selected: !ascending, onPress: () => setAscending(false) },
         ]} />
-        <Pressable accessibilityRole="button" accessibilityLabel={ascending ? 'Sort ascending' : 'Sort descending'} onPress={() => setAscending(value => !value)} style={styles.back}>
-          <UniversalIcon ios={ascending ? 'arrow.up' : 'arrow.down'} android={ascending ? 'arrow-upward' : 'arrow-downward'} size={20} color={colors.systemBlue} />
-        </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Close folder" onPress={() => go(null)} hitSlop={8} style={styles.back}>
           <UniversalIcon ios="house" android="home" size={22} color={colors.label} />
         </Pressable>
@@ -202,10 +226,12 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           data={sortedItems}
           keyExtractor={item => item.path}
           renderItem={renderItem}
+          getItemLayout={getItemLayout}
           contentContainerStyle={styles.list}
-          initialNumToRender={16}
-          maxToRenderPerBatch={16}
-          windowSize={7}
+          initialNumToRender={14}
+          maxToRenderPerBatch={20}
+          updateCellsBatchingPeriod={32}
+          windowSize={9}
           removeClippedSubviews={Platform.OS === 'android'}
           refreshControl={<RefreshControl refreshing={loading && items.length > 0} onRefresh={() => { setLoading(true); setReload(value => value + 1); }} />}
           ListEmptyComponent={<ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>{picker ? 'No matching files in this folder.' : 'This folder is empty.'}</ThemedText>}
@@ -226,7 +252,8 @@ const styles = StyleSheet.create({
   allow: { minHeight: 46, borderRadius: 23, paddingHorizontal: s.xl, alignItems: 'center', justifyContent: 'center', marginTop: s.sm },
   root: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: 22, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth },
   rootIcon: { width: 52, height: 52, borderRadius: 16, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
-  grow: { flex: 1, gap: 4 },
+  grow: { flex: 1, minWidth: 0, gap: 4 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 16, lineHeight: 21, fontWeight: '700' },
   caption: { ...t.caption },
   track: { height: 6, borderRadius: 3, overflow: 'hidden' },

@@ -9,7 +9,8 @@ import { BrushControls, BRUSHES } from '../pdf/brush-controls';
 import { useMarkHistory, isMarkHistorySnapshot } from '../pdf/use-mark-history';
 import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
 import { DEFAULT_RESIZE, ImageResizeControls, resolveResize } from './image-resize-controls';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react';
+import { useSliderValue } from '@/hooks/use-slider-value';
 import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -24,19 +25,21 @@ import PdfMarkupView, { type PdfMark, type PdfMarkChange } from '../../../module
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
-import { UniversalIcon } from '@/components/universal-icon';
 import { AppLoader } from '@/components/app-loader';
 import { ColorSwatches, hexColor } from '@/components/color-swatches';
 import { showDialog } from '@/components/app-dialog';
 import { IMAGE_SECTIONS } from '@/constants/image-methods';
 import { useAppearance, usePalette } from '@/theme/colors';
-import { toolColors } from '@/theme/tool-colors';
 import { forgetRecentUri, rememberFile, type RecentFile } from './recent-files';
 import { recordEditedFile } from './edited-files';
-import { browseFiles, createImportDirectory, disposeImports, formatSize, shareFile, type LocalFile } from './file-storage';
+import { browseFiles, createImportDirectory, disposeImports, formatSize, shareFile, shareNamedFile, shareRenderedFile, type LocalFile } from './file-storage';
+import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
+import { OptionSheet } from '@/components/option-sheet';
+import { FitSlotButton } from '@/components/fit-slot';
 import { askNewFileName, saveToDevice } from './save-file';
 import { PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
 import { SHAPES, ShapePicker } from '../pdf/shape-picker';
+import { MarkupZoomButtons, useMarkupZoom } from '../pdf/markup-zoom';
 import { usePdfScreenActive } from '../pdf/use-pdf-screen-active';
 
 type Info = { width: number; height: number; size: number; mimeType: string; formats: string[]; camera: string; taken: string; hasLocation: boolean };
@@ -58,6 +61,11 @@ type HslBand = (typeof HSL_BANDS)[number]['id'];
 type HslAdjustment = { hue: number; saturation: number; lightness: number };
 const NEUTRAL_HSL = Object.fromEntries(HSL_BANDS.map(band => [band.id, { hue: 0, saturation: 0, lightness: 0 }])) as Record<HslBand, HslAdjustment>;
 const NEUTRAL_LEVELS = { black: 0, gamma: 1, white: 1 };
+const LEVEL_POINTS = [{ id: 'black', label: 'Black point' }, { id: 'gamma', label: 'Midtones' }, { id: 'white', label: 'White point' }] as const;
+const HSL_PARTS = [{ id: 'hue', label: 'Hue' }, { id: 'saturation', label: 'Saturation' }, { id: 'lightness', label: 'Lightness' }] as const;
+// Short controls stay docked under the live preview instead of a sheet that covers it.
+const DOCKED_TOOLS = new Set(['exposure', 'curves', 'levels', 'hsl', 'sharpen', 'blur', 'canvas']);
+const CURVE_HEIGHT = 104;
 const AnimatedCurvePath = Animated.createAnimatedComponent(Path);
 const AnimatedCurvePoint = Animated.createAnimatedComponent(Circle);
 const colorStyles = StyleSheet.create({
@@ -73,7 +81,8 @@ function CurvePoint({ values, selected, index, color }: { values: SharedValue<nu
 function AdjustmentSlider({ label, value, min, max, onChange, display, disabled }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void; display: string; disabled: boolean }) {
   const mode = useAppearance(state => state.mode);
   const bounded = max > min;
-  return <View style={styles.field}><View style={styles.row}><ThemedText style={[styles.label, styles.grow]}>{label}</ThemedText><ThemedText>{display}</ThemedText></View><Host colorScheme={mode} matchContents={{ vertical: true }}><Slider min={min} max={bounded ? max : min + 1} value={Math.max(min, Math.min(max, value))} onValueChange={next => { if (!disabled && bounded && Number.isFinite(next)) onChange(Math.max(min, Math.min(max, next))); }} disabled={disabled || !bounded} /></Host></View>;
+  const [shown, change] = useSliderValue(Math.max(min, Math.min(max, value)), onChange, (max - min) / 200);
+  return <View style={styles.field}><View style={styles.row}><ThemedText style={[styles.label, styles.grow]}>{label}</ThemedText><ThemedText>{display}</ThemedText></View><Host colorScheme={mode} matchContents={{ vertical: true }}><Slider min={min} max={bounded ? max : min + 1} value={shown} onValueChange={next => { if (!disabled && bounded && Number.isFinite(next)) change(Math.max(min, Math.min(max, next))); }} disabled={disabled || !bounded} /></Host></View>;
 }
 
 function AdjustmentInput({ label, value, onChange, numeric = true, disabled }: { label: string; value: string; onChange: (value: string) => void; numeric?: boolean; disabled: boolean }) {
@@ -97,7 +106,7 @@ function CurveGraph({ values, selected, disabled, onBegin, onPreview, onCommit, 
 }) {
   const colors = usePalette();
   const [tokenSeed] = useState(() => Date.now() * 1000 + Math.floor(Math.random() * 1000));
-  const points = useSharedValue(values), selection = useSharedValue(selected), width = useSharedValue(0);
+  const points = useSharedValue(values), selection = useSharedValue(selected), width = useSharedValue(0), height = useSharedValue(CURVE_HEIGHT);
   const dragIndex = useSharedValue(-1), serial = useSharedValue(tokenSeed), lastPublished = useSharedValue(0);
   const original = useSharedValue(values), grabOffset = useSharedValue(0);
   const begin = useCurveCallback(onBegin), preview = useCurveCallback(onPreview);
@@ -121,7 +130,7 @@ function CurveGraph({ values, selected, disabled, onBegin, onPreview, onCommit, 
   }, current => {
     // The graph never waits for React. Only coarse preview snapshots cross runtimes.
     const now = Date.now();
-    if (current.index >= 0 && now - lastPublished.get() >= 120) {
+    if (current.index >= 0 && now - lastPublished.get() >= 60) {
       lastPublished.set(now);
       scheduleOnRN(preview, current.token, current.index, current.value);
     }
@@ -131,10 +140,12 @@ function CurveGraph({ values, selected, disabled, onBegin, onPreview, onCommit, 
       if (event.numberOfTouches !== 1 || dragIndex.get() >= 0 || width.get() <= 0) { manager.fail(); return; }
       const touch = event.changedTouches[0];
       if (!touch) { manager.fail(); return; }
+      // The SVG uses a 256 x 144 view box stretched to the layout; touches are in layout points.
+      const scaleY = height.get() / 144;
       const index = Math.max(0, Math.min(4, Math.round((touch.x / width.get() * 256 - 8) / 60)));
-      const x = (8 + index * 60) / 256 * width.get(), y = 128 - points.get()[index] * 120;
-      if (Math.hypot(touch.x - x, touch.y - y) > 24) { manager.fail(); return; }
-      grabOffset.set(touch.y - y);
+      const x = (8 + index * 60) / 256 * width.get(), y = (128 - points.get()[index] * 120) * scaleY;
+      if (Math.hypot(touch.x - x, touch.y - y) > 28) { manager.fail(); return; }
+      grabOffset.set((touch.y - y) / scaleY);
       original.set(points.get()); serial.set(serial.get() + 1); selection.set(index); dragIndex.set(index); lastPublished.set(0);
       manager.begin(); manager.activate(); scheduleOnRN(begin, serial.get(), index);
     })
@@ -142,13 +153,13 @@ function CurveGraph({ values, selected, disabled, onBegin, onPreview, onCommit, 
       const index = dragIndex.get(), touch = event.changedTouches[0];
       if (index < 0 || !touch) return;
       if (event.numberOfTouches !== 1) { manager.fail(); return; }
-      const value = Math.round(Math.max(0, Math.min(1, (128 - touch.y + grabOffset.get()) / 120)) * 100) / 100;
+      const value = Math.round(Math.max(0, Math.min(1, (128 - touch.y / (height.get() / 144) + grabOffset.get()) / 120)) * 100) / 100;
       const next = [...points.get()]; next[index] = value; points.set(next);
     })
     .onTouchesUp((event, manager) => {
       const index = dragIndex.get(), touch = event.changedTouches[0];
       if (index >= 0 && touch) {
-        const next = [...points.get()]; next[index] = Math.round(Math.max(0, Math.min(1, (128 - touch.y + grabOffset.get()) / 120)) * 100) / 100; points.set(next);
+        const next = [...points.get()]; next[index] = Math.round(Math.max(0, Math.min(1, (128 - touch.y / (height.get() / 144) + grabOffset.get()) / 120)) * 100) / 100; points.set(next);
       }
       manager.end();
     })
@@ -159,9 +170,9 @@ function CurveGraph({ values, selected, disabled, onBegin, onPreview, onCommit, 
       if (success) scheduleOnRN(commit, serial.get(), index, points.get()[index]);
       else { points.set(original.get()); scheduleOnRN(cancel, serial.get()); }
       dragIndex.set(-1);
-    }), [disabled, dragIndex, width, points, original, grabOffset, serial, selection, lastPublished, begin, commit, cancel]);
-  return <GestureDetector gesture={gesture}><View collapsable={false} onLayout={event => width.set(event.nativeEvent.layout.width)} accessibilityLabel="Tone curve. Drag a point vertically, or use the tone buttons and output slider below.">
-    <Svg pointerEvents="none" width="100%" height={144} viewBox="0 0 256 144" preserveAspectRatio="none">
+    }), [disabled, dragIndex, width, height, points, original, grabOffset, serial, selection, lastPublished, begin, commit, cancel]);
+  return <GestureDetector gesture={gesture}><View collapsable={false} onLayout={event => { width.set(event.nativeEvent.layout.width); height.set(event.nativeEvent.layout.height); }} accessibilityLabel="Tone curve. Drag a point up or down to change that tone.">
+    <Svg pointerEvents="none" width="100%" height={CURVE_HEIGHT} viewBox="0 0 256 144" preserveAspectRatio="none">
       <Path d="M8 8H248V128H8Z M68 8V128 M128 8V128 M188 8V128 M8 38H248 M8 68H248 M8 98H248" stroke={colors.separator} strokeWidth={1} fill="none" />
       <Path d="M8 128L248 8" stroke={colors.secondaryLabel} strokeWidth={1} strokeDasharray="4 4" fill="none" />
       <AnimatedCurvePath animatedProps={path} stroke={colors.accent} strokeWidth={3} fill="none" />
@@ -191,7 +202,6 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const window = useWindowDimensions();
   const landscape = window.width > window.height + 80;
   const title = IMAGE_SECTIONS.flatMap(section => [...section.tools]).find(item => item.id === tool)?.title ?? 'Image tools';
-  const tint = toolColors(tool, colors);
   const batch = tool === 'batch' || tool === 'batch_compress';
   const drawing = tool === 'draw' || tool === 'redact';
   const sizing = ['resize', 'social', 'batch'].includes(tool);
@@ -215,6 +225,9 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const [curveChannel, setCurveChannel] = useState<CurveChannel>('rgb');
   const [curvePoint, setCurvePoint] = useState(2);
   const [hslBand, setHslBand] = useState<HslBand>('red');
+  const [hslPart, setHslPart] = useState<keyof HslAdjustment>('saturation');
+  const [levelPoint, setLevelPoint] = useState<(typeof LEVEL_POINTS)[number]['id']>('black');
+  const docked = DOCKED_TOOLS.has(tool);
   const [curveDraft, setCurveDraft] = useState<{ channel: CurveChannel; index: number; value: number } | null>(null);
   const activeCurveDrag = useRef<{ token: number; channel: CurveChannel; index: number } | null>(null);
   const setOption = <K extends keyof typeof initialSettings>(key: K, next: SetStateAction<(typeof initialSettings)[K]>) => { if (mounted.current && !locked.current && !activeCurveDrag.current) optionHistory.update(current => ({ ...current, [key]: typeof next === 'function' ? (next as (previous: (typeof initialSettings)[K]) => (typeof initialSettings)[K])(current[key]) : next }), key); };
@@ -241,9 +254,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const setShape = (value: SetStateAction<string>) => setOption('shape', value);
   const setBrushType = (value: SetStateAction<string>) => setOption('brushType', value);
   const setPattern = (value: SetStateAction<string>) => setOption('pattern', value);
-  const setInkOpacity = (value: SetStateAction<number>) => setOption('inkOpacity', value);
-  const setCurveValue = (value: number) => optionHistory.update(current => ({ ...current, curves: { ...current.curves, [curveChannel]: current.curves[curveChannel].map((item, index) => index === curvePoint ? Math.round(value) / 100 : item) } }), `curve:${curveChannel}:${curvePoint}`);
-  const setHslValue = (key: keyof HslAdjustment, value: number) => optionHistory.update(current => ({ ...current, hsl: { ...current.hsl, [hslBand]: { ...current.hsl[hslBand], [key]: Math.round(value) } } }), `hsl:${hslBand}:${key}`);
+  const setInkOpacity = (value: SetStateAction<number>) => setOption('inkOpacity', value);  const setHslValue = (key: keyof HslAdjustment, value: number) => optionHistory.update(current => ({ ...current, hsl: { ...current.hsl, [hslBand]: { ...current.hsl[hslBand], [key]: Math.round(value) } } }), `hsl:${hslBand}:${key}`);
 
   const [area, setArea] = useState<PdfMark>();
   const [selectingArea, setSelectingArea] = useState(false);
@@ -261,12 +272,17 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     if (!markupEditing) return;
     try { const mark = serialized ? JSON.parse(serialized) as PdfMark : null; setSelectedId(mark?.id); if (mark) { setInk(parseInt(mark.color.slice(1),16)); setInkWidth(mark.width); setFill(mark.fillColor ? parseInt(mark.fillColor.slice(1),16) : null); setInkOpacity(mark.opacity ?? (mark.brush === 'highlighter' ? .3 : mark.brush === 'pencil' ? 170/255 : mark.brush === 'marker' ? 210/255 : 1)); setBrushType(mark.brush ?? 'pen'); setPattern(mark.pattern ?? 'solid'); } } catch { setSelectedId(undefined); }
   }
-  const [settings, setSettings] = useState(!drawing); const [compare, setCompare] = useState(false); const [fit, setFit] = useState(0); const [retry, setRetry] = useState(0);
+  const [settings, setSettings] = useState(tool === 'watermark'); const [compare, setCompare] = useState(false); const [fit, setFit] = useState(0); const [retry, setRetry] = useState(0);
+  const markupZoom = useMarkupZoom(String(fit));
+  // Without a selection, the size buttons act on the newest shape so a tiny one can grow straight after drawing.
+  const resizeTarget = selectedMark ?? (drawing && tool !== 'redact' && shape !== 'pen' && !selecting && !erasing ? marks.findLast(mark => mark.kind === 'polygon' || mark.kind === 'line') : undefined);
   const mounted = useRef(true); const locked = useRef(false); const cancelled = useRef(false); const jobs = useRef(new Map<string, Promise<unknown>>()); const frames = useRef<string[]>([]);
   const initialized = useRef(false);
   const [saved, setSaved] = useState(false);
   const [changed, setChanged] = useState(false);
-  const saveTitle = batch ? `Save ${1 + extra.length} images` : 'Save copy';
+  // Output tools make a file by design; every other tool applies to the working image, which the preview saves once.
+  const exportTool = batch || ['compress', 'convert', 'metadata', 'rename', 'info'].includes(tool);
+  const saveTitle = batch ? `Save ${1 + extra.length} images` : exportTool ? 'Save copy' : 'Apply';
   // Existing icon-only settings control: 22px symbol, 12px side padding and 1px border.
   const toolbar = useResponsiveEditorToolbar([48], [...(drawing ? ['Undo', 'Redo'] : []), saveTitle]);
   const available = !!FileEngine?.nativeImageToolsVersion && (!colorAdjusting || (FileEngine?.nativeImageColorVersion ?? 0) >= (tool === 'levels' ? 2 : 1));
@@ -280,8 +296,18 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   function leave() { if (router.canGoBack()) router.back(); else router.replace('/(modules)/image'); }
   function close() {
     if (busy) { cancelled.current = true; jobs.current.forEach((_, id) => FileEngine?.cancelImageJob(id)); return; }
-    if ((changed || workspace.changed) && !saved) showDialog('Discard image changes?', 'Your current settings and marks have not been saved.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void Promise.all([recovery.clear(), markRecovery.clear(), workspace.discard()]).then(leave).catch(cause => setError((cause as Error).message)); } }]);
+    if (changed && !saved) showDialog('Discard image changes?', exportTool ? 'Your current settings have not been saved.' : 'Changes in this tool have not been applied. Changes applied earlier stay.', [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void Promise.all([recovery.clear(), markRecovery.clear()]).then(leave).catch(cause => setError((cause as Error).message)); } }]);
     else leave();
+  }
+  /** Applies this tool to the working image and returns to its preview, where everything is saved once. */
+  async function applyAndReturn() {
+    try {
+      if (changed) {
+        if (tool === 'blur' && optionHistory.getCurrent().blurArea && !area) throw new Error('Select the area to blur first.');
+        await applyToWorkspace();
+      }
+      if (mounted.current) router.dismissTo({ pathname: '/file-preview', params: { id } });
+    } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not apply the changes.'); }
   }
   useEffect(() => { closeRef.current = close; });
   useEffect(() => {
@@ -424,7 +450,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     if (!active || !available || !file || busy || picking || results.length || !request || tool === 'info') return;
     previewPending.current = { request, uri: file.uri, epoch: previewEpoch.current };
     if (previewRunning.current || previewTimer.current) return;
-    previewTimer.current = setTimeout(() => { previewTimer.current = null; void pumpPreview(); }, 160);
+    previewTimer.current = setTimeout(() => { previewTimer.current = null; void pumpPreview(); }, 40);
   }, [active, available, file, busy, picking, results.length, request, retry, tool, compare, pumpPreview]);
   useEffect(() => () => {
     previewPending.current = null;
@@ -496,8 +522,9 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not save this image.'); }
     finally { locked.current = false; if (mounted.current) { setBusy(false); setPreviewBusy(false); setRetry(value => value + 1); } }
   }
-  const panel = <View style={styles.panel}>
-    {!drawing && <View style={styles.wrap}><EditorOption label="Reset" disabled={busy || !!curveDraft || !changed} onPress={()=>edit(()=>optionHistory.update(initialSettings))} /></View>}
+  const strip = (children: ReactNode) => <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.strip}>{children}</ScrollView>;
+  const panel = <View style={docked ? styles.dockPanel : styles.panel}>
+    {!drawing && !docked && <View style={styles.wrap}><EditorOption label="Reset" disabled={busy || !!curveDraft || !changed} onPress={()=>edit(()=>optionHistory.update(initialSettings))} /></View>}
     {!!(recovery.error || markRecovery.error) && <ThemedText accessibilityRole="alert">{recovery.error || markRecovery.error}</ThemedText>}
     {batch && <><ThemedText>{1 + extra.length} of 10 images</ThemedText><ToolButton title="Choose more images" secondary disabled={busy} onPress={() => void chooseImages()} />{extra.map((item,index) => <ThemedText key={item.uri} numberOfLines={1}>{index + 2}. {item.name}</ThemedText>)}<ThemedText style={styles.note}>Settings apply to every image. Files process one at a time.</ThemedText></>}
     {sizing && <>
@@ -508,27 +535,20 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     {compressing && <>{<AdjustmentInput label={'Target size in KB (optional)'} value={target} onChange={value=>edit(()=>setTarget(value))} numeric={true} disabled={busy || !!curveDraft} />}<ThemedText style={styles.note}>Target compression lowers quality, then dimensions if needed.</ThemedText></>}
     {tool === 'exposure' && <AdjustmentSlider label={'Exposure'} value={exposure} min={-3} max={3} onChange={next => edit(() => (setExposure)(next))} display={`${exposure.toFixed(1)} EV`} disabled={busy || !!curveDraft} />}
     {tool === 'curves' && <>
-      <View style={styles.wrap}>{CURVE_CHANNELS.map(channel => <EditorOption key={channel.id} label={channel.label} selected={curveChannel === channel.id} disabled={busy || !!curveDraft} icon={{ ios: 'chart.xyaxis.line', android: 'show-chart' }} onPress={() => { if (!locked.current && !activeCurveDrag.current) setCurveChannel(channel.id); }} />)}</View>
+      {strip(<>{CURVE_CHANNELS.map(channel => <EditorOption key={channel.id} compact label={channel.label} selected={curveChannel === channel.id} disabled={busy || !!curveDraft} icon={{ ios: 'chart.xyaxis.line', android: 'show-chart' }} onPress={() => { if (!locked.current && !activeCurveDrag.current) setCurveChannel(channel.id); }} />)}<EditorOption compact label="Reset channel" disabled={busy || !!curveDraft} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('curves', current => ({ ...current, [curveChannel]: NEUTRAL_CURVE })))} /></>)}
       <CurveGraph key={`${file?.uri}:${curveChannel}`} values={curves[curveChannel]} selected={curvePoint} disabled={busy || !active || compare || !recovery.ready} onBegin={beginCurveDrag} onPreview={previewCurveDrag} onCommit={finishCurveDrag} onCancel={token => finishCurveDrag(token, 0)} />
-      <View style={styles.wrap}>{CURVE_POINTS.map((label, index) => <EditorOption key={label} compact label={label} selected={curvePoint === index} disabled={busy || !!curveDraft} onPress={() => setCurvePoint(index)} />)}</View>
-      {<AdjustmentSlider label={`${CURVE_POINTS[curvePoint]} output`} value={previewSettings.curves[curveChannel][curvePoint] * 100} min={0} max={100} onChange={next => edit(() => (setCurveValue)(next))} display={`${Math.round(previewSettings.curves[curveChannel][curvePoint] * 100)}%`} disabled={busy || !!curveDraft} />}
-      <View style={styles.wrap}><EditorOption label="Reset channel" disabled={busy || !!curveDraft} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('curves', current => ({ ...current, [curveChannel]: NEUTRAL_CURVE })))} /></View>
-      <ThemedText style={styles.note}>Drag an anchor up or down. Input tones stay fixed; output runs from 0 to 100%. RGB affects all channels. Each drag is one undo step.</ThemedText>
+      <ThemedText style={styles.note}>{CURVE_POINTS[curvePoint]} {Math.round(previewSettings.curves[curveChannel][curvePoint] * 100)}%. Drag a point up or down.</ThemedText>
     </>}
     {tool === 'levels' && <>
-      {<AdjustmentSlider label={'Black point'} value={levels.black * 255} min={0} max={Math.max(0, Math.round(levels.white * 255) - 1)} onChange={next => edit(() => setOption('levels', current => ({ ...current, black: Math.max(0, Math.min(Math.round(next), Math.round(current.white * 255) - 1)) / 255 })))} display={`${Math.round(levels.black * 255)} / 255`} disabled={busy || !!curveDraft} />}
-      {<AdjustmentSlider label={'Midtone gamma'} value={levels.gamma} min={.1} max={3} onChange={next => edit(() => (value => setOption('levels', current => ({ ...current, gamma: Math.round(value * 100) / 100 })))(next))} display={levels.gamma.toFixed(2)} disabled={busy || !!curveDraft} />}
-      {<AdjustmentSlider label={'White point'} value={levels.white * 255} min={Math.min(255, Math.round(levels.black * 255) + 1)} max={255} onChange={next => edit(() => setOption('levels', current => ({ ...current, white: Math.min(255, Math.max(Math.round(next), Math.round(current.black * 255) + 1)) / 255 })))} display={`${Math.round(levels.white * 255)} / 255`} disabled={busy || !!curveDraft} />}
-      <EditorOption label="Reset levels" disabled={busy} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('levels', NEUTRAL_LEVELS))} />
-      <ThemedText style={styles.note}>Tones below black become black; tones above white become white. Gamma above 1 brightens midtones, below 1 darkens them. Transparency stays unchanged.</ThemedText>
+      {strip(<>{LEVEL_POINTS.map(item => <EditorOption key={item.id} compact label={item.label} selected={levelPoint === item.id} disabled={busy} onPress={() => setLevelPoint(item.id)} />)}<EditorOption compact label="Reset levels" disabled={busy} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('levels', NEUTRAL_LEVELS))} /></>)}
+      {levelPoint === 'black' && <AdjustmentSlider key="black" label={'Black point'} value={levels.black * 255} min={0} max={Math.max(0, Math.round(levels.white * 255) - 1)} onChange={next => edit(() => setOption('levels', current => ({ ...current, black: Math.max(0, Math.min(Math.round(next), Math.round(current.white * 255) - 1)) / 255 })))} display={`${Math.round(levels.black * 255)} / 255`} disabled={busy || !!curveDraft} />}
+      {levelPoint === 'gamma' && <AdjustmentSlider key="gamma" label={'Midtone gamma'} value={levels.gamma} min={.1} max={3} onChange={next => edit(() => (value => setOption('levels', current => ({ ...current, gamma: Math.round(value * 100) / 100 })))(next))} display={levels.gamma.toFixed(2)} disabled={busy || !!curveDraft} />}
+      {levelPoint === 'white' && <AdjustmentSlider key="white" label={'White point'} value={levels.white * 255} min={Math.min(255, Math.round(levels.black * 255) + 1)} max={255} onChange={next => edit(() => setOption('levels', current => ({ ...current, white: Math.min(255, Math.max(Math.round(next), Math.round(current.black * 255) + 1)) / 255 })))} display={`${Math.round(levels.white * 255)} / 255`} disabled={busy || !!curveDraft} />}
     </>}
     {tool === 'hsl' && <>
-      <View style={styles.wrap}>{HSL_BANDS.map(band => <Pressable key={band.id} accessibilityRole="button" accessibilityLabel={`${band.label} color range`} accessibilityState={{ selected: hslBand === band.id, disabled: busy }} disabled={busy} onPress={() => setHslBand(band.id)} style={[colorStyles.range, { backgroundColor: hslBand === band.id ? colors.accentSurface : colors.fieldSurface, borderColor: hslBand === band.id ? colors.accent : colors.separator }]}><View style={[colorStyles.dot, { backgroundColor: band.color }]} /><ThemedText style={{ fontSize: 13, color: hslBand === band.id ? colors.accent : colors.label }}>{band.label}</ThemedText></Pressable>)}</View>
-      {<AdjustmentSlider label={'Hue shift'} value={hsl[hslBand].hue} min={-180} max={180} onChange={next => edit(() => (value => setHslValue('hue', value))(next))} display={`${hsl[hslBand].hue > 0 ? '+' : ''}${hsl[hslBand].hue}°`} disabled={busy || !!curveDraft} />}
-      {<AdjustmentSlider label={'Saturation'} value={hsl[hslBand].saturation} min={-100} max={100} onChange={next => edit(() => (value => setHslValue('saturation', value))(next))} display={`${hsl[hslBand].saturation > 0 ? '+' : ''}${hsl[hslBand].saturation}%`} disabled={busy || !!curveDraft} />}
-      {<AdjustmentSlider label={'Lightness'} value={hsl[hslBand].lightness} min={-100} max={100} onChange={next => edit(() => (value => setHslValue('lightness', value))(next))} display={`${hsl[hslBand].lightness > 0 ? '+' : ''}${hsl[hslBand].lightness}%`} disabled={busy || !!curveDraft} />}
-      <View style={styles.wrap}><EditorOption label="Reset color range" disabled={busy} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('hsl', current => ({ ...current, [hslBand]: { hue: 0, saturation: 0, lightness: 0 } })))} /></View>
-      <ThemedText style={styles.note}>Adjust the selected color and blend smoothly into neighboring ranges. Neutral gray pixels stay unchanged.</ThemedText>
+      {strip(<>{HSL_BANDS.map(band => <Pressable key={band.id} accessibilityRole="button" accessibilityLabel={`${band.label} color range`} accessibilityState={{ selected: hslBand === band.id, disabled: busy }} disabled={busy} onPress={() => setHslBand(band.id)} style={[colorStyles.range, { backgroundColor: hslBand === band.id ? colors.accentSurface : colors.fieldSurface, borderColor: hslBand === band.id ? colors.accent : colors.separator }]}><View style={[colorStyles.dot, { backgroundColor: band.color }]} /><ThemedText style={{ fontSize: 13, color: hslBand === band.id ? colors.accent : colors.label }}>{band.label}</ThemedText></Pressable>)}</>)}
+      {strip(<>{HSL_PARTS.map(item => <EditorOption key={item.id} compact label={item.label} selected={hslPart === item.id} disabled={busy} onPress={() => setHslPart(item.id)} />)}<EditorOption compact label="Reset color" disabled={busy} icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} onPress={() => edit(() => setOption('hsl', current => ({ ...current, [hslBand]: { hue: 0, saturation: 0, lightness: 0 } })))} /></>)}
+      <AdjustmentSlider key={`${hslBand}:${hslPart}`} label={HSL_PARTS.find(item => item.id === hslPart)!.label} value={hsl[hslBand][hslPart]} min={hslPart === 'hue' ? -180 : -100} max={hslPart === 'hue' ? 180 : 100} onChange={next => edit(() => setHslValue(hslPart, next))} display={`${hsl[hslBand][hslPart] > 0 ? '+' : ''}${hsl[hslBand][hslPart]}${hslPart === 'hue' ? '°' : '%'}`} disabled={busy || !!curveDraft} />
     </>}
     {tool === 'sharpen' && <AdjustmentSlider label={'Sharpness'} value={sharpen} min={0} max={2} onChange={next => edit(() => (setSharpen)(next))} display={sharpen.toFixed(1)} disabled={busy || !!curveDraft} />}
     {tool === 'blur' && <>{<AdjustmentSlider label={'Blur'} value={blur} min={0} max={.035} onChange={next => edit(() => (setBlur)(next))} display={`${Math.round(blur*1000)}`} disabled={busy || !!curveDraft} />}<View style={styles.wrap}>{<EditorOption key={'Whole image'} label={'Whole image'} selected={!blurArea} disabled={busy || !!curveDraft} onPress={() => edit(()=>{setBlurArea(false);setSelectingArea(false);})} />}{<EditorOption key={area?'Reselect area':'Select area'} label={area?'Reselect area':'Select area'} selected={blurArea} disabled={busy || !!curveDraft} onPress={() => edit(()=>{setBlurArea(true);setSelectingArea(true);setSettings(false);setCompare(false);})} />}</View>{blurArea && <ThemedText style={styles.note}>Drag a rectangle in the preview to choose the area.</ThemedText>}</>}
@@ -539,7 +559,9 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     {drawing && tool !== 'redact' && <><View style={styles.wrap}>{<EditorOption key={'Select & resize'} label={'Select & resize'} selected={selecting} disabled={busy || !!curveDraft} onPress={() => edit(()=>{setErasing(false);setSelectedId(undefined);setSelecting(value=>!value);})} />}{<EditorOption key={'Pen'} label={'Pen'} selected={shape==='pen'} disabled={busy || !!curveDraft} onPress={() => edit(()=>{setShape('pen');setSelecting(false);})} />}{<EditorOption key={'Shapes'} label={'Shapes'} selected={shape!=='pen'} disabled={busy || !!curveDraft} onPress={() => edit(()=>setShape('rectangle'))} />}</View>{shape==='pen' && <BrushControls patternsAvailable={!!PdfEngine?.nativeStrokePatternsVersion && !!FileEngine?.nativeStrokePatternsVersion} brush={brushType} pattern={pattern} disabled={busy} editingAvailable={markupEditing} opacity={inkOpacity} onOpacity={value=>{setInkOpacity(value);styleSelection({opacity:value});}} erasing={erasing} onEraser={()=>{setErasing(value=>!value);setSelecting(false);}} onBrush={(value,width,opacity)=>{setErasing(false);setBrushType(value);setInkWidth(width);setInkOpacity(opacity);styleSelection({brush:value,width,opacity});}} onPattern={value=>{setPattern(value);styleSelection({pattern:value});}} />}{shape!=='pen' && <ShapePicker value={shape} disabled={busy} onChange={value=>edit(()=>setShape(value))} />}<ColorSwatches value={ink} disabled={busy} onChange={value=>{edit(()=>setInk(value??0));styleSelection({color:hexColor(value??0)});}} />{shape!=='pen' && <><ThemedText>Fill</ThemedText><ColorSwatches value={fill} original={{label:'None',value:null}} disabled={busy} onChange={value=>{edit(()=>setFill(value));styleSelection({fillColor:value===null?'':hexColor(value)});}} /></>}{<AdjustmentSlider label={'Thickness'} value={inkWidth} min={.002} max={.05} onChange={next => edit(() => (value=>{setInkWidth(value);styleSelection({width:value});})(next))} display={`${Math.round(inkWidth*1000)}`} disabled={busy || !!curveDraft} />}</>}
     {tool === 'metadata' && <ThemedText>Creates a new raster image without source EXIF, GPS or camera tags. Visible information stays in the image.</ThemedText>}
     {tool === 'rename' && <ThemedText>Save an identical copy with a new name. The original stays unchanged.</ThemedText>}
-    {tool !== 'rename' && <><ThemedText style={styles.label}>Output format</ThemedText><View style={styles.wrap}>{info?.formats.map(value=><EditorOption key={value.toUpperCase()} label={value.toUpperCase()} selected={format===value} disabled={busy || !!curveDraft} onPress={() => edit(()=>setFormat(value))} />)}</View><ThemedText style={styles.note}>Available formats use the native encoders on your device.</ThemedText>{!['png','tiff'].includes(format) && <AdjustmentSlider label={'Quality'} value={quality} min={10} max={100} onChange={next => edit(() => (value=>setQuality(Math.round(value)))(next))} display={`${quality}%`} disabled={busy || !!curveDraft} />}</>}
+    {exportTool && tool !== 'rename' && <ThemedText style={styles.note}>Exports keep the original resolution unless you resize or set a compression target. Images that exceed device memory need a smaller size.</ThemedText>}
+    {!exportTool && !docked && <ThemedText style={styles.note}>Apply adds this change to the image. Save once from the image preview when you are done.</ThemedText>}
+    {exportTool && tool !== 'rename' && <><ThemedText style={styles.label}>Output format</ThemedText><View style={styles.wrap}>{info?.formats.map(value=><EditorOption key={value.toUpperCase()} label={value.toUpperCase()} selected={format===value} disabled={busy || !!curveDraft} onPress={() => edit(()=>setFormat(value))} />)}</View><ThemedText style={styles.note}>Available formats use the native encoders on your device.</ThemedText>{!['png','tiff'].includes(format) && <AdjustmentSlider label={'Quality'} value={quality} min={10} max={100} onChange={next => edit(() => (value=>setQuality(Math.round(value)))(next))} display={`${quality}%`} disabled={busy || !!curveDraft} />}</>}
   </View>;
   async function applyToWorkspace() {
     if (!recovery.ready || !markRecovery.ready) throw new Error('Wait for draft recovery to finish.');
@@ -559,38 +581,61 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       await recovery.clear(); await markRecovery.clear();
     } finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
+  /** Shares a saved result, otherwise a fresh export with the current settings and marks. */
+  async function shareImage() {
+    if (!file || !info || locked.current || activeCurveDrag.current || !recovery.ready || !markRecovery.ready) return;
+    if (results.length) { const output = results[0]; await shareNamedFile({ uri: output.uri, name: output.name, mimeType: output.mimeType, size: output.size }); return; }
+    if (tool === 'rename' || tool === 'info') { await shareNamedFile({ uri: file.uri, name: file.name, mimeType: info.mimeType, size: file.size }); return; }
+    const snapshot = optionHistory.getCurrent();
+    if (tool === 'watermark' && !snapshot.watermark.trim() && !logo) throw new Error('Enter watermark text or choose an image.');
+    if (tool === 'blur' && snapshot.blurArea && !area) throw new Error('Select the area to blur first.');
+    const options = parameters(true, snapshot);
+    const ext = extension(String(options.format ?? snapshot.format));
+    const base = file.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Image';
+    locked.current = true; setBusy(true); Keyboard.dismiss();
+    try {
+      jobs.current.forEach((_, job) => FileEngine?.cancelImageJob(job));
+      await Promise.allSettled([...jobs.current.values()]);
+      await shareRenderedFile(`${base} - ${tool.replace(/_/g, ' ')}.${ext}`, ext === 'jpg' ? 'image/jpeg' : `image/${ext}`, outputUri => run({ ...options, action: 'export', uri: file.uri, outputUri }));
+    } finally { locked.current = false; if (mounted.current) { setBusy(false); setRetry(value => value + 1); } }
+  }
   const cancel = () => { cancelled.current = true; jobs.current.forEach((_,job)=>FileEngine?.cancelImageJob(job)); };
   const activeBrush = BRUSHES.find(item => item.id === brushType) ?? BRUSHES[0];
-  const settingsAction = <Pressable accessibilityRole="button" accessibilityLabel="Image options" accessibilityState={{expanded:settings}} onPress={()=>{Keyboard.dismiss();setSettings(value=>!value);}} style={styles.chip}><UniversalIcon ios="slider.horizontal.3" android="tune" size={22} color={tint.ink} /></Pressable>;
+  const toggleSettings = () => { Keyboard.dismiss(); setSettings(value => !value); };
+  const settingsAction = drawing
+    ? <ToolRowButton label="Style and colour" icon={{ ios: 'paintpalette', android: 'palette' }} selected={settings} expanded={settings} disabled={busy} onPress={toggleSettings} />
+    : docked ? null : <ToolRowButton label="Image options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={settings} expanded={settings} disabled={busy || tool === 'rename'} onPress={toggleSettings} />;
+  // Drawing controls sit in one icon row, like the PDF markup tools.
+  const drawActions = drawing && <>
+    {tool !== 'redact' && <EditorMenu iconOnly tintedItems grid={3} label={`Brush: ${activeBrush.label}`} icon={optionIcon(activeBrush.label)} colorKey={activeBrush.colorKey} disabled={busy} items={BRUSHES.map(item => ({ id: item.id, label: item.label, colorKey: item.colorKey, selected: brushType === item.id && shape === 'pen' && !erasing, onPress: () => edit(() => { setErasing(false); setSelecting(false); setShape('pen'); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); }) }))} />}
+    {tool !== 'redact' && <ShapePicker iconOnly value={shape} onChange={value => edit(() => { setShape(value); setSelecting(false); setErasing(false); })} disabled={busy} />}
+    {markupEditing && <ToolRowButton label={erasing ? 'Stop erasing' : 'Stroke eraser'} icon={{ ios: 'eraser', android: 'auto-fix-normal' }} selected={erasing} disabled={busy} onPress={() => { setErasing(value => !value); setSelecting(false); }} />}
+  </>;
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen,{backgroundColor:colors.systemBackground}]}>
     {toolbar.measurements}
-    <Stack.Screen options={{ gestureEnabled: false }} /><ScreenHeader title={title} onBack={close}>
-      <HeaderHistoryButtons disabled={busy || !!curveDraft || !recovery.ready || !!results.length} canUndo={drawing ? history.canUndo : optionHistory.canUndo} canRedo={drawing ? history.canRedo : optionHistory.canRedo} onUndo={() => edit(drawing ? () => { history.undo(); } : optionHistory.undo)} onRedo={() => edit(drawing ? () => { history.redo(); } : optionHistory.redo)} />
-      <ImageWorkspaceTools id={id} current={tool} disabled={busy || picking || !!curveDraft || !file || !info || !!results.length} onApply={applyToWorkspace} /></ScreenHeader>
+    <Stack.Screen options={{ gestureEnabled: false }} />
+    <ScreenHeader title={title} onBack={close} share={{ onPress: shareImage, disabled: busy || picking || !!curveDraft || !file || !info, label: results.length ? 'Share saved image' : tool === 'rename' || tool === 'info' ? 'Share image' : 'Share edited image' }}
+      save={{ onPress: () => exportTool ? save() : applyAndReturn(), label: saveTitle, disabled: busy || picking || !!curveDraft || !file || !info || !available || results.length > 0 || !!issue || ((drawing || blurArea) && !PdfMarkupView) }} />
+    <ToolActionRow
+      left={<><FitSlotButton /><HeaderHistoryButtons disabled={busy || !!curveDraft || !recovery.ready || !!results.length} canUndo={drawing ? history.canUndo : optionHistory.canUndo} canRedo={drawing ? history.canRedo : optionHistory.canRedo} onUndo={() => edit(drawing ? () => { history.undo(); } : optionHistory.undo)} onRedo={() => edit(drawing ? () => { history.redo(); } : optionHistory.redo)} /></>}
+      right={<ImageWorkspaceTools id={id} current={tool} disabled={busy || picking || !!curveDraft || !file || !info || !!results.length} onApply={applyToWorkspace} />} />
     {!available ? <View style={styles.empty}><ThemedText>Install a new development build to use these native image tools.</ThemedText></View> : !file || !info ? <View style={styles.empty}>{error ? <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Try again" secondary onPress={()=>{initialized.current=false;setError('');setRetry(value=>value+1);}} /></> : <AppLoader />}</View> : results.length ? <ScrollView contentContainerStyle={styles.panel}><ThemedText style={styles.heading}>{busy ? progress : `${results.length} image${results.length===1?'':'s'} saved`}</ThemedText>{results.map(result=><View key={result.uri} style={[styles.result,{backgroundColor:colors.catalogSurface}]}><ThemedText>{result.name}</ThemedText><ThemedText>{result.width} x {result.height} - {formatSize(result.size)}</ThemedText><ToolButton title="Open image" disabled={busy} onPress={()=>void rememberFile(result,'image').then(value=>router.replace({pathname:'/file-preview',params:{id:value.id}}))} /><ToolButton title="Save to device" secondary disabled={busy} onPress={()=>void saveToDevice(result.uri,result.name,result.mimeType).then(async device=>{await recordEditedFile({...result,kind:'image',deviceUri:device.uri,location:device.location});showDialog('Saved',device.location);}).catch(cause=>setError((cause as Error).message))} /><ToolButton title="Share" secondary disabled={busy} onPress={()=>void shareFile(result).catch(cause=>setError((cause as Error).message))} /></View>)}{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}{busy ? <ToolButton title="Cancel remaining images" secondary onPress={cancel} /> : <ToolButton title="Return to tool" secondary onPress={()=>setResults([])} />}</ScrollView> : tool === 'info' ? <ScrollView contentContainerStyle={styles.panel}>{Object.entries({Name:file.name,Dimensions:`${info.width} x ${info.height} px`,Size:formatSize(info.size),Format:info.mimeType,Camera:info.camera||'Not recorded',Taken:info.taken||'Not recorded',Location:info.hasLocation?'GPS metadata present':'Not recorded'}).map(([key,value])=><View key={key} style={styles.field}><ThemedText style={styles.label}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView> : <View style={[styles.grow, landscape && styles.landscape]}>
       <View style={styles.grow}>
-      <View style={styles.previewHeader}><ThemedText numberOfLines={1} style={[styles.grow,styles.note]}>{info.width} x {info.height} - {formatSize(info.size)}</ThemedText>{!drawing && tool !== 'rename' && <Pressable accessibilityRole="button" accessibilityLabel={compare?'Show changes':'Compare original'} onPress={()=>setCompare(value=>!value)} style={styles.chip}><ThemedText>{compare?'Show changes':'Original'}</ThemedText></Pressable>}{!toolbar.atBottom && settingsAction}</View>
-      {(drawing || selectingArea) && preview && PdfMarkupView ? <PdfPreviewStage actions={drawing && <View style={{ gap: 8, alignItems: 'flex-end' }}>
-        {tool !== 'redact' && <EditorMenu label={`Brush: ${activeBrush.label}`} icon={optionIcon(activeBrush.label)} colorKey={activeBrush.colorKey} tintedItems disabled={busy} items={BRUSHES.map(item => ({ id: item.id, label: item.label, colorKey: item.colorKey, selected: brushType === item.id && shape === 'pen' && !erasing, onPress: () => edit(() => { setErasing(false); setSelecting(false); setShape('pen'); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); }) }))} />}
-        {tool !== 'redact' && <ShapePicker value={shape} onChange={value => edit(() => { setShape(value); setSelecting(false); setErasing(false); })} disabled={busy} />}
-        <EditorMenu label="Settings" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} items={[
-          { id: 'style', label: settings ? 'Hide style controls' : 'Style and colour', selected: settings, onPress: () => { Keyboard.dismiss(); setSettings(value => !value); } },
-        ]} />
-      </View>} hint={selectingArea?'Drag a rectangle around the area to blur.':tool==='redact'?'Drag a solid cover over private information.':'Draw with one finger. Zoom and pan with two.'} onFit={()=>setFit(value=>value+1)}>{active && <PdfMarkupView key={fit} style={styles.grow} source={preview.uri} marks={JSON.stringify((selectingArea ? (area ? [area] : []) : marks).map(mark=>({...mark,kind:mark.kind==='redact'?'polygon':mark.kind})))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event=>selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : selectingArea||tool==='redact'||shape!=='pen'?(shape==='line'?'line':'polygon'):'draw'} shapePath={JSON.stringify(SHAPES.find(item=>item.id===(selectingArea||tool==='redact'?'rectangle':shape))?.points??[])} fillColor={selectingArea?'':tool==='redact'?'#000000':fill===null?'':hexColor(fill)} inkColor={tool==='redact'?'#000000':hexColor(ink)} inkWidth={inkWidth} disabled={busy||!markRecovery.ready||(!selecting&&!erasing&&marks.length>=300)} onMark={({nativeEvent})=>{try {const mark=JSON.parse(nativeEvent.mark) as PdfMarkChange;if('deleted' in mark){edit(()=>history.commit(mark));return;}if(selectingArea){edit(()=>{setArea(mark);setSelectingArea(false);});return;}if(marks.filter(item=>item.id!==mark.id).reduce((total,item)=>total+item.points.length,0)+mark.points.length>20000) throw new Error('Save before adding more strokes.');edit(()=>{history.commit({...mark,page:1,kind:tool==='redact'?'redact':mark.kind});});} catch(cause){setError((cause as Error).message);}}} />}</PdfPreviewStage> : preview ? <PdfPagePreview image={preview} active={active} preserveViewport hint={previewBusy?'Updating preview...':compare||issue?'Original image preview':'Preview - pinch to zoom, drag to move.'} /> : <View style={styles.empty}>{previewBusy ? <AppLoader /> : <ThemedText>{tool==='rename'?'Choose Save copy to enter a new name.':'Preparing image preview...'}</ThemedText>}</View>}
+      <View style={styles.previewHeader}><ThemedText numberOfLines={1} style={[styles.grow,styles.note]}>{info.width} x {info.height} - {formatSize(info.size)}</ThemedText>{!drawing && tool !== 'rename' && <ToolRowButton label={compare ? 'Show changes' : 'Compare with original'} icon={{ ios: 'square.split.2x1', android: 'compare' }} selected={compare} onPress={() => setCompare(value => !value)} />}{drawActions}{settingsAction}</View>
+      {(drawing || selectingArea) && preview && PdfMarkupView ? <PdfPreviewStage hint={selectingArea?'Drag a rectangle around the area to blur.':tool==='redact'?'Drag a solid cover over private information.':'Draw with one finger. Zoom and pan with two.'} onFit={()=>setFit(value=>value+1)}>{active && <PdfMarkupView key={fit} style={styles.grow} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify((selectingArea ? (area ? [area] : []) : marks).map(mark=>({...mark,kind:mark.kind==='redact'?'polygon':mark.kind})))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event=>selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : selectingArea||tool==='redact'||shape!=='pen'?(shape==='line'?'line':'polygon'):'draw'} shapePath={JSON.stringify(SHAPES.find(item=>item.id===(selectingArea||tool==='redact'?'rectangle':shape))?.points??[])} fillColor={selectingArea?'':tool==='redact'?'#000000':fill===null?'':hexColor(fill)} inkColor={tool==='redact'?'#000000':hexColor(ink)} inkWidth={inkWidth} disabled={busy||!markRecovery.ready||(!selecting&&!erasing&&marks.length>=300)} onMark={({nativeEvent})=>{try {const mark=JSON.parse(nativeEvent.mark) as PdfMarkChange;if('deleted' in mark){edit(()=>history.commit(mark));return;}if(selectingArea){edit(()=>{setArea(mark);setSelectingArea(false);});return;}if(marks.filter(item=>item.id!==mark.id).reduce((total,item)=>total+item.points.length,0)+mark.points.length>20000) throw new Error('Save before adding more strokes.');edit(()=>{history.commit({...mark,page:1,kind:tool==='redact'?'redact':mark.kind});});} catch(cause){setError((cause as Error).message);}}} />}{active && !selectingArea && (selecting || !!resizeTarget) && <MarkupZoomButtons showZoom={selecting} zoom={markupZoom.zoom} onZoomBy={markupZoom.zoomBy} disabled={busy} selection={resizeTarget?.points} onResize={points => { const id = resizeTarget?.id; if (id) edit(() => history.update(id, { points })); }} />}</PdfPreviewStage> : preview ? <PdfPagePreview image={preview} active={active} preserveViewport hint={previewBusy?'Updating preview...':compare||issue?'Original image preview':'Preview - pinch to zoom, drag to move.'} /> : <View style={styles.empty}>{previewBusy ? <AppLoader /> : <ThemedText>{tool==='rename'?'Choose Save copy to enter a new name.':'Preparing image preview...'}</ThemedText>}</View>}
       {!!(issue||error) && <View style={styles.error}><ThemedText accessibilityRole="alert">{issue||error}</ThemedText>{!issue && <ToolButton title="Retry preview" secondary disabled={busy} onPress={()=>setRetry(value=>value+1)} />}</View>}
       </View>
       <View style={landscape ? styles.side : undefined}>
-      {settings && <ScrollView style={landscape ? { flex: 1 } : styles.dock} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>{panel}</ScrollView>}
+      {docked ? landscape ? <ScrollView style={styles.grow} keyboardShouldPersistTaps="handled">{panel}</ScrollView> : <View style={[styles.dockBar, { borderColor: colors.separator }]}>{panel}</View>
+        : <OptionSheet title={drawing ? 'Style and colour' : `${title} options`} icon={drawing ? { ios: 'paintpalette', android: 'palette' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={settings && tool !== 'rename'} dim={false} onClose={() => setSettings(false)}>{panel}</OptionSheet>}
       <PdfPreviewFooter>
-        {!busy && tool !== 'rename' && <ThemedText style={styles.note}>Exports keep the original resolution unless you resize or set a compression target. Images that exceed device memory need a smaller size.</ThemedText>}
         <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
-          {toolbar.atBottom && settingsAction}
           {busy ? <><AppLoader /><ThemedText style={styles.grow}>{progress}</ThemedText><ToolButton title="Cancel" secondary onPress={cancel} /></> : <>
             {drawing && <>
               <EditorOption compact label={tool === 'redact' ? 'Cover' : 'Draw'} selected={!selecting && !erasing} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setErasing(false); setSelectedId(undefined); }} />
               <EditorOption compact label="Select & resize" selected={selecting} disabled={busy} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setErasing(false); }} />
             </>}
-            <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={picking||!!curveDraft||!!issue||((drawing||blurArea)&&!PdfMarkupView)} onPress={()=>void save()} /></View>
+            <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={picking||!!curveDraft||!!issue||((drawing||blurArea)&&!PdfMarkupView)} onPress={()=>void (exportTool ? save() : applyAndReturn())} /></View>
           </>}
         </View>
       </PdfPreviewFooter>
@@ -598,4 +643,4 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     </View>}
   </KeyboardAvoidingView>;
 }
-const styles = StyleSheet.create({screen:{flex:1},grow:{flex:1,minWidth:0},landscape:{flexDirection:'row',alignItems:'stretch'},side:{width:300,flexGrow:0},row:{flexDirection:'row',alignItems:'center',gap:8},wrap:{flexDirection:'row',flexWrap:'wrap',gap:8},previewHeader:{flexDirection:'row',alignItems:'center',paddingHorizontal:12,gap:8},panel:{padding:16,gap:14},field:{gap:6},label:{fontSize:14,fontWeight:'600'},heading:{fontSize:22,fontWeight:'600'},input:{minHeight:44,borderRadius:12,paddingHorizontal:12,fontSize:16},chip:{minHeight:44,borderRadius:12,paddingHorizontal:12,borderWidth:1,alignItems:'center',justifyContent:'center'},note:{fontSize:12,lineHeight:17},dock:{maxHeight:'38%',flexGrow:0},empty:{flex:1,justifyContent:'center',alignItems:'center',padding:24,gap:12},error:{padding:8,gap:6},result:{padding:16,gap:10,borderRadius:16}});
+const styles = StyleSheet.create({screen:{flex:1},grow:{flex:1,minWidth:0},landscape:{flexDirection:'row',alignItems:'stretch'},side:{width:300,flexGrow:0},row:{flexDirection:'row',alignItems:'center',gap:8},wrap:{flexDirection:'row',flexWrap:'wrap',gap:8},previewHeader:{flexDirection:'row',alignItems:'center',paddingHorizontal:12,gap:8},panel:{padding:16,gap:14},field:{gap:6},label:{fontSize:14,fontWeight:'600'},heading:{fontSize:22,fontWeight:'600'},input:{minHeight:44,borderRadius:12,paddingHorizontal:12,fontSize:16},chip:{minHeight:44,borderRadius:12,paddingHorizontal:12,borderWidth:1,alignItems:'center',justifyContent:'center'},note:{fontSize:12,lineHeight:17},dockBar:{borderTopWidth:StyleSheet.hairlineWidth},dockPanel:{paddingHorizontal:12,paddingVertical:8,gap:6},strip:{flexDirection:'row',alignItems:'center',gap:8},empty:{flex:1,justifyContent:'center',alignItems:'center',padding:24,gap:12},error:{padding:8,gap:6},result:{padding:16,gap:10,borderRadius:16}});
