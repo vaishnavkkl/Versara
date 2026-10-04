@@ -203,6 +203,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
   }
   /** Applies this tool's edits to the working image and returns to its preview, where everything is saved once. */
   async function applyAndReturn() {
+    if (locked.current || busy) return;
     try {
       await applyToWorkspace();
       if (mounted.current) router.dismissTo({ pathname: '/file-preview', params: { id } });
@@ -214,6 +215,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
     if (!file || locked.current || busy || !draft.ready || !FileEngine) return;
     const snapshot = history.getCurrent();
     locked.current = true; setBusy(true);
+    restoreCrop(snapshot.crop);
     Keyboard.dismiss();
     try {
       let dimensions: ReturnType<typeof resolveResize>;
@@ -265,6 +267,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
     const engine = FileEngine;
     const base = file.name.replace(/\.[a-zA-Z0-9]{1,8}$/, '').slice(0, 80) || 'Image';
     locked.current = true; setBusy(true); Keyboard.dismiss();
+    restoreCrop(snapshot.crop);
     try {
       await shareRenderedFile(`${base} - edited${EXTENSIONS[snapshot.format]}`, `image/${snapshot.format}`,
         outputUri => engine.editImage(JSON.stringify({ uri: file.uri, outputUri, edits: snapshot.edits, crop: snapshot.crop, ...dimensions, format: snapshot.format, quality: snapshot.quality })));
@@ -276,6 +279,8 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
     const snapshot = history.getCurrent();
     if (!hasChanges(snapshot)) return;
     locked.current = true;
+    restoreCrop(snapshot.crop);
+    setError(null);
     Keyboard.dismiss(); setBusy(true);
     try {
       const dimensions = hasResize(snapshot) ? resolveResize(resizeSourceFor(size, snapshot), snapshot.resize) : undefined;
@@ -311,7 +316,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
     </>}
     {tab === 'filters' && chipRow(<>{FILTERS.map(item => <EditorOption key={item.id} selected={edits.filter === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => update({ filter: item.id })} />)}</>)}
     {tab === 'resize' && <>
-      <ImageResizeControls source={resizeSource} value={resize} disabled={busy || !draft.ready || compare} onChange={setResize} />
+      <ImageResizeControls source={resizeSource} value={resize} disabled={busy || !draft.ready || compare} inSheet={!landscape} onChange={setResize} />
       <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Dimensions include your crop and rotation. Unlock proportions to stretch to an exact size.</ThemedText>
     </>}
     {tab === 'export' && <>
@@ -356,14 +361,14 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
       : !file ? <View style={styles.center}>{!error && <AppLoader />}</View>
       : <View style={[styles.grow, landscape && styles.row]}>
         <View pointerEvents={busy ? 'none' : 'auto'} style={[styles.grow, { backgroundColor: colors.secondarySystemBackground }]}>
-          {active && draft.ready && <ImageEditorView key={`${history.revision}:${compare}`} style={styles.grow} source={compare ? (workspace.origin ?? file).uri : file.uri} edits={JSON.stringify(compare ? NEUTRAL : edits)} aspect={compare ? 'none' : aspect} cropRequest={FileEngine?.nativeImageHistoryVersion ? cropRequest : undefined}
+          {active && draft.ready && !busy && <ImageEditorView key={`${history.revision}:${compare}`} style={styles.grow} source={compare ? (workspace.origin ?? file).uri : file.uri} edits={JSON.stringify(compare ? NEUTRAL : edits)} aspect={compare ? 'none' : aspect} cropRequest={FileEngine?.nativeImageHistoryVersion ? cropRequest : undefined}
             onLoad={({ nativeEvent }) => { if (!compare) setSize(nativeEvent); }} onError={({ nativeEvent }) => setError(nativeEvent.message)}
             onCropChange={({ nativeEvent }) => { if (!compare && draft.ready) setCrop(nativeEvent.width ? nativeEvent as ImageCrop : null); }} />}
         </View>
         <View style={[landscape ? [styles.side, { width: sideWidth }] : styles.bottom, { borderColor: colors.separator }]}>
-          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{tabs}</>}
+          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{tabs}</>}
         </View>
-        {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
+        {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} keyboardInput={tab === 'resize'} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
       </View>}
   </KeyboardAvoidingView>;
 }

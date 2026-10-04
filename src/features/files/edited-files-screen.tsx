@@ -163,7 +163,7 @@ const EditedFileRow = memo(function EditedFileRow({ item, active, busy, onOpen, 
   const colors = usePalette();
   return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void onOpen(item); }}
         style={({ pressed }) => [styles.row, { backgroundColor: colors.catalogSurface, borderColor: colors.separator, opacity: pressed ? 0.7 : 1 }]}>
-        <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} active={active} /></View>
+        <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.modified}:${item.size}`} active={active} /></View>
         <View style={styles.meta}>
           <ThemedText numberOfLines={2} style={styles.name}>{item.name}</ThemedText>
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{dateLabel(item.modified)} · {formatSize(item.size)}</ThemedText>

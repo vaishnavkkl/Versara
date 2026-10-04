@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ToolboxSheet } from './toolbox-sheet';
 import type { Method } from '@/constants/pdf-methods';
 import { AppLoader } from '@/components/app-loader';

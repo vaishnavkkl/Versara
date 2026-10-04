@@ -1,6 +1,9 @@
+import { useControlHelp } from './control-help';
+import { HelpTextInput as TextInput } from './help-text-input';
 import { Host, Slider } from '@expo/ui';
 import { memo, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View, useColorScheme } from 'react-native';
+import { StyleSheet, View, useColorScheme } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
@@ -38,6 +41,7 @@ type Props = {
 export const ColorSwatches = memo(function ColorSwatches({ value, onChange, original, disabled = false }: Props) {
   const colors = usePalette();
   const scheme = useColorScheme();
+  const help = useControlHelp();
   const [custom, setCustom] = useState(false);
   const [hsv, setHsv] = useState<Hsv>(() => toHsv(value ?? 0x1a73e8));
   const [hex, setHex] = useState('');
@@ -59,9 +63,9 @@ export const ColorSwatches = memo(function ColorSwatches({ value, onChange, orig
   };
   const slider = (label: string, key: keyof Hsv, max: number) => <View style={styles.sliderRow}>
     <ThemedText style={[styles.sliderLabel, { color: colors.secondaryLabel }]}>{label}</ThemedText>
-    <View style={styles.grow}><Host colorScheme={scheme ?? undefined} seedColor={colors.accent} matchContents={{ vertical: true }}>
-      <Slider value={hsv[key] * (key === 'h' ? 1 : 100)} min={0} max={max} disabled={disabled} onValueChange={next => update({ ...hsv, [key]: key === 'h' ? next : next / 100 })} />
-    </Host></View>
+    <Pressable pointerEvents={help?.active ? 'auto' : 'box-none'} accessibilityRole="button" accessibilityLabel={`${label} colour adjustment`} style={styles.grow}><View pointerEvents={help?.active ? 'none' : 'auto'}><Host colorScheme={scheme ?? undefined} seedColor={colors.accent} matchContents={{ vertical: true }}>
+      <Slider value={hsv[key] * (key === 'h' ? 1 : 100)} min={0} max={max} disabled={disabled || help?.active} onValueChange={next => update({ ...hsv, [key]: key === 'h' ? next : next / 100 })} />
+    </Host></View></Pressable>
   </View>;
   return <View>
     <View style={styles.row}>

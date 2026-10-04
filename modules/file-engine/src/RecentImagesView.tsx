@@ -17,6 +17,8 @@ export type RecentImagesProps = ViewProps & {
 };
 export const hasNativeImageList = !!FileEngine?.nativeImageListVersion;
 export const hasNativeListRefresh = (FileEngine?.nativeImageListVersion ?? 0) >= 4;
+/** Version 5 separates cached thumbnails by file revision. */
+export const hasNativeThumbnailRevisions = (FileEngine?.nativeImageListVersion ?? 0) >= 5;
 /** Version 2 adds video frames and audio artwork. */
 export const hasNativeMediaList = (FileEngine?.nativeImageListVersion ?? 0) >= 2;const RecentImagesView = hasNativeImageList ? requireNativeView<RecentImagesProps>('FileEngine') : null;
 export default RecentImagesView;

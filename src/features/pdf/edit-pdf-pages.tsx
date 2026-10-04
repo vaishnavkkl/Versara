@@ -4,7 +4,9 @@ import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Keyboard, ScrollView, StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
+import { HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-text-input';
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
@@ -20,6 +22,10 @@ import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfResult } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
+import { PdfPreviewFooter } from './pdf-preview';
+import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
+import { EditorOption } from '@/components/editor-option';
+import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string };
@@ -36,7 +42,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [rangeText, setRangeText] = useState('');
-  const [showRanges, setShowRanges] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -97,7 +103,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
       const details = await PdfEngine.inspectPdfs(id, [picked[0].uri]);
       if (!mounted.current) return;
       setSource({ ...picked[0], pageCount: details[0].pageCount });
-      setSelected(new Set()); setRangeText(''); setShowRanges(false);
+      setSelected(new Set()); setRangeText(''); setOptionsOpen(false);
       setName(`${picked[0].name.replace(/\.pdf$/i, '')}${extracting ? ' - selected pages' : ' - edited'}`);
       accepted = true;
     } catch (cause) { fail(cause); }
@@ -118,7 +124,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
         if (start < 1 || end < start || end > source.pageCount) throw new Error(`Choose pages between 1 and ${source.pageCount}.`);
         for (let page = start; page <= end; page++) next.add(page);
       }
-      setSelected(next); setError('');
+      setSelected(next); setError(''); setOptionsOpen(false); Keyboard.dismiss();
     } catch (cause) { fail(cause); }
   }
   const outputCount = source ? extracting ? selected.size : source.pageCount - selected.size : 0;
@@ -177,29 +183,33 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   return <View style={styles.screen}>
     <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={pages} numColumns={3} extraData={selected} keyExtractor={page => String(page)} contentContainerStyle={styles.list} columnWrapperStyle={styles.row} keyboardShouldPersistTaps="handled" initialNumToRender={9} maxToRenderPerBatch={3} windowSize={3}
       ListHeaderComponent={<View style={styles.form}>
-        <ThemedText style={styles.heading}>1. Choose a PDF</ThemedText>
-        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{extracting ? 'Pick the pages you want to keep in a new PDF.' : 'Pick the pages you want to remove. We’ll save a new copy.'}</ThemedText>
+        <ThemedText numberOfLines={2} style={styles.label}>{source ? `${source.name} - ${source.pageCount} pages` : 'Choose a PDF to get started.'}</ThemedText>
+        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{extracting ? 'Select pages to keep.' : 'Select pages to remove.'} Tap the eye to preview a page.</ThemedText>
         {!available && <ThemedText accessibilityRole="alert">Install a new development build to use this tool.</ThemedText>}
-        <ToolButton title={source ? 'Change PDF' : 'Choose PDF'} disabled={busy || !available} onPress={choose} />
-        {source && <>
-          <ThemedText numberOfLines={2} style={styles.label}>{source.name} · {source.pageCount} pages</ThemedText>
-          <ThemedText style={styles.label}>New PDF name</ThemedText>
-          <TextInput accessibilityLabel="New PDF name" value={name} onChangeText={setName} editable={!busy} maxLength={100} style={[styles.input, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-          <ThemedText style={styles.heading}>2. {extracting ? 'Select pages to keep' : 'Select pages to remove'}</ThemedText>
-          <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Tap a page thumbnail to select it. Tap the eye to preview that page.</ThemedText>
-          <View style={styles.row}><View style={styles.grow}><ToolButton title={selected.size === source.pageCount ? 'Clear selection' : 'Select all'} secondary disabled={busy} onPress={() => setSelected(selected.size === source.pageCount ? new Set() : new Set(Array.from({ length: source.pageCount }, (_, index) => index + 1)))} /></View><View style={styles.grow}><ToolButton title={showRanges ? 'Hide ranges' : 'Enter ranges'} secondary disabled={busy} onPress={() => setShowRanges(value => !value)} /></View></View>
-          {showRanges && <><TextInput accessibilityLabel="Page numbers or ranges" placeholder="For example: 1, 3, 5-8" placeholderTextColor={colors.secondaryLabel} value={rangeText} onChangeText={setRangeText} editable={!busy} maxLength={1400} style={[styles.input, { color: colors.label, backgroundColor: colors.accentSurface }]} /><ToolButton title="Select these pages" secondary onPress={applyRanges} disabled={busy || !rangeText.trim()} /></>}
-        </>}
       </View>}
       renderItem={renderPage}
     />
-    {(!!source || busy || !!error) && <View style={[styles.footer, { borderColor: colors.separator }]}>
-      {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling…' : progress === 1 ? 'Saving your PDF…' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{progress !== null && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
-        <ThemedText accessibilityLiveRegion="polite" style={styles.body}>{selected.size === 0 ? 'Select a page to get started.' : outputCount === 0 ? 'Keep at least one page. Unselect a page to continue.' : `${selected.size} ${extracting ? 'selected' : 'to remove'} · ${outputCount} ${outputCount === 1 ? 'page' : 'pages'} in your new PDF`}</ThemedText>
-        <ToolButton title={extracting ? 'Create PDF with selected pages' : 'Save PDF without selected pages'} disabled={!canSave} onPress={save} />
+    <PdfFileOptionsSheet visible={optionsOpen} onClose={() => setOptionsOpen(false)} name={name} onName={setName} disabled={busy} onChoose={available ? () => void choose() : undefined}
+      description={extracting ? 'Selected pages are saved in a new PDF. Your original is kept.' : 'Selected pages are removed from a new copy. Your original is kept.'}>
+      {source && <>
+        <ThemedText>Page numbers or ranges</ThemedText>
+        <BottomSheetTextInput accessibilityLabel="Page numbers or ranges" placeholder="For example: 1, 3, 5-8" placeholderTextColor={colors.secondaryLabel} value={rangeText} onChangeText={setRangeText} editable={!busy} maxLength={1400} style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
+        {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
+        <ToolButton title="Select these pages" secondary onPress={applyRanges} disabled={busy || !rangeText.trim()} />
       </>}
-    </View>}
+    </PdfFileOptionsSheet>
+    <PdfPreviewFooter>
+      {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
+      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving your PDF...' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{progress !== null && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
+        {source && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{selected.size === 0 ? 'Select a page to get started.' : outputCount === 0 ? 'Keep at least one page.' : `${selected.size} ${extracting ? 'selected' : 'to remove'} - ${outputCount} pages in the new PDF`}</ThemedText>}
+        <View style={responsiveToolbarStyles.row}>
+          <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
+          {source ? <EditorOption compact label={selected.size === source.pageCount ? 'Clear' : 'Select all'} icon={{ ios: 'checkmark.circle', android: 'select-all' }} onPress={() => setSelected(selected.size === source.pageCount ? new Set() : new Set(pages))} />
+            : <EditorOption compact label="Choose PDF" disabled={!available} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} onPress={() => void choose()} />}
+          <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title={extracting ? 'Extract pages' : 'Delete pages'} disabled={!canSave} onPress={save} /></View>
+        </View>
+      </>}
+    </PdfPreviewFooter>
   </View>;
 }
 

@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import { usePalette } from '@/theme/colors';

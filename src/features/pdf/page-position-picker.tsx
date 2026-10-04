@@ -1,4 +1,5 @@
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import Svg, { Rect, Line } from 'react-native-svg';
 import { ThemedText } from '@/components/themed-text';
 import { usePalette } from '@/theme/colors';

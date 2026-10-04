@@ -24,8 +24,10 @@ function previewDimensions(image: File) {
 }
 
 /** Borrows the tool's source while it is mounted; owns only preview files and jobs. */
-export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword = '', onClose, embedded = false, toolbarActions, page: controlledPage, onPageChange, rotation = 0, disabled = false }: {
+export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword = '', onClose, embedded = false, toolbarActions, page: controlledPage, onPageChange, rotation = 0, disabled = false, sourcePage, blank = false, hideThumbnails = false, previewHint }: {
   uri: string; count: number; initialPage?: number; inputPassword?: string; onClose: () => void; embedded?: boolean; toolbarActions?: ReactNode; page?: number; onPageChange?: (page: number) => void; rotation?: number; disabled?: boolean;
+  /** A virtual document can display an output page backed by a different source page. */
+  sourcePage?: number; blank?: boolean; hideThumbnails?: boolean; previewHint?: string;
 }) {
   const active = usePdfScreenActive();
   const [directory] = useState(createImportDirectory);
@@ -64,7 +66,7 @@ export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword 
         if (!PdfEngine?.nativeAdvancedToolsVersion) throw new Error('Install a new development build to preview this PDF.');
         directory.create({ intermediates: true, idempotent: true });
         if (!current) return;
-        await PdfEngine.editPdfText(id, JSON.stringify({ action: 'preview', includeObjects: false, uri, inputPassword, page: page - 1, edits: [], imageUri: image.uri }));
+        await PdfEngine.editPdfText(id, JSON.stringify({ action: 'preview', includeObjects: false, uri, inputPassword, page: (sourcePage ?? page) - 1, edits: [], imageUri: image.uri }));
         if (!current) return;
         const dimensions = previewDimensions(image);
         setPreview({ uri: image.uri, ...dimensions }); keep = true;
@@ -78,10 +80,10 @@ export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword 
       }
     });
     return () => { current = false; PdfEngine?.cancelTextEdit(id); };
-  }, [uri, page, inputPassword, active, retry, directory]);
+  }, [uri, page, sourcePage, inputPassword, active, retry, directory]);
   return <View style={styles.screen}>
-    <PdfPreviewBody pages={inputPassword ? null : { uri, count, page: page - 1, onSelect: target => { if (!disabled && target + 1 !== page) changePage(target + 1); } }} toolbar={<PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>}>
-    {preview ? <PdfPagePreview image={preview} active={active} rotation={rotation} /> : <PdfPreviewStage hint="Original PDF">
+    <PdfPreviewBody pages={inputPassword || hideThumbnails ? null : { uri, count, page: page - 1, onSelect: target => { if (!disabled && target + 1 !== page) changePage(target + 1); } }} toolbar={<PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>}>
+    {preview ? blank ? <PdfPreviewStage hint={previewHint ?? 'Inserted blank page'}><View style={styles.empty}><View accessibilityLabel="Blank PDF page" style={{ backgroundColor: '#fff', aspectRatio: preview.width / preview.height, width: '100%', maxHeight: '100%', flexShrink: 1 }} /></View></PdfPreviewStage> : <PdfPagePreview image={preview} active={active} rotation={rotation} hint={previewHint} /> : <PdfPreviewStage hint="Preparing page preview">
       <View style={styles.empty}>{loading ? <><AppLoader /><ThemedText>Preparing page...</ThemedText></> : <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Retry preview" onPress={() => setRetry(value => value + 1)} /></>}</View>
     </PdfPreviewStage>}
     </PdfPreviewBody>

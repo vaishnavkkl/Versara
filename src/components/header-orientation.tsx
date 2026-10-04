@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { Pressable, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { HelpPressable as Pressable } from './help-pressable';
 import { UniversalIcon } from './universal-icon';
 import { usePalette } from '@/theme/colors';
 

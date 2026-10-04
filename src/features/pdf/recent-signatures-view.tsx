@@ -1,5 +1,6 @@
 import { memo } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { Image } from 'expo-image';
 import Svg, { Polyline } from 'react-native-svg';
 import { AppBottomSheet } from '@/components/app-bottom-sheet';

@@ -1,5 +1,6 @@
 import { EditorOption } from '@/components/editor-option';
 import { Keyboard, StyleSheet, TextInput, View } from 'react-native';
+import { BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { Host, Switch } from '@expo/ui';
 import { ThemedText } from '@/components/themed-text';
 import { useAppearance, usePalette } from '@/theme/colors';
@@ -27,8 +28,8 @@ export function resolveResize(source: ImageSize | undefined, settings: ResizeSet
   return { width, height };
 }
 
-export function ImageResizeControls({ source, value, onChange, disabled = false }: {
-  source?: ImageSize; value: ResizeSettings; onChange: (value: ResizeSettings) => void; disabled?: boolean;
+export function ImageResizeControls({ source, value, onChange, disabled = false, inSheet = false }: {
+  source?: ImageSize; value: ResizeSettings; onChange: (value: ResizeSettings) => void; disabled?: boolean; inSheet?: boolean;
 }) {
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
@@ -46,7 +47,8 @@ export function ImageResizeControls({ source, value, onChange, disabled = false 
     onChange({ ...value, mode: next, ...(next === 'pixels' && size ? { width: String(size.width), height: String(size.height) } : {}) });
   }
   const button = (label: string, selected: boolean, onPress: () => void) => <EditorOption key={label} label={label} selected={selected} disabled={disabled} onPress={onPress} />;
-  const field = (label: string, text: string, onChangeText: (text: string) => void, decimal = false) => <View style={styles.field}><ThemedText>{label}</ThemedText><TextInput accessibilityLabel={label} value={text} placeholder={decimal ? '100' : 'Auto'} placeholderTextColor={colors.secondaryLabel} onChangeText={onChangeText} keyboardType={decimal ? 'decimal-pad' : 'number-pad'} editable={!disabled} maxLength={8} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} /></View>;
+  const Input = inSheet ? BottomSheetTextInput : TextInput;
+  const field = (label: string, text: string, onChangeText: (text: string) => void, decimal = false) => <View style={styles.field}><ThemedText>{label}</ThemedText><Input accessibilityLabel={label} value={text} placeholder={decimal ? '100' : 'Auto'} placeholderTextColor={colors.secondaryLabel} onChangeText={onChangeText} keyboardType={decimal ? 'decimal-pad' : 'number-pad'} editable={!disabled} maxLength={8} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} /></View>;
   return <View style={styles.panel}>
     <View style={styles.row}>{button('Percentage', value.mode === 'percent', () => selectMode('percent'))}{button('Pixels', value.mode === 'pixels', () => selectMode('pixels'))}</View>
     {value.mode === 'percent' ? <>
@@ -62,6 +64,7 @@ export function ImageResizeControls({ source, value, onChange, disabled = false 
     </>}
     <ThemedText accessibilityLiveRegion="polite" style={{ color: error ? colors.destructive : colors.label }}>{error || (size ? `Output: ${size.width} x ${size.height} px (${(size.width * size.height / 1_000_000).toFixed(2)} MP)` : 'Reading image dimensions...')}</ThemedText>
     <ThemedText style={styles.note}>File size in KB or MB depends on the format and quality and is shown after saving.</ThemedText>
+    <EditorOption label="Hide keyboard" icon={{ ios: 'keyboard.chevron.compact.down', android: 'keyboard-hide' }} disabled={disabled} onPress={Keyboard.dismiss} />
   </View>;
 }
 const styles = StyleSheet.create({ panel: { gap: 10 }, row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }, grow: { flex: 1 }, field: { flexGrow: 1, minWidth: 110, gap: 6 }, input: { minHeight: 44, borderRadius: 12, paddingHorizontal: 12, fontSize: 16 }, button: { minHeight: 44, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, justifyContent: 'center' }, note: { fontSize: 12, lineHeight: 17 } });

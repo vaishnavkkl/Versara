@@ -2,6 +2,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { recordEditedFile, type EditedFile } from './edited-files';
 import { documentRoot, rememberFile, storedUri } from './recent-files';
 import { invalidateThumbnails } from './thumbnail-cache';
+import { notifyLibraryChanged } from './library-revision';
 
 const recoveryRoot = () => new Directory(Paths.document, '.save-recovery');
 const MAX_RECOVERY_BYTES = 512 * 1024 * 1024;
@@ -37,6 +38,7 @@ async function restoreOriginal(directory: Directory, value: Journal) {
   await stage.move(original, { overwrite: true });
   if (!original.exists || original.size !== value.backupSize) throw new Error('The restored original could not be verified. Its recovery copy has been kept.');
   invalidateThumbnails(original.uri);
+  notifyLibraryChanged([original.uri]);
 }
 
 /** Called under serializeSave before starting another replacement. */
@@ -58,6 +60,8 @@ export async function recoverAppSaves() {
       await recordEditedFile(record);
       await rememberFile(record, record.kind);
       invalidateThumbnails(record.uri);
+      invalidateThumbnails(record.deviceUri);
+      notifyLibraryChanged([record.uri, record.deviceUri]);
     } else if (value.phase !== 'complete') throw new Error('An earlier save could not be recovered. Its files have been kept.');
     await writeJournal(directory, { ...value, phase: 'complete' });
     directory.delete();

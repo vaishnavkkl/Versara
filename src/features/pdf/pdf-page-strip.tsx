@@ -1,7 +1,8 @@
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
-import { FlatList, Pressable, StyleSheet, View, type ListRenderItem } from 'react-native';
+import { FlatList, StyleSheet, View, type ListRenderItem } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { ThemedText } from '@/components/themed-text';
 import { usePalette } from '@/theme/colors';

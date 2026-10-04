@@ -8,12 +8,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
+import android.webkit.MimeTypeMap
 import expo.modules.interfaces.permissions.Permissions
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class FileEngineModule : Module() {
@@ -47,7 +49,7 @@ class FileEngineModule : Module() {
       else imageTools.run(context, id, request, promise)
     }
     Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 4 }
+    Constant("nativeImageListVersion") { 5 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -491,7 +493,17 @@ internal class DeviceLibrary {
         if (mime >= 0) mimeType = cursor.getString(mime) ?: mimeType
       }
     }
-    if (mimeType.isEmpty()) {
+    // External providers often expose MIME only through getType, not their cursor.
+    // Detect from the source name before copying to an extensionless staging file.
+    if (mimeType.isBlank() || mimeType == "application/octet-stream") {
+      val providerType = if (source.scheme == "content") {
+        try { context.contentResolver.getType(source) } catch (_: Exception) { null }
+      } else null
+      mimeType = providerType?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
+        ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(Locale.ROOT))
+        ?: mimeType
+    }
+    if (mimeType.isBlank()) {
       mimeType = when (kind) {
         "pdf" -> "application/pdf"
         "image" -> "image/*"

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { PDF_SECTIONS, type Method } from '@/constants/pdf-methods';
 import { ThemedText } from '@/components/themed-text';

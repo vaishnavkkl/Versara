@@ -66,13 +66,13 @@ internal object ImageProcessing {
   }
 
   /** Reserve for the decoded source, destination, filter scratch buffers and encoder work. */
-  fun exportPixelBudget(context: Context): Long {
+  fun exportPixelBudget(context: Context, bytesPerPixel: Long = 20): Long {
     val runtime = Runtime.getRuntime()
     val heapAvailable = (runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())).coerceAtLeast(0)
     val memory = ActivityManager.MemoryInfo()
     (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memory)
     val workingBytes = minOf(heapAvailable * 7 / 10, memory.availMem / 6, (if (lowMemory(context)) 96L else 256L) * 1024 * 1024)
-    return (workingBytes / 20).coerceAtMost(32_000_000L)
+    return (workingBytes / bytesPerPixel).coerceAtMost(32_000_000L)
   }
 
   fun requireExportSize(width: Int, height: Int, budget: Long) {
@@ -190,7 +190,10 @@ internal object ImageProcessing {
     val format = options.optString("format", "jpeg")
     val quality = options.optInt("quality", 90).coerceIn(10, 100)
     require(format in listOf("jpeg", "png", "webp")) { "Choose JPG, PNG or WebP on this device." }
-    val budget = exportPixelBudget(context)
+    // This pipeline releases each previous bitmap before the next transform.
+    // Reserve source + destination (8 bytes/pixel), plus encoder/scratch space.
+    // The default 20-byte allowance remains for the heavier advanced tools.
+    val budget = exportPixelBudget(context, bytesPerPixel = 12)
     val (sourceWidth, sourceHeight) = sourceSize(context, source)
     val angle = Math.toRadians(edits.rotation.toDouble())
     val rotatedWidth = sourceWidth * abs(cos(angle)) + sourceHeight * abs(sin(angle))

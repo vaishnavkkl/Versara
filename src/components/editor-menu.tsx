@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { MenuView } from '@expo/ui/community/menu';
 import { AppBottomSheet } from './app-bottom-sheet';
 import { ThemedText } from './themed-text';
@@ -7,6 +8,7 @@ import { UniversalIcon } from './universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
 import { optionColorKey, toolColors } from '@/theme/tool-colors';
+import { useControlHelp } from './control-help';
 
 export type EditorMenuItem = { id: string; label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon; colorKey?: string };
 
@@ -26,13 +28,14 @@ function iconFor(label: string, explicit?: OptionIcon) {
  */
 export function EditorMenu({ label, items, disabled = false, compact = false, icon, tintedItems = false, colorKey, grid, iconOnly = false }: { label: string; items: EditorMenuItem[]; disabled?: boolean; compact?: boolean; icon?: OptionIcon; tintedItems?: boolean; colorKey?: string; grid?: number; iconOnly?: boolean }) {
   const [open, setOpen] = useState(false);
+  const help = useControlHelp();
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
   const { width: windowWidth } = useWindowDimensions();
   // Pixel widths: percentages inside the sheet's scroll content can collapse to one column.
   const tileWidth = grid ? Math.floor((Math.min(windowWidth, 640) - GRID_PADDING * 2 - GRID_GAP * (grid - 1)) / grid) - 1 : 0;
   const triggerIcon = icon ?? iconFor(label);
-  const sheet = !!grid || iconOnly || tintedItems || items.length > SHEET_AFTER || Platform.OS !== 'ios';
+  const sheet = help?.active || !!grid || iconOnly || tintedItems || items.length > SHEET_AFTER || Platform.OS !== 'ios';
   const triggerTint = tintedItems ? toolColors(colorKey ?? optionColorKey(label), colors).ink : colors.systemBlue;
   const choose = (item: EditorMenuItem) => {
     setOpen(false);

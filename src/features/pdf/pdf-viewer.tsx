@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Keyboard, Platform, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { HelpTextInput as TextInput } from '@/components/help-text-input';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
 import { router, Stack, usePathname } from 'expo-router';
 import { PdfEngine, PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';

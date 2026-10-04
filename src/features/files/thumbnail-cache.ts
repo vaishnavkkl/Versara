@@ -62,22 +62,23 @@ async function drain() {
         if (!entry.users) { remove(uri); uri = null; }
       } catch { remove(uri); uri = null; }
       entry.uri = uri; entry.done = true; entry.resolve(uri);
+      if (!entry.users) retired.delete(entry);
       if (!entry.users && !uri && entries.get(entry.key) === entry) entries.delete(entry.key);
       evict();
     }
   } finally { running = false; }
 }
-/** Drops finished thumbnails of a file whose contents were replaced in place. */
+/** Detach cached and pending thumbnails so a replacement cannot reuse an old render. */
 export function invalidateThumbnails(source: string) {
   for (const [key, entry] of entries) {
-    if (entry.source !== source || !entry.done) continue;
+    if (entry.source !== source) continue;
     entries.delete(key);
     if (!entry.users) remove(entry.uri);
     else retired.add(entry);
   }
 }
-export function requestThumbnail(source: string, kind: FileKind, page = 0) {
-  const key = `${source}|${kind}|${page}`;
+export function requestThumbnail(source: string, kind: FileKind, page = 0, revision = '') {
+  const key = `${source}|${kind}|${page}|${revision}`;
   let entry = entries.get(key);
   if (entry?.cancelled) { entries.delete(key); entry = undefined; }
   if (entry?.done && entry.uri && !new File(entry.uri).exists) { entries.delete(key); entry = undefined; }
@@ -109,6 +110,7 @@ export function requestThumbnail(source: string, kind: FileKind, page = 0) {
         const index = waiting.indexOf(value); if (index >= 0) waiting.splice(index, 1);
         if (entries.get(key) === value) entries.delete(key);
         value.done = true; value.resolve(null);
+        retired.delete(value);
       }
     }
     evict();

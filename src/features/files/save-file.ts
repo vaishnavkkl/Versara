@@ -8,6 +8,7 @@ import { findEditedFile, recordEditedFile, type EditedFile } from './edited-file
 import { invalidateThumbnails } from './thumbnail-cache';
 import { documentRoot, rememberFile, type FileKind, type RecentFile } from './recent-files';
 import { prepareAppReplacement, recoverAppSaves, serializeSave } from './save-recovery';
+import { notifyLibraryChanged } from './library-revision';
 
 export type SaveMode = 'replace' | 'new';
 type Origin = { uri: string; name: string };
@@ -126,6 +127,8 @@ async function saveEditedOutputSerial(options: { output: string; mimeType: strin
     const file = await recordEditedFile(record);
     const recent = uri.startsWith(documentRoot()) ? await rememberFile({ uri, name, mimeType, size }, kind) : null;
     await replacement?.complete();
+    invalidateThumbnails(device.uri);
+    notifyLibraryChanged([uri, device.uri]);
     if (replacement) try { const generated = new File(output); if (generated.exists) generated.delete(); } catch { /* The successful saved copies remain authoritative. */ }
     return { file, device, recent };
   } catch (cause) {

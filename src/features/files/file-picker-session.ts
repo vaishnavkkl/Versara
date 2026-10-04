@@ -4,6 +4,7 @@ import { FileEngine, type ExplorerEntry } from '../../../modules/file-engine';
 import type { DocumentPickerAsset } from 'expo-document-picker';
 
 export type PickerKind = 'image' | 'pdf' | 'any';
+export type FilePickerSelection = { kind: PickerKind; selected: ExplorerEntry[]; onSelect: (file: ExplorerEntry) => void };
 type Request = { id: string; kind: PickerKind; limit: number; resolve: (files: ExplorerEntry[] | null) => void };
 let current: Request | undefined;
 export function getFilePickerRequest(id: string) { return current?.id === id ? current : undefined; }

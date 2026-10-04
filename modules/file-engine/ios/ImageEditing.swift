@@ -55,8 +55,8 @@ enum ImageEditing {
 
   /// A bounded working set for decoded pixels, compositing/filter buffers and encoding.
   /// Export never silently changes dimensions to satisfy this budget.
-  static func exportPixelBudget() -> Double {
-    min(Double(ProcessInfo.processInfo.physicalMemory) / 12, 256 * 1024 * 1024) / 20
+  static func exportPixelBudget(bytesPerPixel: Double = 20) -> Double {
+    min(Double(ProcessInfo.processInfo.physicalMemory) / 12, 256 * 1024 * 1024) / bytesPerPixel
   }
 
   static func requireExportSize(_ size: CGSize, budget: Double) throws {
@@ -115,7 +115,9 @@ enum ImageEditing {
     }
     let edits = ImageEdits(options["edits"] as? [String: Any] ?? [:])
     let scale = min(max(options["scale"] as? Double ?? 1, 0.05), 1)
-    let budget = exportPixelBudget()
+    // Basic edits use one source and one rendered destination; Core Image keeps
+    // transforms lazy. Include a third buffer's allowance for encoding/scratch.
+    let budget = exportPixelBudget(bytesPerPixel: 12)
     guard let sourceSize = originalSize(uri: uri) else { throw EditError.invalid("This image format cannot be read on your device.") }
     let angle = CGFloat(edits.rotation) * .pi / 180
     let rotatedSize = CGSize(width: sourceSize.width * abs(cos(angle)) + sourceSize.height * abs(sin(angle)), height: sourceSize.width * abs(sin(angle)) + sourceSize.height * abs(cos(angle)))

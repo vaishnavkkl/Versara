@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler } from 'react-native';
-import { toast } from '@/components/toast';
 import { setReaderBackHandler, setReaderHelpHandler } from '@/features/pdf/reader-back';
 
 /**
@@ -22,7 +21,6 @@ export function useToolRing(available: boolean) {
     const releaseHelp = setReaderHelpHandler(() => {
       const next = !namingRef.current;
       setNaming(next);
-      toast(next ? 'Tap any tool to see its name. Tap ? again when done.' : 'Tools are ready to use.');
       return true;
     });
     const back = BackHandler.addEventListener('hardwareBackPress', leave);

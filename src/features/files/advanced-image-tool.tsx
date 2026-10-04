@@ -528,7 +528,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     {!!(recovery.error || markRecovery.error) && <ThemedText accessibilityRole="alert">{recovery.error || markRecovery.error}</ThemedText>}
     {batch && <><ThemedText>{1 + extra.length} of 10 images</ThemedText><ToolButton title="Choose more images" secondary disabled={busy} onPress={() => void chooseImages()} />{extra.map((item,index) => <ThemedText key={item.uri} numberOfLines={1}>{index + 2}. {item.name}</ThemedText>)}<ThemedText style={styles.note}>Settings apply to every image. Files process one at a time.</ThemedText></>}
     {sizing && <>
-      <ImageResizeControls source={info} value={resize} disabled={busy || picking} onChange={value => edit(() => setResize(value))} />
+      <ImageResizeControls source={info} value={resize} disabled={busy || picking} inSheet onChange={value => edit(() => setResize(value))} />
       <View style={styles.wrap}>{presets.map(item => <EditorOption key={item.label} label={item.label} selected={resize.mode === 'pixels' && Number(resize.width)===item.width && Number(resize.height)===item.height} disabled={busy || !!curveDraft} onPress={() => edit(() => { setResize({ ...resize, mode: 'pixels', width: String(item.width), height: String(item.height), locked: false }); setResizeMode('fill'); })} />)}</View>
       <View style={styles.wrap}>{['fit','fill','stretch'].map(value => <EditorOption key={value} label={value} selected={resizeMode===value} disabled={busy || !!curveDraft} onPress={() => edit(()=>setResizeMode(value))} />)}</View><ThemedText style={styles.note}>Fit adds space; fill crops edges; stretch changes proportions.</ThemedText>{resizeMode === 'fit' && <><ThemedText>Background color</ThemedText><ColorSwatches value={background} disabled={busy} onChange={value => edit(() => setBackground(value ?? 0xffffff))} /></>}{batch && <ThemedText style={styles.note}>Percentage applies to each image separately. The dimensions above are for the first image.</ThemedText>}
     </>}
@@ -627,7 +627,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       </View>
       <View style={landscape ? styles.side : undefined}>
       {docked ? landscape ? <ScrollView style={styles.grow} keyboardShouldPersistTaps="handled">{panel}</ScrollView> : <View style={[styles.dockBar, { borderColor: colors.separator }]}>{panel}</View>
-        : <OptionSheet title={drawing ? 'Style and colour' : `${title} options`} icon={drawing ? { ios: 'paintpalette', android: 'palette' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={settings && tool !== 'rename'} dim={false} onClose={() => setSettings(false)}>{panel}</OptionSheet>}
+        : <OptionSheet title={drawing ? 'Style and colour' : `${title} options`} icon={drawing ? { ios: 'paintpalette', android: 'palette' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={settings && tool !== 'rename'} dim={false} keyboardInput={sizing} onClose={() => setSettings(false)}>{panel}</OptionSheet>}
       <PdfPreviewFooter>
         <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
           {busy ? <><AppLoader /><ThemedText style={styles.grow}>{progress}</ThemedText><ToolButton title="Cancel" secondary onPress={cancel} /></> : <>

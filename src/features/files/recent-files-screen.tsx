@@ -8,7 +8,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { HelpButton } from '@/components/help-button';
 import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
-import RecentImagesView, { hasNativeImageList, hasNativeListRefresh, hasNativeMediaList } from '../../../modules/file-engine/src/RecentImagesView';
+import RecentImagesView, { hasNativeImageList, hasNativeListRefresh, hasNativeMediaList, hasNativeThumbnailRevisions } from '../../../modules/file-engine/src/RecentImagesView';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing, typography } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -32,6 +32,7 @@ import { hasNativePdfLibrary, useDevicePdfs } from './use-device-pdfs';
 import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
 import { stagePreviewFile } from './preview-handoff';
 import { formatWhen, showRecentFileActions } from './recent-file-actions';
+import { getFileRevision, useLibraryRevision } from './library-revision';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
@@ -42,7 +43,7 @@ const emptyCopy: Record<FileKind, { title: string; body: string }> = {
 
 // Tabs revisit these lists constantly. Keep the last result per tab so returning shows it instantly,
 // and only hand the native list a new array when something actually changed.
-type CachedList = { items: RecentListItem[]; signature: string; loaded: number };
+type CachedList = { items: RecentListItem[]; signature: string; loaded: number; libraryRevision: number };
 const listCache = new Map<string, CachedList>();
 const REFRESH_AFTER_MS = 4000;
 const signatureOf = (items: RecentListItem[]) => items.map(item => `${item.id}:${item.opened}:${item.size}`).join('|');
@@ -64,6 +65,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
   const showPdfs = kind === 'pdf' || includePdfs;
   const colors = usePalette();
   const active = useScreenActive();
+  const libraryRevision = useLibraryRevision();
   const [grid] = useLayoutPreference();
   const [libraryFiles, setFiles] = useState<RecentListItem[]>(() => listCache.get(`${cacheKind}|`)?.items ?? []);
   const [search, setSearch] = useState('');
@@ -90,7 +92,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
     navigating.current = false;
     const key = `${cacheKind}|${search.trim()}`;
     const cached = listCache.get(key);
-    const forced = lastRevision.current !== revision || refreshOnReturn.current;
+    const forced = lastRevision.current !== revision || refreshOnReturn.current || cached?.libraryRevision !== libraryRevision;
     refreshOnReturn.current = false;
     lastRevision.current = revision;
     setBusy(picking.current);
@@ -106,14 +108,14 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
         const signature = signatureOf(items);
         const previous = listCache.get(key);
         const next = previous?.signature === signature ? previous.items : items;
-        cacheList(key, { items: next, signature, loaded: Date.now() });
+        cacheList(key, { items: next, signature, loaded: Date.now(), libraryRevision });
         setFiles(next); setError(null);
       }).catch(() => {
         if (!cancelled) setError('Could not load your recent files. Try again.');
       }).finally(() => { if (!cancelled) { setLoading(false); setPulling(false); } });
     }, search ? 180 : 0);
     return () => { cancelled = true; focused.current = false; clearTimeout(timer); setPulling(false); };
-  }, [kind, cacheKind, includePdfs, search, revision]));
+  }, [kind, cacheKind, includePdfs, search, revision, libraryRevision]));
 
   async function openLibrary(file: RecentFile) {
     // The listing already has the document path. Avoid resolving it again inside
@@ -209,10 +211,11 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
 
   const label = FILE_LABELS[kind];
   const article = kind === 'image' || kind === 'audio' ? 'an' : 'a';
-  const nativeItems = useMemo(() => JSON.stringify(files.map(item => ({
+  const nativeItems = JSON.stringify(files.map(item => ({
     id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
+    revision: `${item.opened}:${item.size}:${getFileRevision(item.uri)}`,
     detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${formatWhen(item.opened)}`,
-  }))), [files, onSelect]);
+  })));
   const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground });
 
   return (
@@ -286,6 +289,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
         </View>
       ) : (kind === 'image' || kind === 'pdf' || ((kind === 'video' || kind === 'audio') && hasNativeMediaList)) && RecentImagesView && Platform.OS !== 'web' && files.length > 0 ? (
         <RecentImagesView
+          key={hasNativeThumbnailRevisions ? 'recent-files' : libraryRevision}
           style={styles.nativeList}
           items={nativeItems} palette={nativePalette} grid={grid} disabled={busy} active={active && !busy}
           refreshing={pulling} onRefresh={hasNativeListRefresh ? pullToRefresh : undefined}
@@ -313,7 +317,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
                 <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} onLongPress={() => { if (!busy) showRecentFileActions(item, refreshAll); }} style={[styles.file, grid && styles.gridFile]}>
                   <View style={[styles.thumbnail, grid && styles.gridThumbnail]}>
                     {!fromDevice || (item.kind === 'image' && item.uri.startsWith('content://'))
-                      ? <FileThumbnail uri={item.uri} kind={item.kind} active={active && !busy} />
+                      ? <FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.opened}:${item.size}`} active={active && !busy} />
                       : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : 'doc.richtext'} android={item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
                   </View>
                   <View style={styles.grow}>

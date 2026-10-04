@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
-import { Keyboard, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { Keyboard, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { HelpTextInput as TextInput } from '@/components/help-text-input';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { toast } from '@/components/toast';

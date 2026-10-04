@@ -6,7 +6,7 @@ import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
 import { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
@@ -22,6 +22,8 @@ import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfResult } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
 import { ReorderPageGrid } from './reorder-page-grid';
+import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
+import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string };
@@ -174,17 +176,10 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     {busy && <AppLoader />}
   </ScrollView>;
 
-  if (source && !reorder) return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, landscape && styles.rotationLandscape]}>
-    <PdfDocumentPreview key={source.uri} uri={source.uri} count={source.pageCount} embedded
-      page={currentPage} onPageChange={setCurrentPage} rotation={pages[currentPage - 1]?.rotation ?? 0} disabled={busy} onClose={() => {}} />
-    <ScrollView style={landscape ? styles.rotationSide : styles.rotationDock} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
-    {fileOptions && <View style={styles.fileOptions}>
-      <ThemedText style={styles.label}>New PDF name</ThemedText>
-      <TextInput accessibilityLabel="New PDF name" value={name} onChangeText={setName} editable={!busy} maxLength={100}
-        style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
-      <ToolButton title="Choose another PDF" secondary disabled={busy} onPress={choose} />
-    </View>}
-    <PdfPreviewFooter>
+  const fileSheet = <PdfFileOptionsSheet visible={fileOptions} onClose={() => setFileOptions(false)} name={name} onName={setName} disabled={busy}
+    onChoose={available ? () => void choose() : undefined} description={reorder ? 'Long-press a page and drag it to a new place. Tap a page to preview. All pages are kept in the new PDF.' : 'Rotate the current page or all pages, then save a new PDF.'} />;
+
+  const rotationControls = source && !reorder ? <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
       {busy ? <View style={styles.liveActions}><AppLoader /><ThemedText style={styles.grow} accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText>
         <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />
@@ -192,7 +187,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
         <View style={styles.liveActions}>
           <EditorOption label="This page" compact selected={!allPages} onPress={() => setAllPages(false)} icon={{ ios: 'doc', android: 'description' }} />
           <EditorOption label="All pages" compact selected={allPages} onPress={() => setAllPages(true)} icon={{ ios: 'doc.on.doc', android: 'library-books' }} />
-          <EditorOption label="File options" compact selected={fileOptions} onPress={() => setFileOptions(value => !value)} icon={{ ios: 'doc.badge.gearshape', android: 'drive-file-rename-outline' }} />
+          <EditorOption label="Options" compact selected={fileOptions} onPress={() => setFileOptions(true)} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} />
           <EditorOption label="Reset" compact disabled={!changed} onPress={() => setPages(originalPages(source.pageCount))} />
         </View>
         <View style={styles.liveActions}>
@@ -202,38 +197,39 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
         </View>
         <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{changed ? changed + (changed === 1 ? ' page changed' : ' pages changed') : 'Turn a page to get started.'}</ThemedText>
       </>}
-    </PdfPreviewFooter>
-    </ScrollView>
+    </PdfPreviewFooter> : null;
+
+  if (source && !reorder) return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, landscape && styles.rotationLandscape]}>
+    <PdfDocumentPreview key={source.uri} uri={source.uri} count={source.pageCount} embedded
+      page={currentPage} onPageChange={setCurrentPage} rotation={pages[currentPage - 1]?.rotation ?? 0} disabled={busy} onClose={() => {}} />
+    {fileSheet}
+    {landscape ? <ScrollView style={styles.rotationSide} keyboardShouldPersistTaps="handled">{rotationControls}</ScrollView> : rotationControls}
   </KeyboardAvoidingView>;
 
   return <View style={styles.screen}>
     <ReorderPageGrid uri={source?.uri ?? ''} pages={source ? pages : []} busy={busy} active={active} visibleKeys={visibleKeys}
       onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} onMove={movePage} onPreview={setPreviewPage}
       header={<View style={styles.form}>
-        <ThemedText style={styles.heading}>1. Choose a PDF</ThemedText>
-        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? 'Put your pages in the right order, then save a new copy.' : 'Turn sideways or upside-down pages the right way up.'}</ThemedText>
+        <ThemedText numberOfLines={2} style={styles.label}>{source ? `${source.name} - ${source.pageCount} pages` : 'Choose a PDF to get started.'}</ThemedText>
+        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Long-press and drag to reorder. Tap a page to preview.</ThemedText>
         {!available && <ThemedText accessibilityRole="alert">Install a new development build to use this tool.</ThemedText>}
-        <ToolButton title={source ? 'Change PDF' : 'Choose PDF'} disabled={busy || !available} onPress={choose} />
-        {source && <>
-          <ThemedText numberOfLines={2} style={styles.label}>{source.name} · {source.pageCount} pages</ThemedText>
-          <ThemedText style={styles.label}>New PDF name</ThemedText>
-          <TextInput accessibilityLabel="New PDF name" value={name} onChangeText={setName} editable={!busy} maxLength={100} style={[styles.input, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-          <ThemedText style={styles.heading}>2. {reorder ? 'Arrange your pages' : 'Rotate your pages'}</ThemedText>
-          <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{reorder ? 'Long-press a page, then drag it to its new place. Tap a page to preview it.' : 'Each tap turns a page by 90°. Preview opens the original; open the saved PDF to see your changes.'}</ThemedText>
-          {reorder && source.pageCount === 1 && <ThemedText>This PDF has one page, so there is nothing to reorder.</ThemedText>}
-          <View style={styles.actions}>
-            {reorder ? <View style={styles.grow}><ToolButton title="Reverse order" secondary disabled={busy || pages.length < 2} onPress={() => setPages(current => [...current].reverse())} /></View> : <><View style={styles.grow}><ToolButton title="All left 90°" secondary disabled={busy} onPress={() => rotate(null, -90)} /></View><View style={styles.grow}><ToolButton title="All right 90°" secondary disabled={busy} onPress={() => rotate(null, 90)} /></View></>}
-          </View>
-          <ToolButton title="Reset changes" secondary disabled={busy || !changed} onPress={() => { setPages(originalPages(source.pageCount)); setError(''); }} />
-        </>}
+        {source?.pageCount === 1 && <ThemedText>This PDF has one page, so there is nothing to reorder.</ThemedText>}
       </View>} />
-    {(!!source || busy || !!error) && <View style={[styles.footer, { borderColor: colors.separator }]}>
+    {fileSheet}
+    <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling…' : progress === 1 ? 'Saving your PDF…' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{(progress !== null || phase.startsWith('Reading pages')) && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
-        <ThemedText accessibilityLiveRegion="polite" style={styles.body}>{changed ? `${changed} ${changed === 1 ? 'page' : 'pages'} ${reorder ? 'in a new position' : 'to rotate'} · All ${pages.length} pages kept` : reorder ? 'Move a page to get started.' : 'Turn a page to get started.'}</ThemedText>
-        <ToolButton title={reorder ? 'Save new page order' : 'Save rotated PDF'} disabled={!available || !changed} onPress={save} />
+      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving your PDF...' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{(progress !== null || phase.startsWith('Reading pages')) && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
+        {source && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{changed ? `${changed} pages in a new position - all ${pages.length} pages kept` : 'Move a page to get started.'}</ThemedText>}
+        <View style={responsiveToolbarStyles.row}>
+          <EditorOption label="Options" compact selected={fileOptions} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} onPress={() => setFileOptions(true)} />
+          {source ? <>
+            <EditorOption label="Reverse" compact icon={{ ios: 'arrow.up.arrow.down', android: 'swap-vert' }} disabled={pages.length < 2} onPress={() => setPages(current => [...current].reverse())} />
+            <EditorOption label="Reset" compact disabled={!changed} onPress={() => { setPages(originalPages(source.pageCount)); setError(''); }} />
+          </> : <EditorOption label="Choose PDF" compact disabled={!available} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} onPress={() => void choose()} />}
+          <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title="Save PDF" disabled={!available || !changed} onPress={save} /></View>
+        </View>
       </>}
-    </View>}
+    </PdfPreviewFooter>
   </View>;
 }
 
@@ -242,10 +238,9 @@ const styles = StyleSheet.create({
   heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body }, actions: { flexDirection: 'row', alignItems: 'center', gap: s.sm },
   card: { padding: s.md, gap: s.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md }, icon: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.3 },
   thumb: { width: 96, height: 128 },
-  rotationLandscape: { flexDirection: 'row' }, rotationSide: { width: 280, flexGrow: 0 }, rotationDock: { maxHeight: '48%', flexGrow: 0 },
+  rotationLandscape: { flexDirection: 'row' }, rotationSide: { width: 280, flexGrow: 0 },
   liveActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: s.sm },
   saveAction: { flexGrow: 1, minWidth: 110 },
-  fileOptions: { padding: s.sm, gap: s.sm },
   caption: { ...t.caption },
   input: { minHeight: 48, borderRadius: radius.sm, padding: s.md, ...t.body }, footer: { padding: s.lg, borderTopWidth: StyleSheet.hairlineWidth, gap: s.sm }, result: { flexGrow: 1, padding: s.xl, gap: s.lg, justifyContent: 'center' },
 });

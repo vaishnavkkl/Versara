@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import { usePalette } from '@/theme/colors';

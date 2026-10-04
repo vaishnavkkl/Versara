@@ -6,7 +6,9 @@ import { askSaveOptions, saveEditedOutput, type SaveMode } from '../files/save-f
 import { toast } from '@/components/toast';
 import { showDialog } from '@/components/app-dialog';
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { HelpTextInput as TextInput } from '@/components/help-text-input';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
 import { ColorSwatches } from '@/components/color-swatches';
 import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
@@ -32,6 +34,7 @@ import { PdfPreviewQueue, type PagePreview } from './pdf-preview-queue';
 import { usePdfScreenActive } from './use-pdf-screen-active';
 import { PdfPreviewBody, PdfPreviewToolbar, PdfPreviewStage } from './pdf-preview';
 import { PublishHeaderHistory } from '@/components/header-history';
+import { useControlHelp } from '@/components/control-help';
 import { usePdfToolLayout } from './pdf-tool-layout';
 
 type TextObject = PdfTextObject;
@@ -117,6 +120,7 @@ function makeDraft(edits: Edit[], page: number, selected: TextObject | null, pla
 /** `onUnsavedChange` lets the screen confirm before leaving with edits that are not saved. */
 export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsavedChange, onDiscardReady }: { initialMode?: 'edit' | 'add' | 'delete' | 'replace'; initialSelection?: InitialSelection; onUnsavedChange?: (unsaved: boolean) => void; onDiscardReady?: (action: () => Promise<void>) => void }) {
   const colors = usePalette();
+  const controlHelp = useControlHelp();
   const layout = usePdfToolLayout();
   const landscape = layout?.landscape ?? false;
   const screenActive = usePdfScreenActive();
@@ -164,6 +168,11 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const [replaceWith, setReplaceWith] = useState('');
   const [matchCase, setMatchCase] = useState(false);
   const [findResult, setFindResult] = useState<FindResult | null>(null);
+  const [searchIndex, setSearchIndex] = useState(0);
+  const searchVersion = useRef(0);
+  const inlineSearch = showSearch && !replacing && !selected && !placement;
+  const searchMatches = useMemo(() => findResult ? findMatches(findResult, edits) : [], [findResult, edits]);
+  const searchMatch = inlineSearch ? searchMatches[Math.min(searchIndex, Math.max(0, searchMatches.length - 1))] : undefined;
   const replaceAvailable = !!PdfEngine?.nativeFindReplaceVersion;
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   useEffect(() => {
@@ -301,7 +310,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const objectsJson = useMemo(() => JSON.stringify((previewObjects ?? [])
     .filter(object => object.bounds && (object.id === selected?.id || !removedIds.includes(object.id)))
     .map(object => ({ id: object.id, ...object.bounds }))), [previewObjects, removedIds, selected?.id]);
-  const focusBounds = selected?.bounds ?? (placement ? { x: Math.max(0, placement.x - 0.02), y: Math.max(0, placement.y - 0.04), width: 0.35, height: 0.05 } : null);
+  const searchObject = searchMatch?.page === page ? previewObjects?.find(object => object.id === searchMatch.id) : undefined;
+  const focusBounds = selected?.bounds ?? searchObject?.bounds ?? (placement ? { x: Math.max(0, placement.x - 0.02), y: Math.max(0, placement.y - 0.04), width: 0.35, height: 0.05 } : null);
   const focusJson = focusBounds ? JSON.stringify(focusBounds) : '';
   const placeText = useCallback((point: { x: number; y: number }) => {
     invalidateDraft(); setShowFormatting(false); setPlacement(point); setShowTextList(false); setShowOptions(false);
@@ -411,6 +421,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   }
   async function findText() {
     const query = findQuery;
+    const version = searchVersion.current;
+    let firstMatch: FoundText | undefined;
     if (!source || !PdfEngine || locked.current || !query.trim()) return;
     Keyboard.dismiss();
     begin('Finding text...'); setProgress(0);
@@ -419,9 +431,15 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       await previewQueue.settle();
       if (!mounted.current) return;
       const response = JSON.parse(await PdfEngine.editPdfText(id, JSON.stringify({ action: 'find_text', uri: source.uri, query, matchCase }))) as { pages: { page: number; objects: { id: number; text: string }[] }[]; truncated: boolean; locked: number };
-      if (mounted.current) setFindResult({ query, matchCase, truncated: response.truncated, locked: response.locked, found: response.pages.flatMap(item => item.objects.map(object => ({ page: item.page, ...object }))) });
+      if (mounted.current && version === searchVersion.current) {
+        const found = { query, matchCase, truncated: response.truncated, locked: response.locked, found: response.pages.flatMap(item => item.objects.map(object => ({ page: item.page, ...object }))) };
+        setSearchIndex(0);
+        setFindResult(found);
+        firstMatch = findMatches(found, edits)[0];
+      }
     } catch (cause) { fail(cause); }
     finally { finish(); }
+    if (!replacing && firstMatch && firstMatch.page !== page && mounted.current && version === searchVersion.current) void navigate(firstMatch.page);
   }
   // Opened from the reader's search: look for that text as soon as the PDF is ready.
   const initialFind = useRef(replacing && !!initialSelection?.initialQuery?.trim());
@@ -547,7 +565,16 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   </ScrollView>;
   const openOptions = () => { Keyboard.dismiss(); setShowOptions(true); setShowTextList(false); setShowFormatting(false); setShowSearch(false); };
   const openSearch = () => { Keyboard.dismiss(); setShowSearch(true); setShowOptions(false); setShowTextList(false); setShowFormatting(false); };
-  const replaceMatches = findResult ? findMatches(findResult, edits) : [];
+  const closeSearch = () => { searchVersion.current++; setShowSearch(false); setFindQuery(''); setFindResult(null); setSearchIndex(0); Keyboard.dismiss(); };
+  const updateQuery = (value: string) => { searchVersion.current++; setFindQuery(value); setFindResult(null); setSearchIndex(0); };
+  const stepSearch = (direction: number) => {
+    if (locked.current || !searchMatches.length) return;
+    Keyboard.dismiss();
+    const index = (Math.min(searchIndex, searchMatches.length - 1) + direction + searchMatches.length) % searchMatches.length;
+    setSearchIndex(index);
+    if (searchMatches[index].page !== page) void navigate(searchMatches[index].page);
+  };
+  const replaceMatches = searchMatches;
   const replacePlaces = replaceMatches.reduce((sum, match) => sum + match.count, 0);
   const replacePages = new Set(replaceMatches.map(match => match.page)).size;
   const toolActions = <View style={responsiveToolbarStyles.tools}>
@@ -562,7 +589,25 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     <PublishHeaderHistory active={!!source && !result} canUndo={history.length > 0 && !busy} canRedo={future.length > 0 && !busy} onUndo={() => change(history[history.length - 1], 'undo')} onRedo={() => change(future[future.length - 1], 'redo')} />
     {toolbar.measurements}
     {source && preview ? <View style={styles.grow}>
-      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={<PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!(editingText && optionsInRow)}>
+      {inlineSearch && <View style={[styles.searchPanel, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]}>
+        <View style={styles.searchRow}>
+          <TextInput accessibilityLabel="Search text in PDF" autoFocus value={findQuery} onChangeText={updateQuery} editable={!busy} maxLength={128} returnKeyType="search" autoCapitalize="none" autoCorrect={false} onSubmitEditing={() => void findText()} placeholder="Find in this PDF" placeholderTextColor={colors.secondaryLabel} style={[styles.searchInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Search PDF text" disabled={busy || !findQuery.trim()} onPress={() => void findText()} style={[styles.icon, (busy || !findQuery.trim()) && styles.dim]}><UniversalIcon ios="magnifyingglass" android="search" size={20} color={colors.systemBlue} /></Pressable>
+          {findResult && <ThemedText accessibilityLiveRegion="polite" numberOfLines={1} style={[styles.searchCount, { color: colors.secondaryLabel }]}>{searchMatches.length ? `${Math.min(searchIndex + 1, searchMatches.length)}/${searchMatches.length}${findResult.truncated ? '+' : ''}` : '0'}</ThemedText>}
+          <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(-1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.up" android="keyboard-arrow-up" size={24} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.down" android="keyboard-arrow-down" size={24} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close PDF search" onPress={closeSearch} style={styles.icon}><UniversalIcon ios="xmark" android="close" size={22} color={colors.systemBlue} /></Pressable>
+        </View>
+        {busy && <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: colors.secondaryLabel }]}>{phase}</ThemedText>}
+        {searchMatch && <Pressable accessibilityRole="button" accessibilityLabel={`${multiDelete ? 'Select for removal' : 'Edit'} search result on page ${searchMatch.page + 1}: ${searchMatch.text}`} disabled={busy} onPress={() => { Keyboard.dismiss(); openMatch(searchMatch); }} style={[styles.searchResult, busy && styles.dim]}>
+          <ThemedText style={[styles.badge, { color: colors.systemBlue }]}>Page {searchMatch.page + 1}</ThemedText>
+          <ThemedText numberOfLines={1} style={styles.grow}>{searchMatch.text}</ThemedText>
+          <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.systemBlue} />
+        </Pressable>}
+        {findResult && !searchMatches.length && <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: colors.secondaryLabel }]}>No editable text matches. Scans and words split across text pieces are skipped.</ThemedText>}
+        {!!findResult?.locked && <ThemedText style={[styles.searchStatus, { color: colors.secondaryLabel }]}>{findResult.locked} matching text pieces are protected and cannot be edited.</ThemedText>}
+      </View>}
+      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={inlineSearch ? null : <PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!(editingText && optionsInRow)}>
         {editingText && <ToolRowButton caption label="Style" icon={{ ios: 'textformat', android: 'text-format' }} selected={showFormatting} expanded={showFormatting} disabled={busy}
           onPress={() => { Keyboard.dismiss(); setShowFormatting(true); setShowTextList(false); setShowOptions(false); }} />}
         {(replaceAvailable || replacing) && !editingText && <ToolRowButton caption label={replacing ? 'Replace' : 'Search'} icon={replacing ? { ios: 'text.magnifyingglass', android: 'find-replace' } : { ios: 'magnifyingglass', android: 'search' }} selected={showSearch} expanded={showSearch} disabled={busy} onPress={openSearch} />}
@@ -571,14 +616,14 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Style is in the row above.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? 'Tap text boxes to select them, then delete them together.' : 'Pinch to zoom. Tap text to edit.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
         pageLayout={JSON.stringify({ width: preview.width, height: preview.height, pointWidth: preview.pointWidth ?? 0 })}
-        objects={objectsJson} selectedId={selected?.id ?? -1} markedIds={marked.join(',')} adding={adding} disabled={busy} placement={placement ? JSON.stringify(placement) : ''}
-        textBox={JSON.stringify({ visible: nativeTextBox, submitOnReturn: true, text, font: textStyle.family === 'original' ? 'Helvetica' : fontName(textStyle), fontFile: fontFile(fontName(textStyle)), size: Number(size) || 16, color: ink ?? DEFAULT_INK, underline: textStyle.underline })}
+        objects={objectsJson} selectedId={selected?.id ?? -1} markedIds={marked.join(',')} adding={adding} disabled={busy || !!controlHelp?.active} placement={placement ? JSON.stringify(placement) : ''}
+        textBox={JSON.stringify({ visible: nativeTextBox && !controlHelp?.active, submitOnReturn: true, text, font: textStyle.family === 'original' ? 'Helvetica' : fontName(textStyle), fontFile: fontFile(fontName(textStyle)), size: Number(size) || 16, color: ink ?? DEFAULT_INK, underline: textStyle.underline })}
         focus={focusJson}
         onSelectObject={({ nativeEvent }) => { const object = preview.objects.find(item => item.id === nativeEvent.id); if (object) select(object); }}
         onPlace={({ nativeEvent }) => placeText(nativeEvent)}
         onTextChange={({ nativeEvent }) => setText(nativeEvent.text)}
         onSubmitText={({ nativeEvent }) => { if (nativeEvent.text.trim()) apply('add', nativeEvent.text); }} />
-      : screenActive ? <PdfEditCanvas key={source.uri + ':' + page} uri={preview.imageUri} width={preview.width} height={preview.height} objects={preview.objects} selectedId={selected?.id} markedIds={marked} adding={adding} disabled={busy} placement={placement}
+      : screenActive ? <PdfEditCanvas key={source.uri + ':' + page} uri={preview.imageUri} width={preview.width} height={preview.height} objects={preview.objects} selectedId={selected?.id} markedIds={marked} adding={adding} disabled={busy || !!controlHelp?.active} placement={placement}
         removedIds={removedIds} onSelect={select} onPlace={placeText} /> : <View style={styles.grow} />}
       </PdfPreviewStage>
       {multiDelete && !selected && !placement && <View style={[styles.row, styles.editorBar, { backgroundColor: colors.secondarySystemBackground }]}>
@@ -646,7 +691,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         </OptionCard>}
         <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Scans and text inside embedded groups cannot be edited. Delete removes page text; it is not secure redaction.</ThemedText>
       </OptionSheet>
-      <OptionSheet expandable title={replacing ? 'Find and replace' : 'Search text'} icon={replacing ? { ios: 'text.magnifyingglass', android: 'find-replace' } : { ios: 'magnifyingglass', android: 'search' }} isPresented={showSearch && !editingText} onClose={() => setShowSearch(false)}>
+      {replacing && <OptionSheet expandable title="Find and replace" icon={{ ios: 'text.magnifyingglass', android: 'find-replace' }} isPresented={showSearch && !editingText} onClose={() => setShowSearch(false)}>
         <OptionCard title="Text" icon={{ ios: 'magnifyingglass', android: 'search' }}>
           {!replaceAvailable && <ThemedText accessibilityRole="alert">Install the latest app build to search and replace PDF text.</ThemedText>}
           <ThemedText style={styles.label}>Find</ThemedText>
@@ -675,7 +720,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
           ? 'Finds text inside a single text piece, keeping its original font where possible. Words split across pieces, scans and protected text are skipped. Undo reverts the whole replacement.'
           : multiDelete ? 'Tap a result to go to it and select it for deletion. Words split across text pieces and scans are not found.'
           : 'Tap a result to go to it and edit it. Words split across text pieces and scans are not found.'}</ThemedText>
-      </OptionSheet>
+      </OptionSheet>}
       </PdfPreviewBody>
     </View> : <View style={styles.empty}>
       {busy ? <AppLoader size="large" /> : <>
@@ -697,6 +742,12 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
 
 const styles = StyleSheet.create({
   textAction: { minWidth: TEXT_ACTION_MIN_WIDTH },
+  searchPanel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8, paddingVertical: 2 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  searchInput: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, fontSize: 15 },
+  searchCount: { minWidth: 28, fontSize: 13, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  searchStatus: { fontSize: 12, paddingHorizontal: 12, paddingBottom: 4 },
+  searchResult: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 12 },
   markedRow: { backgroundColor: '#ff5a5f40', borderRadius: 8, paddingHorizontal: 8 },
   editorBar: { padding: 4, gap: 0 }, markCount: { paddingHorizontal: s.sm, fontWeight: '600' },
   deleteButton: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 14, borderRadius: 12, marginLeft: 4 }, deleteLabel: { color: '#fff', fontWeight: '600' }, screen: { flex: 1 }, canvas: { flex: 1, minHeight: 120 }, form: { padding: s.lg, gap: s.md }, heading: { ...t.heading }, label: { ...t.label },

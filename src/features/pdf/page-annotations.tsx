@@ -1,5 +1,6 @@
 import { memo } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ColorSwatches, hexColor } from '@/components/color-swatches';
 import { EditorOption } from '@/components/editor-option';
 import { ThemedText } from '@/components/themed-text';

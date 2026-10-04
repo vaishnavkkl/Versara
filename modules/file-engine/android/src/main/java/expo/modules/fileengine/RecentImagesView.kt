@@ -96,7 +96,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private val onRefresh by EventDispatcher()
   private val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(context)
   fun setRefreshing(value: Boolean) { if (swipe.isRefreshing != value) swipe.isRefreshing = value }
-  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String)
+  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String, val revision: String)
   private var items = emptyList<Item>()
   private var itemsJson = ""
   private var paletteJson = ""
@@ -195,7 +195,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     val array = JSONArray(json)
     items = (0 until min(array.length(), 160)).map { index ->
       val item = array.getJSONObject(index)
-      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"))
+      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"), item.optString("revision"))
     }
     refresh()
   }
@@ -316,7 +316,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       remove.contentDescription = "Remove ${next.name} from Recents"
       contentDescription = "Open ${next.name}. ${next.detail}"
       val size = if (gridCell) gridPixels else listPixels
-      val key = "${next.uri}|${next.kind}|$size"
+      val key = "${next.uri}|${next.kind}|${next.revision}|$size"
       wanted = key
       val cached = cache.get(key)
       if (cached != null) { show(cached, key); return }

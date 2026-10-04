@@ -3,8 +3,8 @@ import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/r
 import { pdfDraftId, pruneSignatureDraftAssets } from '../editor/editor-drafts';
 import { PagePositionPicker } from './page-position-picker';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Keyboard, Platform, ScrollView, StyleSheet, TextInput, View, type TextInputProps } from 'react-native';
-import { BottomSheetTextInput } from '@gorhom/bottom-sheet';
+import { KeyboardAvoidingView, Keyboard, Platform, ScrollView, StyleSheet, View, type TextInputProps } from 'react-native';
+import { HelpTextInput as TextInput, HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-text-input';
 import { Directory, File, Paths } from 'expo-file-system';
 import { FileEngine } from '../../../modules/file-engine';
 import { ColorSwatches, hexColor } from '@/components/color-swatches';
@@ -39,7 +39,9 @@ import { openPdfResult } from './open-pdf-screen';
 import type { PdfToolSession } from './pdf-tool-session';
 import { PdfPagePreview, PdfPreviewBody, PdfPreviewStage, PdfPreviewToolbar, PdfPreviewFooter, PDF_PREVIEW_BACKGROUND, type PdfPreviewImage } from './pdf-preview';
 import { PdfDocumentPreview } from './pdf-document-preview';
+import { InsertPdfPreview } from './insert-pdf-preview';
 import { RecognizedTextSheet } from './recognized-text-sheet';
+import { useControlHelp } from '@/components/control-help';
 import { usePdfToolLayout } from './pdf-tool-layout';
 import { annotationCommands, PageAnnotationsPanel, type AnnotationEdit, type AnnotationEdits, type PdfAnnotation } from './page-annotations';
 
@@ -48,6 +50,18 @@ type Output = PdfResult & { name: string };
 type Response = { info?: Info; outputs?: (PdfResult & { width?: number; height?: number; pointWidth?: number; annotations?: PdfAnnotation[] })[]; estimatedSize?: number; ocrSummary?: { wordCount: number; pagesAdded: number; skippedPages: number; emptyPages: number }; textPreview?: string };
 const markupTools = new Set(['highlight', 'draw', 'shapes', 'sign']);
 const rangeTools = new Set(['duplicate', 'to_image', 'watermark', 'numbers', 'extract_text', 'ocr']);
+const settingsTitles: Record<string, string> = {
+  duplicate: 'Duplicate pages options', insert: 'Insert pages options',
+  compress: 'Compression options', to_image: 'Export images options',
+  repair: 'Repair PDF options', metadata: 'Remove metadata options', flatten: 'Flatten PDF options',
+  ocr: 'Scan text settings', extract_text: 'Extract text settings',
+  numbers: 'Page number settings', watermark: 'Watermark settings', protect: 'Password',
+};
+const qualityOptions: { id: string; label: string; icon: OptionIcon }[] = [
+  { id: 'max', label: 'Max quality', icon: { ios: 'sparkles', android: 'high-quality' } },
+  { id: 'balanced', label: 'Balanced', icon: { ios: 'scalemass', android: 'balance' } },
+  { id: 'small', label: 'Smallest', icon: { ios: 'arrow.down.right.and.arrow.up.left', android: 'compress' } },
+];
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 /** BottomSheetTextInput only works inside a sheet; it lets the sheet move above the keyboard. */
 function FieldInput({ sheet, ...props }: TextInputProps & { sheet: boolean }) {
@@ -89,6 +103,7 @@ function pageRange(value: string, count: number): number[] {
 
 export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { session: PdfToolSession; onUnsavedChange: (value: boolean) => void; onDiscardReady?: (action: () => Promise<void>) => void }) {
   const colors = usePalette();
+  const controlHelp = useControlHelp();
   const active = usePdfScreenActive();
   const { tool, files, directory } = session;
   const source = files[0];
@@ -133,6 +148,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [ranges, setRanges] = useState('');
   const [position, setPosition] = useState('0');
   const [insert, setInsert] = useState<LocalFile>();
+  const [insertCount, setInsertCount] = useState(0);
   const [quality, setQuality] = useState('balanced');
   const [format, setFormat] = useState('jpg');
   const [ocrFormat, setOcrFormat] = useState<'text' | 'pdf'>('text');
@@ -166,8 +182,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       if (mark && mark.kind !== 'image') { setInkColor(mark.color); setInkWidth(mark.width); setInkOpacity(mark.opacity ?? (mark.kind.startsWith('highlight') || mark.brush === 'highlighter' ? .3 : mark.brush === 'pencil' ? 170/255 : mark.brush === 'marker' ? 210/255 : 1)); setFillColor(mark.fillColor ? parseInt(mark.fillColor.slice(1),16) : null); setBrushType(mark.brush ?? 'pen'); setPattern(mark.pattern ?? 'solid'); }
     } catch { setSelectedId(undefined); }
   }
-  const settingsInSheet = ['ocr', 'extract_text', 'numbers', 'watermark', 'protect'].includes(tool);
-  const [optionsOpen, setOptionsOpen] = useState(!settingsInSheet || tool === 'protect');
+  const [optionsOpen, setOptionsOpen] = useState(tool === 'protect');
   const [fullText, setFullText] = useState<{ text: string; truncated: boolean } | null>(null);
   const [textSheet, setTextSheet] = useState(false);
   const [brush, setBrush] = useState(false);
@@ -189,8 +204,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [results, setResults] = useState<Output[]>([]);
   const [textPreview, setTextPreview] = useState('');
   const [notice, setNotice] = useState('');
-  const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Export text' : tool === 'to_image' ? 'Export images' : 'Create PDF';
-  const toolbar = useResponsiveEditorToolbar(markup ? ['Style', 'Select', ...(tool === 'highlight' ? [brush ? 'Brush' : 'Area'] : [])] : ['Settings'], [saveTitle], markup ? 2 : 0);
+  const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'compress' ? 'Compress PDF' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Export text' : tool === 'to_image' ? 'Export images' : 'Create PDF';
+  const toolbar = useResponsiveEditorToolbar(markup ? ['Style', 'Select', ...(tool === 'highlight' ? [brush ? 'Brush' : 'Area'] : [])] : [tool === 'protect' ? 'Password' : 'Options'], [saveTitle], markup ? 2 : 0);
   const recovery = useEditorDraft({ id: markup && session.origin && info ? pdfDraftId(session.origin.uri, tool) : null, uri: session.origin?.uri, value: history.snapshot,
     dirty: !results.length && (marks.length > 0 || history.canRedo), validate: isMarkHistorySnapshot, restore: value => { history.restoreSnapshot(value); if (value.marks.length) setPage(Math.min(info?.pageCount ?? 1, value.marks.at(-1)!.page)); } });
   useEffect(() => { onDiscardReady?.(recovery.discard); }, [onDiscardReady, recovery.discard]);
@@ -323,10 +338,29 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   }
   async function pickInsert() {
     if (locked.current) return;
+    setOptionsOpen(false);
     locked.current = true; setBusy(true); setError('');
-    try { const picked = await browseFiles(directory, false, 1, true); if (picked[0] && mounted.current) { if (insert) { try { new File(insert.uri).delete(); } catch { /* Session cleanup. */ } } setInsert(picked[0]); } }
+    let picked: LocalFile | undefined;
+    let accepted = false;
+    try {
+      picked = (await browseFiles(directory, false, 1, true))[0];
+      if (!picked || !mounted.current) return;
+      if (!PdfEngine) throw new Error('Install the latest app build to insert PDF pages.');
+      const id = uid(); job.current = id;
+      setPhase('Reading inserted PDF...'); setCancellable(true);
+      const response = JSON.parse(await PdfEngine.processPdf(id, JSON.stringify({ operation: 'info', uri: picked.uri }))) as Response;
+      if (!mounted.current) return;
+      if (!response.info || response.info.pageCount < 1 || response.info.encrypted) throw new Error('Choose an unrestricted PDF with at least one page.');
+      if (!info || info.pageCount + response.info.pageCount > 2000) throw new Error('Keep the result below 2,001 pages.');
+      // Older sources remain in the session directory until preview jobs release them on teardown.
+      setInsert(picked); setInsertCount(response.info.pageCount); accepted = true;
+    }
     catch (cause) { if (mounted.current) setError((cause as Error).message); }
-    finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
+    finally {
+      if (picked && !accepted) try { new File(picked.uri).delete(); } catch { /* Session cleanup retries. */ }
+      locked.current = false; job.current = undefined;
+      if (mounted.current) { setBusy(false); setCancellable(false); setPhase(''); } else disposeImports(directory);
+    }
   }
   async function estimateSize() {
     const result = await process({ operation: 'estimate', quality }, 'Estimating from sample pages…');
@@ -525,7 +559,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   }, [active, info, busy, results.length, tool, styledPreviewKey]);
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.secondarySystemBackground, borderColor: colors.borderHighlight }];
   // Fields in a bottom sheet use the sheet's input so the sheet rises above the keyboard.
-  const field = (label: string, value: string, setter: (value: string) => void, numeric = false, secure = false, sheet = settingsInSheet) => <View style={styles.field}><ThemedText style={styles.label}>{label}</ThemedText><FieldInput sheet={sheet} accessibilityLabel={label} editable={!busy} value={value} onChangeText={setter} keyboardType={numeric ? 'number-pad' : 'default'} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={secure ? 64 : 100} style={inputStyle} /></View>;
+  const field = (label: string, value: string, setter: (value: string) => void, numeric = false, secure = false, sheet = true) => <View style={styles.field}><ThemedText style={styles.label}>{label}</ThemedText><FieldInput sheet={sheet} accessibilityLabel={label} editable={!busy} value={value} onChangeText={setter} keyboardType={numeric ? 'number-pad' : 'default'} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={secure ? 64 : 100} style={inputStyle} /></View>;
   const choices = (items: { id: string; label: string; icon?: OptionIcon }[], selected: string, choose: (value: string) => void) => <View style={styles.choices}>{items.map(item => <EditorOption key={item.id} label={item.label} icon={item.icon} selected={selected === item.id} disabled={busy} onPress={() => choose(item.id)} />)}</View>;
   const status = <>{busy && !pageRendering && <View style={styles.status}><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Please wait…'}{progress > 0 ? ` ${Math.round(progress * 100)}%` : ''}</ThemedText>{cancellable && <ToolButton title="Cancel" secondary onPress={() => { if (signatureJob.current) FileEngine?.cancelImageJob(signatureJob.current); if (job.current) { PdfEngine?.cancelPdfTool(job.current); PdfEngine?.cancelTextEdit(job.current); } }} />}</View>}{!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}{!!recovery.error && <ThemedText accessibilityRole="alert">{recovery.error}</ThemedText>}{!!notice && <ThemedText accessibilityLiveRegion="polite">{notice}</ThemedText>}</>;
   if (!available) return <View style={styles.content}><ThemedText>Install a new development build to use these native PDF tools on this device.</ThemedText></View>;
@@ -537,12 +571,10 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true, false)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;
   if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
   if (tool === 'info') return <ScrollView contentContainerStyle={styles.content}>{status}<ToolButton title="Preview PDF" secondary onPress={() => setShowSourcePreview(true)} /><ThemedText style={styles.heading}>{source.name}</ThemedText>{Object.entries({ Pages: info.pageCount, Size: formatSize(info.size), 'First page': `${Math.round(info.width)} × ${Math.round(info.height)} pt`, 'PDF version': info.version, Encrypted: info.encrypted ? 'Yes' : 'No', Title: info.title || '—', Author: info.author || '—', Subject: info.subject || '—', Creator: info.creator || '—', Producer: info.producer || '—' }).map(([key, value]) => <View key={key} style={styles.field}><ThemedText style={{ color: colors.secondaryLabel }}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView>;
-  const renderSettings = (content: ReactNode) => settingsInSheet
-    ? <OptionSheet title={({ ocr: 'Scan text settings', extract_text: 'Extract text settings', numbers: 'Page number settings', watermark: 'Watermark settings', protect: 'Password' } as Record<string, string>)[tool]} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={optionsOpen} dim={!['numbers', 'watermark'].includes(tool)} onClose={() => setOptionsOpen(false)}>
+  const renderSettings = (content: ReactNode) => <OptionSheet title={settingsTitles[tool] ?? 'PDF options'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={optionsOpen} keyboardInput dim={!['numbers', 'watermark'].includes(tool)} onClose={() => setOptionsOpen(false)}>
       <OptionCard>{content}</OptionCard>
-    </OptionSheet>
-    : optionsOpen && <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets style={landscape ? { flex: 1 } : { maxHeight: '44%', flexGrow: 0 }} contentContainerStyle={styles.content}>{content}</ScrollView>;
-  const settingsAction = <EditorOption label={tool === 'protect' ? 'Password' : 'Settings'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : undefined} compact accessibilityLabel={tool === 'protect' ? 'Set the password' : 'Show or hide tool settings'} selected={optionsOpen} onPress={() => { Keyboard.dismiss(); setOptionsOpen(value => !value); }} />;
+    </OptionSheet>;
+  const settingsAction = <EditorOption label={tool === 'protect' ? 'Password' : 'Options'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} compact accessibilityLabel={tool === 'protect' ? 'Set the password' : 'Open advanced PDF options'} selected={optionsOpen} disabled={busy} onPress={() => { Keyboard.dismiss(); setOptionsOpen(value => !value); }} />;
   const toolActions = <View style={responsiveToolbarStyles.tools}>
     {markup ? <>
       {(tool === 'draw' || tool === 'sign' || tool === 'highlight') && <EditorMenu iconOnly tintedItems grid={3} label={tool === 'highlight' && !brush ? 'Brush: Area highlight' : `Brush: ${activeBrush.label}`} icon={tool === 'highlight' && !brush ? optionIcon('Area highlight') : optionIcon(activeBrush.label)} colorKey={activeBrush.colorKey} disabled={busy || selectedMark?.kind === 'image'} items={[
@@ -618,7 +650,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     <View style={styles.canvasColumn}>
     <PdfPreviewBody pages={pageList} toolbar={pageControls}>
     <PdfPreviewStage hint={placing ? 'Pick a shape to add it. Drag a shape to move it. Drag the page to scroll, swipe to change page.' : 'Drag to mark. Select to move or resize. Two fingers to zoom.'} onFit={active && !busy ? () => setPreviewRetry(value => value + 1) : undefined}>
-    {active && preview?.page === page && PdfMarkupView ? <PdfMarkupView key={`${page}:${previewRetry}:${preview.uri}`} style={{ flex: 1, backgroundColor: PDF_PREVIEW_BACKGROUND }} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify(marks.filter(mark => mark.page === page))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event => selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : tool === 'shapes' ? (shape === 'line' ? 'line' : 'polygon') : tool === 'highlight' && brush ? 'highlight-brush' : tool} shapePath={JSON.stringify(SHAPES.find(item => item.id === shape)?.points ?? [])} fillColor={fillColor === null ? '' : hexColor(fillColor)} inkColor={inkColor} inkWidth={inkWidth} disabled={busy || !recovery.ready || (!selecting && !erasing && marks.length >= 300)} onMark={event => addMark(event.nativeEvent.mark)}
+    {active && preview?.page === page && PdfMarkupView ? <PdfMarkupView key={`${page}:${previewRetry}:${preview.uri}`} style={{ flex: 1, backgroundColor: PDF_PREVIEW_BACKGROUND }} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify(marks.filter(mark => mark.page === page))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event => selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : tool === 'shapes' ? (shape === 'line' ? 'line' : 'polygon') : tool === 'highlight' && brush ? 'highlight-brush' : tool} shapePath={JSON.stringify(SHAPES.find(item => item.id === shape)?.points ?? [])} fillColor={fillColor === null ? '' : hexColor(fillColor)} inkColor={inkColor} inkWidth={inkWidth} disabled={!!controlHelp?.active || busy || !recovery.ready || (!selecting && !erasing && marks.length >= 300)} onMark={event => addMark(event.nativeEvent.mark)}
       onPageSwipe={placing ? ({ nativeEvent }) => { const target = page + nativeEvent.direction; if (!busy && target >= 1 && target <= info.pageCount) changePage(target); } : undefined} /> : failedPreview === previewKey && !busy
       ? <View style={styles.loadingScreen}><ThemedText>Page preview unavailable.</ThemedText><ToolButton title="Retry preview" onPress={() => { previewAttempt.current = ''; setFailedPreview(''); setPreviewRetry(value => value + 1); }} /></View>
       : <View style={styles.loadingScreen}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite">Preparing page…</ThemedText></View>}
@@ -631,7 +663,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.markup, landscape && styles.landscapeRow]}>
     {toolbar.measurements}
     <View style={styles.canvasColumn}>
-    {(tool === 'numbers' || tool === 'watermark') ? <PdfPreviewBody pages={pageList} toolbar={pageControls}>{numberPreview ? <PdfPagePreview image={numberPreview} active={active} preserveViewport /> : <PdfPreviewStage hint={tool === 'watermark' ? 'Preparing page...' : 'Preparing page numbers...'}><View style={styles.status}>{busy && <AppLoader />}</View></PdfPreviewStage>}</PdfPreviewBody> : <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} embedded toolbarActions={toolbar.atBottom ? undefined : toolActions} onClose={() => {}} />}
+    {(tool === 'numbers' || tool === 'watermark') ? <PdfPreviewBody pages={pageList} toolbar={pageControls}>{numberPreview ? <PdfPagePreview image={numberPreview} active={active} preserveViewport /> : <PdfPreviewStage hint={tool === 'watermark' ? 'Preparing page...' : 'Preparing page numbers...'}><View style={styles.status}>{busy && <AppLoader />}</View></PdfPreviewStage>}</PdfPreviewBody> : tool === 'insert' ? <InsertPdfPreview uri={source.uri} count={info.pageCount} inputPassword={inputPassword} position={Number(position) || 0} inserted={insert ? { uri: insert.uri, name: insert.name, count: insertCount } : undefined} disabled={busy} toolbarActions={toolbar.atBottom ? undefined : toolActions} /> : <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} embedded toolbarActions={toolbar.atBottom ? undefined : toolActions} onClose={() => {}} />}
     </View>
     <View style={landscape ? styles.landscapeSide : undefined}>
     {renderSettings(<><View style={styles.field}><ThemedText style={styles.label}>{source.name}</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>{info.pageCount} pages · {formatSize(info.size)}</ThemedText></View><ThemedText>{guidance[tool]}</ThemedText>
@@ -639,7 +671,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {rangeTools.has(tool) && <>{field('Pages (leave empty for all)', ranges, setRanges)}<ThemedText style={{ color: colors.secondaryLabel }}>For example: 1, 3, 5-8</ThemedText></>}
     {tool === 'insert' && (() => {
       const after = Math.min(info.pageCount, Math.max(0, Number(position) || 0));
-      const useBlank = () => { if (insert) { try { new File(insert.uri).delete(); } catch { /* Session cleanup. */ } setInsert(undefined); } };
+      const useBlank = () => { setInsert(undefined); setInsertCount(0); setOptionsOpen(false); };
       return <>
         <ThemedText style={styles.label}>What to insert</ThemedText>
         <View style={styles.choices}>
@@ -663,8 +695,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         </View>
       </>;
     })()}
-    {(tool === 'compress' || tool === 'to_image') && choices([{ id: 'max', label: 'Max quality', icon: { ios: 'sparkles', android: 'high-quality' } }, { id: 'balanced', label: 'Balanced', icon: { ios: 'scalemass', android: 'balance' } }, { id: 'small', label: 'Smallest', icon: { ios: 'arrow.down.right.and.arrow.up.left', android: 'compress' } }], quality, setQuality)}
-    {tool === 'compress' && <><ToolButton title="Estimate output size" secondary disabled={busy} onPress={() => void estimateSize()} />{estimate?.quality === quality && <ThemedText>Output will be at most {formatSize(Math.min(estimate.size, info.size))}. The exact reduction is known after saving; an already optimized PDF may stay the same size.</ThemedText>}</>}
+    {tool === 'to_image' && choices(qualityOptions, quality, setQuality)}
+    {tool === 'compress' && estimate?.quality === quality && <ThemedText>Output will be at most {formatSize(Math.min(estimate.size, info.size))}. The exact reduction is known after saving; an already optimized PDF may stay the same size.</ThemedText>}
     {tool === 'ocr' && <>
       <ThemedText style={styles.label}>Output</ThemedText>
       <View style={styles.choices}>
@@ -674,7 +706,6 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       {ocrFormat === 'pdf' && <><EditorOption label="Skip pages with selectable text" icon={{ ios: 'checkmark.circle', android: 'check-circle' }} selected={skipExistingText} disabled={busy} onPress={() => setSkipExistingText(value => !value)} /><ThemedText>The page artwork stays unchanged. Up to 100 selected pages; English OCR. Turn off skipping for mixed scanned and selectable content, which can create duplicate text.</ThemedText></>}
       {!PdfEngine?.nativeSearchableOcrVersion && <ThemedText>Update the native app build to enable searchable PDF output.</ThemedText>}
     </>}
-    {tool === 'to_image' && choices([{ id: 'jpg', label: 'JPG' }, { id: 'png', label: 'PNG' }], format, setFormat)}
     {tool === 'watermark' && <><PagePositionPicker value={numberPosition} onChange={setNumberPosition} disabled={busy} center /><TextStyleControls style={numberStyle} onChange={setNumberStyle} size={numberSize} onSizeChange={setNumberSize} sizeUnit="pt" minSize={4} maxSize={72} disabled={busy} /><ColorSwatches value={parseInt(inkColor.slice(1),16)} onChange={value=>setInkColor(hexColor(value??0))} disabled={busy} /><ThemedText style={styles.label}>Stamp outline</ThemedText><View style={styles.choices}><EditorOption compact label="Text only" icon={{ ios: 'textformat', android: 'text-fields' }} selected={stampShape==='none'} onPress={()=>setStampShape('none')} disabled={busy} /><ShapePicker inline value={stampShape} onChange={setStampShape} disabled={busy} /></View><ToolButton title="Preview watermark" secondary disabled={busy} onPress={()=>void previewNumbers()} /></>}
     {tool === 'numbers' && <>
       {field('Start numbering at', startNumber, setStartNumber, true)}
@@ -691,6 +722,16 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       <ToolButton title="Protect PDF" disabled={busy || !password || !confirmation} onPress={() => { setOptionsOpen(false); void run(); }} /></>}
   </>)}
   <PdfPreviewFooter>{status}
+    {tool === 'compress' && <>
+      <ScrollView horizontal style={styles.quickScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.quickRow}>
+        {qualityOptions.map(item => <EditorOption key={item.id} compact label={item.label} icon={item.icon} selected={quality === item.id} disabled={busy} onPress={() => setQuality(item.id)} />)}
+        <EditorOption compact label="Estimate size" icon={{ ios: 'doc.text.magnifyingglass', android: 'find-in-page' }} disabled={busy} onPress={() => void estimateSize()} />
+      </ScrollView>
+      <ThemedText accessibilityLiveRegion="polite" style={styles.quickHint}>{estimate?.quality === quality ? `Estimated output: up to ${formatSize(Math.min(estimate.size, info.size))}` : 'Estimate size before compressing.'}</ThemedText>
+    </>}
+    {tool === 'to_image' && <View style={styles.quickRow}>
+      {['jpg', 'png'].map(value => <EditorOption key={value} compact label={value.toUpperCase()} selected={format === value} disabled={busy} onPress={() => setFormat(value)} />)}
+    </View>}
     {tool === 'watermark' && <View style={styles.quickRow}>
       <TextInput accessibilityLabel="Watermark text" editable={!busy} value={text} onChangeText={setText} placeholder="Watermark text" placeholderTextColor={colors.secondaryLabel} autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={100} style={[inputStyle, styles.quickInput]} />
       {[{ id: '0.15', label: 'Subtle', icon: { ios: 'circle.dotted', android: 'blur-on' } }, { id: '0.3', label: 'Balanced', icon: { ios: 'circle.lefthalf.filled', android: 'tonality' } }, { id: '0.6', label: 'Bold', icon: { ios: 'circle.fill', android: 'brightness-1' } }].map(item => <EditorOption key={item.id} compact label={item.label} accessibilityLabel={`${item.label} watermark`} icon={item.icon as OptionIcon} selected={stampOpacity === item.id} disabled={busy} onPress={() => setStampOpacity(item.id)} />)}
@@ -720,6 +761,8 @@ const styles = StyleSheet.create({
   status: { padding: 12, gap: 10, alignItems: 'center', justifyContent: 'center' },
   loadingScreen: { flex: 1, padding: 24, gap: 12, alignItems: 'center', justifyContent: 'center' }, result: { padding: 16, borderRadius: 18, gap: 12 },
   quickRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, quickInput: { flex: 1, minWidth: 0, minHeight: 44, paddingVertical: 8 },
+  quickHint: { fontSize: 12, lineHeight: 16, paddingHorizontal: 4 },
+  quickScroll: { flexGrow: 0 },
   quickStepper: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   insertFile: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, paddingLeft: 12, paddingRight: 4, paddingVertical: 4 },
   insertStepper: { flexDirection: 'row', alignItems: 'center', gap: 8 }, insertWhere: { textAlign: 'center', fontWeight: '600', fontVariant: ['tabular-nums'] }, quickSize: { minWidth: 48, textAlign: 'center', fontVariant: ['tabular-nums'] },

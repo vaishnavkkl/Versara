@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, Keyboard, Pressable, StyleSheet, View } from 'react-native';
+import { BackHandler, Keyboard, StyleSheet, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { showDialog } from '@/components/app-dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,7 +11,7 @@ import { PdfToolLayoutContext } from '@/features/pdf/pdf-tool-layout';
 import { ToolButton } from '@/components/tool-button';
 import { usePalette } from '@/theme/colors';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
-import { handleReaderBack } from '@/features/pdf/reader-back';
+import { handleReaderBack, handleReaderHelp } from '@/features/pdf/reader-back';
 import { PdfTextEditor } from '@/features/pdf/pdf-text-editor';
 import { OrganizePdf } from '@/features/pdf/organize-pdf';
 import { EditPdfPages } from '@/features/pdf/edit-pdf-pages';
@@ -21,8 +21,15 @@ import { AdvancedPdfTool } from '@/features/pdf/advanced-pdf-tool';
 import { disposeImports } from '@/features/files/file-storage';
 import { forgetPdfToolSession, getPdfToolSession } from '@/features/pdf/pdf-tool-session';
 import { recordToolUse } from '@/features/search/search-history';
+import { ControlHelpProvider, useControlHelp } from '@/components/control-help';
+import { HelpButton } from '@/components/help-button';
+import { HelpPressable } from '@/components/help-pressable';
 
 export default function PdfToolScreen() {
+  return <ControlHelpProvider><PdfToolContent /></ControlHelpProvider>;
+}
+
+function PdfToolContent() {
   const { session: id, landscape: openedLandscape } = useLocalSearchParams<{ session: string; landscape?: string }>();
   const [session] = useState(() => getPdfToolSession(id));
   const colors = usePalette();
@@ -39,6 +46,7 @@ export default function PdfToolScreen() {
   }, []);
   const layout = useMemo(() => ({ landscape, setLandscape, registerPageRow }), [landscape, registerPageRow]);
   const share = useHeaderShare();
+  const help = useControlHelp();
   useEffect(() => { if (session) recordToolUse(`PDF:${session.tool}`); }, [session]);
   useEffect(() => {
     mounted.current = true;
@@ -54,6 +62,7 @@ export default function PdfToolScreen() {
   }, [id, session]);
   function leave() { Keyboard.dismiss(); if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   function close() {
+    if (help?.close()) return;
     if (session?.tool === 'viewer' && handleReaderBack()) return;
     if (!unsaved) { leave(); return; }
     Keyboard.dismiss();
@@ -73,7 +82,8 @@ export default function PdfToolScreen() {
   return <PdfToolLayoutContext.Provider value={layout}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !unsaved, orientation: landscape ? 'landscape' : 'portrait' }} />
     {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close} share={share} save={share?.save}>
-      {!pageRows && <Pressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { opacity: pressed ? .6 : 1 }]}><UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.systemBlue} /></Pressable>}
+      <HelpButton tool={session?.tool} intercept={session?.tool === 'viewer' ? handleReaderHelp : undefined} />
+      {!pageRows && <HelpPressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { opacity: pressed ? .6 : 1 }]}><UniversalIcon ios="rotate.right" android="screen-rotation" size={22} color={colors.systemBlue} /></HelpPressable>}
     </ScreenHeader>}
     {!session ? <View style={styles.empty}><ThemedText>Select a file from the PDF tools to get started.</ThemedText><ToolButton title="Back to PDF tools" onPress={close} /></View>
       : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} />

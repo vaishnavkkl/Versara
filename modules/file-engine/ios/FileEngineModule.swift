@@ -25,7 +25,7 @@ public class FileEngineModule: Module {
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 4 }
+    Constant("nativeImageListVersion") { 5 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -269,9 +269,15 @@ final class DeviceLibrary {
     }
 
     guard let source = URL(string: uri) else { throw FileEngineError.missing }
-    try PdfFolderAccess.withAccess(to: source) { try FileManager.default.copyItem(at: source, to: destination) }
+    let sourceType = try PdfFolderAccess.withAccess(to: source) { () -> UTType? in
+      try FileManager.default.copyItem(at: source, to: destination)
+      return (try? source.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+    }
     let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-    let mime = UTType(filenameExtension: destination.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+    // External imports first copy to an extensionless staging path. Inspect the
+    // received file's type rather than guessing from that temporary destination.
+    let mime = sourceType?.preferredMIMEType ?? UTType(filenameExtension: source.pathExtension)?.preferredMIMEType
+      ?? UTType(filenameExtension: destination.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
     return ["uri": destinationUri, "name": source.lastPathComponent, "mimeType": mime, "size": size, "kind": kind]
   }
 

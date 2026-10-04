@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
+import { HelpPressable } from './help-pressable';
 import { AppLoader } from './app-loader';
 import { showDialog } from './app-dialog';
 import type { HeaderShareAction } from './header-share';
@@ -43,17 +44,17 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
     <UniversalIcon ios={close ? 'xmark' : 'chevron.left'} android={close ? 'close' : 'arrow-back'} size={22} color={colors.systemBlue} />
   </Pressable>;
   const shareDisabled = !share || !!share.disabled || sharing;
-  const shareButton = share !== undefined && <Pressable accessibilityRole="button" accessibilityLabel={share?.label ?? 'Share'} accessibilityState={{ disabled: shareDisabled, busy: sharing }}
+  const shareButton = share !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={share?.label ?? 'Share'} accessibilityState={{ disabled: shareDisabled, busy: sharing }}
     disabled={shareDisabled} onPress={() => void runShare()} hitSlop={4}
     style={({ pressed }) => [styles.back, styles.share, { backgroundColor: colors.accentSurface, opacity: shareDisabled && !sharing ? 0.4 : pressed ? 0.6 : 1 }]}>
     {sharing ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.up" android="share" size={21} color={colors.systemBlue} />}
-  </Pressable>;
+  </HelpPressable>;
   const saveDisabled = !save || !!save.disabled || saving;
-  const saveButton = save !== undefined && <Pressable accessibilityRole="button" accessibilityLabel={save?.label ?? 'Save'} accessibilityState={{ disabled: saveDisabled, busy: saving }}
+  const saveButton = save !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={save?.label ?? 'Save'} accessibilityState={{ disabled: saveDisabled, busy: saving }}
     disabled={saveDisabled} onPress={() => void runSave()} hitSlop={4}
     style={({ pressed }) => [styles.back, styles.share, { backgroundColor: colors.accentSurface, opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
     {saving ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.down" android="save" size={21} color={colors.systemBlue} />}
-  </Pressable>;
+  </HelpPressable>;
   const actions = close ? 1 : (children ? 1 : 0) + (share !== undefined ? 1 : 0) + (save !== undefined ? 1 : 0);
   // Both sides reserve room for the busier one so the title stays centred and shrinks first.
   const sideWidth = { minWidth: Math.max(44, actions * 44 + (actions - 1) * s.xs) };

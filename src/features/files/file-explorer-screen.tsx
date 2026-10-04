@@ -1,37 +1,22 @@
-import type { PickerKind } from './file-picker-session';
+import type { FilePickerSelection } from './file-picker-session';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { ThemedText } from '@/components/themed-text';
 import { toast } from '@/components/toast';
 import { UniversalIcon } from '@/components/universal-icon';
-import { EditorMenu } from '@/components/editor-menu';
-import type { OptionIcon } from '@/theme/editor-icons';
 import { usePalette } from '@/theme/colors';
 import { getGradients, gradient, spacing as s, typography as t } from '@/theme/dashboard';
 import { FileEngine, type DirectoryListing, type ExplorerEntry, type StorageRoot } from '../../../modules/file-engine';
 import { ExplorerRow } from './explorer-row';
 import { explorerAvailable, openExplorerEntry } from './explorer';
 import { RecentFilesSection } from './recent-files-section';
+import { compareFiles, FileSortMenu, useFileSort } from './file-sort-menu';
 
 const LISTING_CACHE = 24;
 const listings = new Map<string, DirectoryListing>();
-type SortField = 'name' | 'modified' | 'size' | 'type';
-const SORT_LABELS: Record<SortField, string> = { name: 'Name', modified: 'Date modified', size: 'Size', type: 'Type' };
-const SORT_ICONS: Record<SortField, OptionIcon> = {
-  name: { ios: 'textformat', android: 'sort-by-alpha' },
-  modified: { ios: 'calendar', android: 'calendar-today' },
-  size: { ios: 'internaldrive', android: 'storage' },
-  type: { ios: 'square.grid.2x2', android: 'category' },
-};
-const ORDER_LABELS: Record<SortField, readonly [string, string]> = {
-  name: ['A to Z', 'Z to A'],
-  modified: ['Oldest first', 'Newest first'],
-  size: ['Smallest first', 'Largest first'],
-  type: ['A to Z', 'Z to A'],
-};
 
 type PickerRowProps = { entry: ExplorerEntry; height: number; checked?: boolean; tint: string; onPress: (entry: ExplorerEntry) => void; onSelect?: (entry: ExplorerEntry) => void };
 const PickerRow = memo(function PickerRow({ entry, height, checked, tint, onPress, onSelect }: PickerRowProps) {
@@ -42,7 +27,6 @@ const PickerRow = memo(function PickerRow({ entry, height, checked, tint, onPres
     </Pressable>}
   </View>;
 });
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function remember(listing: DirectoryListing) {
   listings.delete(listing.path);
   listings.set(listing.path, listing);
@@ -59,7 +43,7 @@ function formatBytes(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
-export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; selected: ExplorerEntry[]; onSelect: (file: ExplorerEntry) => void } } = {}) {
+export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } = {}) {
   const colors = usePalette();
   const { fontScale } = useWindowDimensions();
   const available = explorerAvailable();
@@ -69,8 +53,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [ascending, setAscending] = useState(true);
+  const [sort, setSort] = useFileSort('folders');
   const allowed = roots.some(root => root.allowed);
 
   const loadRoots = useCallback(() => {
@@ -141,19 +124,11 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
 
   const pickerKind = picker?.kind;
   const items = useMemo(() => listing?.path === path ? listing.items.filter(item => !pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind) : [], [listing, path, pickerKind]);
-  const sortedItems = useMemo(() => [...items].sort((a, b) => {
-    if (a.directory !== b.directory) return a.directory ? -1 : 1;
-    let comparison = sortField === 'modified' ? a.modified - b.modified
-      : sortField === 'size' ? a.size - b.size
-        : sortField === 'type' ? collator.compare(a.directory ? 'Folder' : a.kind, b.directory ? 'Folder' : b.kind) || collator.compare(a.name, b.name)
-          : collator.compare(a.name, b.name);
-    if (!ascending) comparison *= -1;
-    return comparison || collator.compare(a.name, b.name);
-  }), [items, sortField, ascending]);
+  const sortedItems = useMemo(() => [...items].sort((a, b) => compareFiles(a, b, sort)), [items, sort]);
 
   if (!path) {
     return (
-      <ScrollView style={[{ backgroundColor: colors.systemBackground }, getGradients(colors).dashboard]} contentContainerStyle={styles.content}>
+      <RecentFilesSection picker={picker} header={<View style={styles.homeHeader}>
         <View style={styles.intro}>
           <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Files</ThemedText>
           <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>Browse folders on this device</ThemedText>
@@ -192,8 +167,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           );
         })}
         {Platform.OS === 'ios' && available && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>iOS keeps each app&apos;s files separate. Downloads from other apps open through Files or the share sheet.</ThemedText>}
-        {!picker && <RecentFilesSection />}
-      </ScrollView>
+      </View>} />
     );
   }
 
@@ -207,11 +181,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
           <ThemedText numberOfLines={1} style={[styles.folder, { color: colors.label }]}>{crumbs[crumbs.length - 1] ?? 'Folder'}</ThemedText>
           <ThemedText numberOfLines={1} ellipsizeMode="head" style={[styles.caption, { color: colors.secondaryLabel }]}>{crumbs.join(' › ')}</ThemedText>
         </View>
-        <EditorMenu iconOnly icon={{ ios: 'arrow.up.arrow.down', android: 'sort' }} label={`Sort: ${SORT_LABELS[sortField]}, ${ORDER_LABELS[sortField][ascending ? 0 : 1]}`} items={[
-          ...(Object.keys(SORT_LABELS) as SortField[]).map(field => ({ id: field, label: SORT_LABELS[field], icon: SORT_ICONS[field], selected: sortField === field, onPress: () => { setSortField(field); setAscending(field === 'name' || field === 'type'); } })),
-          { id: 'ascending', label: ORDER_LABELS[sortField][0], icon: { ios: 'arrow.up', android: 'arrow-upward' }, selected: ascending, onPress: () => setAscending(true) },
-          { id: 'descending', label: ORDER_LABELS[sortField][1], icon: { ios: 'arrow.down', android: 'arrow-downward' }, selected: !ascending, onPress: () => setAscending(false) },
-        ]} />
+        <FileSortMenu sort={sort} onChange={setSort} />
         <Pressable accessibilityRole="button" accessibilityLabel="Close folder" onPress={() => go(null)} hitSlop={8} style={styles.back}>
           <UniversalIcon ios="house" android="home" size={22} color={colors.label} />
         </Pressable>
@@ -243,7 +213,7 @@ export function FileExplorerScreen({ picker }: { picker?: { kind: PickerKind; se
 }
 
 const styles = StyleSheet.create({
-  content: { padding: s.xl, paddingBottom: s.section, gap: s.md, width: '100%', maxWidth: 720, alignSelf: 'center' },
+  homeHeader: { gap: s.md },
   intro: { gap: s.xs, marginBottom: s.sm },
   title: { ...t.title },
   subtitle: { ...t.body },

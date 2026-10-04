@@ -3,6 +3,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 import { FileEngine, type DeviceRecentFile } from '../../../modules/file-engine';
 import { retainPickerCopy } from '../pdf/pdf-cache';
+import { notifyLibraryChanged } from './library-revision';
 
 export type FileKind = 'pdf' | 'image' | 'video' | 'audio';
 export type RecentFile = { id: string; uri: string; name: string; kind: FileKind; mimeType: string; size: number; opened: number };
@@ -67,6 +68,7 @@ export async function rememberPdfResults(files: { uri: string; name: string; siz
       await transaction.runAsync('INSERT INTO recent_files(id,uri,name,kind,mimeType,size,opened) VALUES (?,?,?,?,?,?,?) ON CONFLICT(uri) DO UPDATE SET opened=excluded.opened', `${opened}-${Math.random().toString(36).slice(2)}`, storedUri(file.uri), file.name, 'pdf', 'application/pdf', file.size, opened);
     }
   });
+  notifyLibraryChanged(files.map(file => file.uri));
 }
 
 export async function rememberFile(file: { uri: string; name: string; mimeType?: string; size?: number }, kind: FileKind): Promise<RecentFile> {
@@ -76,6 +78,7 @@ export async function rememberFile(file: { uri: string; name: string; mimeType?:
   const existing = await database.getFirstAsync<RecentFile>('SELECT * FROM recent_files WHERE uri = ?', storedUri(file.uri));
   const value: RecentFile = { id: existing?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: file.uri, name: file.name, kind, mimeType: file.mimeType ?? mimeTypes[kind], size: file.size ?? new File(file.uri).size, opened: Date.now() };
   await database.runAsync('INSERT INTO recent_files(id,uri,name,kind,mimeType,size,opened) VALUES (?,?,?,?,?,?,?) ON CONFLICT(uri) DO UPDATE SET name=excluded.name, size=excluded.size, opened=excluded.opened', value.id, storedUri(value.uri), value.name, value.kind, value.mimeType, value.size, value.opened);
+  notifyLibraryChanged([value.uri]);
   return value;
 }
 

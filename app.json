@@ -15,7 +15,21 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Versara shows recent photos and videos on this device so you can open them quickly. Files stay on your device.",
         "UIFileSharingEnabled": true,
-        "LSSupportsOpeningDocumentsInPlace": true
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.adobe.pdf"]
+          },
+          {
+            "CFBundleTypeName": "Image",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["public.image"]
+          }
+        ]
       }
     },
     "android": {

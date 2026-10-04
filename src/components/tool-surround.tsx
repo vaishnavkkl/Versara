@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { ScrollView, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { HelpPressable as Pressable } from './help-pressable';
 import { UniversalIcon } from '@/components/universal-icon';
-import { toast } from '@/components/toast';
 import type { RailTool } from '@/components/tool-rail';
 import { usePalette } from '@/theme/colors';
 import { toolColors } from '@/theme/tool-colors';
@@ -49,8 +49,8 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
         {items.map(tool => {
           const tint = toolColors(tool.id, colors);
           const off = disabled && !naming;
-          return <Pressable key={tool.id} accessibilityRole="button" accessibilityLabel={tool.accessibilityLabel ?? tool.title} accessibilityHint={naming ? 'Shows the tool name' : 'Long press to see the tool name'} accessibilityState={{ disabled: off }} disabled={off}
-            onPress={() => naming ? toast(tool.title) : onAction(tool.id)} onLongPress={() => toast(tool.title)} hitSlop={3}
+          return <Pressable key={tool.id} helpMode={naming} helpText={tool.title} helpOnLongPress accessibilityRole="button" accessibilityLabel={tool.accessibilityLabel ?? tool.title} accessibilityHint={naming ? 'Shows the tool name' : 'Long press to see the tool name'} accessibilityState={{ disabled: off }} disabled={off}
+            onPress={() => onAction(tool.id)} hitSlop={3}
             style={({ pressed }) => [styles.button, naming && styles.naming, { backgroundColor: tint.surface, borderColor: naming ? colors.systemBlue : `${tint.ink}33`, opacity: off ? 0.4 : pressed ? 0.6 : 1, transform: [{ scale: pressed ? 0.94 : 1 }] }]}>
             <UniversalIcon ios={tool.ios} android={tool.android} size={22} color={tint.ink} />
           </Pressable>;
@@ -79,5 +79,5 @@ const styles = StyleSheet.create({
   rowContent: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', gap: 6, paddingHorizontal: BAND },
   columnContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'space-evenly', gap: 6, paddingVertical: 2 },
   button: { width: BUTTON, height: BUTTON, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
-  naming: { borderWidth: 1.5, borderStyle: 'dashed' },
+  naming: { borderWidth: 1.5, borderStyle: 'dotted' },
 });

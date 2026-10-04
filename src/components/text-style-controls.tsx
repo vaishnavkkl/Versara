@@ -1,5 +1,6 @@
 import React, { memo, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { EDIT_FONTS, familyById, familyOfFont, useEditFonts, type EditFontFamily, type FontStyleName } from '@/constants/edit-fonts';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';

@@ -1,3 +1,5 @@
+import { useControlHelp } from '@/components/control-help';
+import { HelpPressable } from '@/components/help-pressable';
 import { memo, useEffect, useRef, useState, type ReactElement } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent, type ViewToken, type ViewabilityConfig } from 'react-native';
 import { FlatList, Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -129,12 +131,17 @@ const PageTile = memo(function PageTile({ item, index, count, uri, width, thumbH
   onPreview: (original: number) => void; onShift: (original: number, destination: number) => void;
 }) {
   const colors = usePalette();
+  const help = useControlHelp();
   const drag = Gesture.Pan().activateAfterLongPress(280).enabled(!busy && count > 1).runOnJS(true)
     .onStart(event => onStart(item.original, event.absoluteX, event.absoluteY))
     .onUpdate(event => onMove(event.absoluteX, event.absoluteY))
     .onFinalize(() => onEnd());
   const tap = Gesture.Tap().enabled(!busy).runOnJS(true).onEnd((_event, success) => { if (success) onPreview(item.original); });
   const moved = item.original !== index + 1;
+  if (help?.active) return <HelpPressable accessibilityRole="button" accessibilityLabel={`Page ${index + 1}, original page ${item.original}`} helpText="Tap a page to preview it. Long-press and drag it to change its position in the PDF." style={[styles.tile, { width }]}>
+    <View style={[styles.thumb, { height: thumbHeight, borderColor: colors.separator }]}><FileThumbnail uri={uri} kind="pdf" page={item.original - 1} active={active} /></View>
+    <View style={styles.caption}><ThemedText style={styles.position}>{index + 1}</ThemedText></View>
+  </HelpPressable>;
   return <GestureDetector gesture={Gesture.Exclusive(drag, tap)}>
     <View accessible accessibilityRole="button" accessibilityLabel={`Page ${index + 1}, original page ${item.original}`}
       accessibilityHint="Long press and drag to move. Tap to preview."

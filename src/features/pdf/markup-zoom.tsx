@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
 import PdfEngine from '../../../modules/pdf-engine/src/PdfEngineModule';

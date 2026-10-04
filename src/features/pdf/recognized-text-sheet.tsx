@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppBottomSheet } from '@/components/app-bottom-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';

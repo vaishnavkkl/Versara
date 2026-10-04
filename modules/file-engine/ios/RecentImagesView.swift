@@ -12,6 +12,7 @@ private struct RecentImage: Decodable {
   let detail: String
   let removable: Bool
   let kind: String?
+  let revision: String?
 }
 
 final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
@@ -156,7 +157,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   private func load(_ item: RecentImage, into cell: RecentImageCell) {
     guard active else { return }
     let size = grid ? gridPixels : listPixels
-    let key = "\(item.uri)|\(item.kind ?? "image")|\(size)" as NSString
+    let key = "\(item.uri)|\(item.kind ?? "image")|\(item.revision ?? "")|\(size)" as NSString
     if let image = cache.object(forKey: key) { cell.image.image = image; return }
     let token = cell.token
     let finish: (UIImage?) -> Void = { [weak self, weak cell] image in
