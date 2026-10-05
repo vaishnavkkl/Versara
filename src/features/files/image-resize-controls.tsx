@@ -1,5 +1,6 @@
 import { EditorOption } from '@/components/editor-option';
-import { Keyboard, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, StyleSheet, View } from 'react-native';
+import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { Host, Switch } from '@expo/ui';
 import { ThemedText } from '@/components/themed-text';

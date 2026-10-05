@@ -7,6 +7,8 @@ final class PdfEngineView: ExpoView {
   let onZoomChange = EventDispatcher()
   let onError = EventDispatcher()
   var source = ""
+  /// Opening password for a protected PDF; kept only in memory.
+  var password = ""
   var requestedPage = 0
   var pageRevision = 0
   var vertical = true
@@ -67,6 +69,7 @@ final class PdfEngineView: ExpoView {
   private let pdfView = PDFView()
   private let worker = DispatchQueue(label: "com.versara.pdf.open", qos: .userInitiated)
   private var loadedSource = ""
+  private var loadedPassword = ""
   private var generation = UUID()
   private var observer: NSObjectProtocol?
   private var zoomObserver: NSObjectProtocol?
@@ -168,7 +171,7 @@ final class PdfEngineView: ExpoView {
       ? UIColor.black
       : UIColor(red: 244.0 / 255, green: 245.0 / 255, blue: 253.0 / 255, alpha: 1)
     configureScrolling()
-    if source != loadedSource {
+    if source != loadedSource || password != loadedPassword {
       openDocument()
       return
     }
@@ -179,6 +182,8 @@ final class PdfEngineView: ExpoView {
 
   private func openDocument() {
     loadedSource = source
+    loadedPassword = password
+    let secret = password
     let ticket = UUID()
     generation = ticket
     pdfView.document = nil
@@ -194,14 +199,18 @@ final class PdfEngineView: ExpoView {
     worker.async { [weak self] in
       autoreleasepool {
         let document = PDFDocument(url: url)
+        // PDFKit decrypts in memory; no unlocked copy is written.
+        let unlocked = document.map { !$0.isLocked || (!secret.isEmpty && $0.unlock(withPassword: secret)) } ?? false
         DispatchQueue.main.async { [weak self] in
           guard let self, self.generation == ticket else { return }
           guard let document else {
             self.onError(["code": "PDF_INVALID_DOCUMENT", "message": "This file could not be opened as a PDF."])
             return
           }
-          guard !document.isLocked else {
-            self.onError(["code": "PDF_PASSWORD_REQUIRED", "message": "This PDF is password protected. Open an unlocked copy."])
+          guard unlocked else {
+            self.onError(secret.isEmpty
+              ? ["code": "PDF_PASSWORD_REQUIRED", "message": "This PDF is password protected. Enter its password to open it."]
+              : ["code": "PDF_PASSWORD_INCORRECT", "message": "That password is not correct. Try again."])
             return
           }
           guard document.pageCount > 0 else {

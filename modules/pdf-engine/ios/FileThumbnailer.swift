@@ -10,7 +10,32 @@ final class FileThumbnailer {
   private var jobs: [String: Bool] = [:]
   private var stopped = false
   func cancel(_ id: String) { lock.lock(); if jobs[id] != nil { jobs[id] = true }; lock.unlock() }
-  func destroy() { lock.lock(); stopped = true; lock.unlock() }
+  func destroy() { lock.lock(); stopped = true; lock.unlock(); worker.async { self.closeDocument() } }
+
+  // Worker-confined. Parsing a large PDF costs far more than drawing one small page, so page
+  // thumbnails reuse one open document and release it after a short idle period.
+  private var documentKey = ""
+  private var document: PDFDocument?
+  private var idleTicket = 0
+  private func documentFor(_ url: URL) -> PDFDocument? {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+    let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    let key = "\(url.path):\(modified):\((attributes?[.size] as? NSNumber)?.int64Value ?? -1)"
+    if key == documentKey, let document { return document }
+    closeDocument()
+    guard let opened = PDFDocument(url: url) else { return nil }
+    document = opened; documentKey = key
+    return opened
+  }
+  private func closeDocument() { document = nil; documentKey = "" }
+  private func scheduleIdleClose() {
+    idleTicket += 1
+    let ticket = idleTicket
+    worker.asyncAfter(deadline: .now() + 15) { [weak self] in
+      guard let self, self.idleTicket == ticket else { return }
+      self.closeDocument()
+    }
+  }
   private func cancelled(_ id: String) -> Bool { lock.lock(); defer { lock.unlock() }; return stopped || jobs[id] == true }
   func render(_ id: String, uri: String, kind: String, page: Int, outputUri: String, promise: Promise) {
     lock.lock()
@@ -22,15 +47,14 @@ final class FileThumbnailer {
         do {
           let fm = FileManager.default
           let cache = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].resolvingSymlinksInPath()
-          let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].resolvingSymlinksInPath()
-          guard !self.cancelled(id), let input = URL(string: uri), input.isFileURL,
+          guard !self.cancelled(id), let input = URL(string: uri), input.isFileURL, fm.isReadableFile(atPath: input.path),
             let output = URL(string: outputUri), output.isFileURL,
-            input.resolvingSymlinksInPath().path.hasPrefix(cache.path + "/") || input.resolvingSymlinksInPath().path.hasPrefix(documents.path + "/"),
             output.deletingLastPathComponent().resolvingSymlinksInPath().path == cache.appendingPathComponent("versara-thumbnails").path,
             !fm.fileExists(atPath: output.path) else { throw NSError(domain: "Thumbnail", code: 1) }
           var image: UIImage?
           if kind == "pdf" {
-            guard let document = PDFDocument(url: input), !document.isLocked, let pdfPage = document.page(at: page) else { throw NSError(domain: "Thumbnail", code: 2) }
+            defer { self.scheduleIdleClose() }
+            guard let document = self.documentFor(input), !document.isLocked, let pdfPage = document.page(at: page) else { throw NSError(domain: "Thumbnail", code: 2) }
             image = pdfPage.thumbnail(of: CGSize(width: 240, height: 240), for: .cropBox)
           } else if kind == "video" {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: input))

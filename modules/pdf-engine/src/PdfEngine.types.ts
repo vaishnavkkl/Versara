@@ -5,6 +5,8 @@ export type PdfPageEvent = { page: number; pageCount: number };
 export type PdfErrorEvent = { code: string; message: string };
 export type PdfEngineViewProps = ViewProps & {
   uri: string;
+  /** Opening password for a protected PDF. A wrong or missing one reports PDF_PASSWORD_INCORRECT or PDF_PASSWORD_REQUIRED. */
+  password?: string;
   page: number;
   pageRevision: number;
   vertical: boolean;

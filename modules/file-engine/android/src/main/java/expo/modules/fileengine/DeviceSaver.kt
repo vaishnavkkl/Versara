@@ -66,7 +66,9 @@ internal object DeviceSaver {
           val expected = resolver.openOutputStream(target, "wt")?.use { output -> input.inputStream().use { copy(it, output) } }
             ?: error("Could not open the existing device file for writing.")
           require(fingerprint(context, target) == expected) { "The device copy could not be verified." }
-          require(resolver.update(target, ContentValues().apply { put(MediaStore.MediaColumns.SIZE, input.length()) }, null, null) > 0) { "Could not finish updating the device file." }
+          // MediaStore treats SIZE as read-only and rescans the file when the stream closes, so the
+          // update usually changes no rows; the verified fingerprint above is the real success check.
+          runCatching { resolver.update(target, ContentValues().apply { put(MediaStore.MediaColumns.SIZE, input.length()) }, null, null) }
           commitRecovery(recovery)
         } catch (cause: Throwable) {
           restoreAfterFailure(context, recovery, cause)

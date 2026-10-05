@@ -247,6 +247,15 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     outlines.marksChanged()
   }
 
+  private var highlightRect: RectF? = null
+  /** Normalised rect drawn as a search highlight, shown in every mode. */
+  fun setHighlight(json: String) {
+    highlightRect = runCatching {
+      JSONObject(json).let { RectF(it.getDouble("x").toFloat(), it.getDouble("y").toFloat(), (it.getDouble("x") + it.getDouble("width")).toFloat(), (it.getDouble("y") + it.getDouble("height")).toFloat()) }
+    }.getOrNull()
+    outlines.invalidate()
+  }
+
   private var focusKey = ""
   private var focusRect: RectF? = null
   /** Normalised rect to keep in view at a readable zoom, e.g. the line being edited. */
@@ -305,6 +314,9 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     // point of the page that was in the middle instead of re-centring the whole page.
     val middle = if (resized && zoom > 1.01f && contentWidth > 0 && contentHeight > 0 && !tx.isNaN() && !ty.isNaN())
       Pair((lastWidth / 2f - tx) / (contentWidth * zoom), (lastHeight / 2f - ty) / (contentHeight * zoom)) else null
+    // Keep the on-screen scale when zoomed, so the keyboard opening does not zoom the page a second time.
+    // A resize during the first zoom is handled by focusOn retargeting that animation.
+    if (middle != null && animator?.isRunning != true) zoom = (zoom * contentWidth / nextWidth).coerceIn(1f, 5f)
     contentWidth = nextWidth; contentHeight = nextHeight
     styleText()
     layer.measure(MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.EXACTLY))
@@ -558,6 +570,8 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       canvas.drawPath(path, tick)
     }
     private val marker = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1565FF.toInt() }
+    private val found = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFFE8A200.toInt() }
+    private val foundFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x66FFD60A }
     private val scratch = RectF()
     private val patch = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
@@ -581,6 +595,12 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
           }
           else if (box.id == selectedId) { canvas.drawRect(scratch, fill); canvas.drawRect(scratch, selected) } else canvas.drawRect(scratch, outline)
         }
+      }
+      highlightRect?.let {
+        val pad = density * 2f / zoom
+        scratch.set(it.left * w - pad, it.top * h - pad, it.right * w + pad, it.bottom * h + pad)
+        found.strokeWidth = density * 1.5f / zoom
+        canvas.drawRect(scratch, foundFill); canvas.drawRect(scratch, found)
       }
       val point = placement
       if (adding && point != null && !textBox.visible) canvas.drawCircle(point.first * w, point.second * h, 4 * density / zoom, marker)

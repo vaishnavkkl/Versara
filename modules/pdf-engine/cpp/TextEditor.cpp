@@ -43,6 +43,8 @@ static void require(bool ok, const char* message, const char* code = "PDF_EDIT_F
 struct Document {
   FPDF_DOCUMENT value;
   explicit Document(const std::string& path, const std::string& password = "") : value(FPDF_LoadDocument(path.c_str(), password.empty() ? nullptr : password.c_str())) {
+    if (value == nullptr && FPDF_GetLastError() == FPDF_ERR_PASSWORD)
+      throw Failure(password.empty() ? "PDF_PASSWORD_REQUIRED" : "PDF_PASSWORD_INCORRECT", password.empty() ? "This PDF needs its password." : "That password is not correct.");
     require(value != nullptr, "This PDF cannot be opened. Choose an unlocked, valid PDF.", "PDF_INVALID_DOCUMENT");
   }
   ~Document() { FPDF_CloseDocument(value); }
@@ -987,6 +989,16 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
       check();
       return Json{{"pageCount", FPDF_GetPageCount(doc)}, {"signatureCount", FPDF_GetSignatureCount(doc)},
                   {"securityRevision", securityRevision}, {"permissions", permissions}}.dump();
+    }
+    if (options.at("action") == "unlock_view") {
+      // A private, temporary reading copy for platform renderers that cannot take a password.
+      const auto output = childPath(options.at("outputPath"), fs::path(cacheRoot) / "pdf-unlocked", false);
+      require(output.extension() == ".pdf" && !fs::exists(output), "Could not prepare this PDF for reading.");
+      temporary = output.string() + ".partial";
+      check();
+      { Writer writer(temporary, cancelled); const bool saved = FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL | FPDF_REMOVE_SECURITY); check(); require(saved && writer.finish(), "Could not open this PDF. Check free storage."); }
+      fs::rename(temporary, output); temporary.clear();
+      return Json{{"pageCount", FPDF_GetPageCount(doc)}}.dump();
     }
     if (options.at("action") == "ocr_save") {
       require((permissions & 0x418) == 0x418, "This PDF restricts editing or extraction.", "PDF_PROTECTED");

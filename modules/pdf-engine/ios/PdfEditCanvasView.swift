@@ -215,6 +215,13 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     let x = rw * target > scroll.bounds.width * 0.92 ? rect.minX * base.width - size.width * 0.04 : rect.midX * base.width - size.width / 2
     scroll.zoom(to: CGRect(x: x, y: rect.midY * base.height - size.height * 0.38, width: size.width, height: size.height), animated: true)
   }
+  /// Normalised rect drawn as a search highlight, shown in every mode.
+  func setHighlight(_ json: String) {
+    if let item = parse(json), let x = number(item["x"]), let y = number(item["y"]), let w = number(item["width"]), let h = number(item["height"]) {
+      overlay.highlight = CGRect(x: x, y: y, width: w, height: h)
+    } else { overlay.highlight = nil }
+    overlay.setNeedsDisplay()
+  }
   func setSelectedId(_ value: Int) { overlay.selectedId = value; overlay.setNeedsDisplay() }
   /// Comma-separated ids drawn as marked for deletion.
   func setMarkedIds(_ value: String) {
@@ -271,6 +278,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     // The editor bar, keyboard and busy footer change this view's height; keep the zoom and the
     // point of the page that was in the middle instead of starting over at the whole page.
     let previousZoom = scroll.zoomScale
+    let previousWidth = page.bounds.width
     var middle: CGPoint?
     if previousZoom > 1.01, page.bounds.width > 0, page.bounds.height > 0 {
       let point = scroll.convert(CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), to: page)
@@ -284,7 +292,9 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     scroll.contentSize = page.frame.size
     center()
     if let middle {
-      scroll.setZoomScale(min(previousZoom, scroll.maximumZoomScale), animated: false)
+      // Keep the on-screen scale, so the keyboard opening does not zoom the page a second time.
+      let visual = previousWidth > 0 && page.bounds.width > 0 ? previousZoom * previousWidth / page.bounds.width : previousZoom
+      scroll.setZoomScale(min(max(visual, 1), scroll.maximumZoomScale), animated: false)
       center()
       let zoom = scroll.zoomScale
       let minX = -scroll.contentInset.left, minY = -scroll.contentInset.top
@@ -449,6 +459,7 @@ private final class EditOverlay: UIView {
   var ids: [Int] = []
   var selectedId = -1
   var markedIds: Set<Int> = []
+  var highlight: CGRect?
   var adding = false
   var textVisible = false
   var placement: CGPoint?
@@ -517,6 +528,11 @@ private final class EditOverlay: UIView {
         }
         context.stroke(frame)
       }
+    }
+    if let found = highlight {
+      let frame = CGRect(x: found.minX * w, y: found.minY * h, width: found.width * w, height: found.height * h).insetBy(dx: -2 / zoom, dy: -2 / zoom)
+      context.setFillColor(UIColor(red: 1, green: 0.84, blue: 0.04, alpha: 0.4).cgColor); context.fill(frame)
+      context.setStrokeColor(UIColor(red: 0.91, green: 0.64, blue: 0, alpha: 1).cgColor); context.setLineWidth(1.5 / zoom); context.stroke(frame)
     }
     if adding, !textVisible, let point = placement {
       let r = 4 / zoom

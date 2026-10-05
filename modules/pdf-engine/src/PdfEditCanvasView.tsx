@@ -21,6 +21,8 @@ export type PdfEditCanvasProps = ViewProps & {
   annotations?: string;
   /** JSON { x, y, width, height } in normalised page coordinates to zoom to, or an empty string. */
   focus?: string;
+  /** JSON { x, y, width, height } in normalised page coordinates drawn as a search highlight, or an empty string. */
+  highlight?: string;
   onSelectObject?: (event: { nativeEvent: { id: number } }) => void;
   onPlace?: (event: { nativeEvent: { x: number; y: number } }) => void;
   onTextChange?: (event: { nativeEvent: { text: string } }) => void;

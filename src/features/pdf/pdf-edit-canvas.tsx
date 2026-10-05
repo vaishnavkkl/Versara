@@ -12,6 +12,8 @@ export type PdfTextObject = { id: number; text: string; editable: boolean; size:
 type Props = {
   uri: string; width: number; height: number; objects: PdfTextObject[]; selectedId?: number; markedIds?: number[];
   adding: boolean; disabled: boolean; removedIds: number[]; placement: { x: number; y: number } | null;
+  /** Current search result, drawn in every mode. */
+  highlight?: PdfTextObject['bounds'];
   onSelect: (object: PdfTextObject) => void; onPlace: (point: { x: number; y: number }) => void;
 };
 
@@ -106,6 +108,7 @@ function ZoomPage({ viewport, ...props }: Props & { viewport: { width: number; h
             backgroundColor: props.markedIds?.includes(object.id) ? '#ff5a5f66' : object.id === props.selectedId ? '#1565ff22' : 'transparent',
             borderWidth: props.markedIds?.includes(object.id) ? 2 : 1,
           }]} />)}
+          {props.highlight && <View style={[styles.outline, styles.highlight, { left: props.highlight.x * width - 2, top: props.highlight.y * height - 2, width: props.highlight.width * width + 4, height: props.highlight.height * height + 4 }]} />}
           {props.placement && <View style={[styles.marker, { left: props.placement.x * width, top: props.placement.y * height }]} />}
         </Animated.View>
       </View>
@@ -115,6 +118,6 @@ function ZoomPage({ viewport, ...props }: Props & { viewport: { width: number; h
 }
 const styles = StyleSheet.create({
   viewport: { flex: 1, minHeight: 120, overflow: 'hidden' }, gestureSurface: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  page: { backgroundColor: '#fff' }, outline: { position: 'absolute', borderWidth: 0.6 }, marker: { position: 'absolute', width: 8, height: 8, borderRadius: 4, backgroundColor: '#1565ff', transform: [{ translateX: -4 }, { translateY: -4 }] },
+  page: { backgroundColor: '#fff' }, outline: { position: 'absolute', borderWidth: 0.6 }, highlight: { borderWidth: 1.5, borderColor: '#e8a200', backgroundColor: '#ffd60a66' }, marker: { position: 'absolute', width: 8, height: 8, borderRadius: 4, backgroundColor: '#1565ff', transform: [{ translateX: -4 }, { translateY: -4 }] },
   fit: { position: 'absolute', right: 10, top: 10, minWidth: 44, minHeight: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
 });

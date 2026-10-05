@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentProps } from 'react';
-import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { create } from 'zustand';
 import { useReducedMotion } from 'react-native-reanimated';
 import { ThemedText } from '@/components/themed-text';
@@ -59,7 +59,8 @@ export function DialogHost() {
   }, [dialog, reducedMotion]);
   const cancel = dialog?.actions.find(action => action.style === 'cancel') ?? (dialog?.actions.length === 1 ? dialog.actions[0] : undefined);
   return <Modal visible={!!dialog} transparent animationType={reducedMotion ? 'none' : 'fade'} statusBarTranslucent navigationBarTranslucent onRequestClose={() => { if (dialog) close(dialog, cancel); }}>
-    {content && <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.scrim }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    {/* Padding on both platforms: with edge-to-edge Android windows no longer resize, so 'height' leaves the field under the keyboard. */}
+    {content && <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.scrim }} behavior="padding">
       <ScrollView contentContainerStyle={styles.backdrop} keyboardShouldPersistTaps="handled">
         <DialogContent key={content.id} dialog={content} />
       </ScrollView>

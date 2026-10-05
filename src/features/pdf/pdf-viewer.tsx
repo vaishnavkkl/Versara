@@ -6,6 +6,7 @@ import { AppLoader } from '@/components/app-loader';
 import { router, Stack, usePathname } from 'expo-router';
 import { PdfEngine, PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';
 import { ThemedText } from '@/components/themed-text';
+import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
@@ -15,6 +16,7 @@ import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
 import { railSections, ToolRail, type RailTool } from '@/components/tool-rail';
 import { ToolSurround, ToolSurroundCloseButton } from '@/components/tool-surround';
+import { HelpButton } from '@/components/help-button';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { useToolRing } from '@/hooks/use-tool-ring';
@@ -51,7 +53,8 @@ const DEFAULT_QUICK = ['edit_text', 'ocr', 'remove_text', 'text'];
 /** Longer than the native stack's push animation. */
 const RELEASE_DELAY_MS = 500;
 const SLOW_OPEN_MS = 350;
-export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void } = {}) {
+/** `onSurroundChange` lets the screen hide its header while tools surround the page; the guide button then moves into the page row. */
+export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onSurroundChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void; onSurroundChange?: (surrounding: boolean) => void } = {}) {
   const colors = usePalette();
   const screenActive = usePdfScreenActive();
   const pathname = usePathname();
@@ -82,7 +85,13 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   const searchAvailable = !!PdfEngine?.nativeReaderSearchVersion;
   const replaceAvailable = !!PdfEngine?.nativeFindReplaceVersion;
   const focusAvailable = !!PdfEngine?.nativeReaderFocusVersion;
-  const search = usePdfSearch(document?.uri, searchQuery, screenActive && searchOpen && !openingEditor && !loading);
+  // Protected PDFs: the password lives only in memory and is handed to the native reader.
+  const [password, setPassword] = useState('');
+  const [passwordDraft, setPasswordDraft] = useState('');
+  const [locked, setLocked] = useState<{ message: string; incorrect: boolean } | null>(null);
+  const [lockedUri, setLockedUri] = useState(document?.uri);
+  if (lockedUri !== document?.uri) { setLockedUri(document?.uri); setPassword(''); setPasswordDraft(''); setLocked(null); }
+  const search = usePdfSearch(document?.uri, searchQuery, screenActive && searchOpen && !openingEditor && !loading, password);
   const searchMatch = search.query === searchQuery.trim() ? search.matches[searchIndex] : undefined;
   const [busyLabel, setBusyLabel] = useState('Preparing PDF...');
   const { width, height } = useWindowDimensions();
@@ -152,6 +161,12 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
     return () => clearTimeout(timer);
   }, [loading, screenActive]);
 
+  function unlock() {
+    if (!passwordDraft || !locked) return;
+    if (passwordDraft === password) { setLocked({ ...locked, incorrect: true }); return; }
+    Keyboard.dismiss();
+    setLocked(null); setLoading(true); setPassword(passwordDraft);
+  }
   async function chooseFile() {
     if (actionLock.current) return;
     actionLock.current = true;
@@ -298,6 +313,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   const visibleTools = useMemo(() => landscape ? tools.filter(tool => !['scroll', 'orientation'].includes(tool.id)) : tools.filter(tool => tool.id !== 'orientation'), [landscape, tools]);
   const toolboxSections = useMemo(() => railSections(visibleTools), [visibleTools]);
   const surrounding = ring.active;
+  useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
   // Keep every visible page readable, including several short image pages at the end.
   const surroundTools = useMemo(() => tools.filter(tool => !tool.soon && !['fit', 'thumbnails', 'orientation', 'scroll'].includes(tool.id)), [tools]);
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
@@ -316,7 +332,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
       <ToolRowButton label="Fit page" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={busy || loading} onPress={() => performOption('fit')} />
       <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setToolboxOpen(true); }} />
     </>}>
-    {surrounding ? <ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /> : searchAvailable && <ToolRowButton label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
+    {surrounding ? <>{onSurroundChange && <HelpButton tool="viewer" />}<ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /></> : searchAvailable && <ToolRowButton label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
     {landscape && <ToolRowButton label={thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails'} icon={{ ios: 'square.grid.2x2', android: 'view-carousel' }} selected={thumbnails} onPress={() => performOption('thumbnails')} />}
   </PdfPreviewToolbar>;
   return (
@@ -365,9 +381,26 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
               onLoad={({ nativeEvent }) => { setPageCount(nativeEvent.pageCount); setLoading(false); }}
               onPageChange={({ nativeEvent }) => { setPage(nativeEvent.page); setLoading(false); }}
               onZoomChange={() => {}}
-              onError={({ nativeEvent }) => { setError(nativeEvent.message); setLoading(false); }}
+              password={password}
+              onError={({ nativeEvent }) => {
+                setLoading(false);
+                if (nativeEvent.code === 'PDF_PASSWORD_REQUIRED' || nativeEvent.code === 'PDF_PASSWORD_INCORRECT') setLocked({ message: nativeEvent.message, incorrect: nativeEvent.code === 'PDF_PASSWORD_INCORRECT' });
+                else setError(nativeEvent.message);
+              }}
             />}
             {((busy && (!openingEditor || openingSlow)) || (loading && !error && screenActive)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
+            {locked && document && !error && <View style={[styles.locked, { backgroundColor: colors.systemBackground }]}>
+              <View style={[styles.lockCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}>
+                <UniversalIcon ios="lock.doc" android="lock" size={36} color={colors.systemBlue} />
+                <ThemedText style={styles.heading}>Password protected</ThemedText>
+                <ThemedText numberOfLines={1} style={[styles.body, { color: colors.secondaryLabel }]}>{document.name}</ThemedText>
+                <TextInput accessibilityLabel="PDF password" autoFocus secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="password" importantForAutofill="no"
+                  value={passwordDraft} onChangeText={value => { setPasswordDraft(value); if (locked.incorrect) setLocked({ ...locked, incorrect: false }); }} maxLength={128} returnKeyType="go" onSubmitEditing={unlock}
+                  placeholder="Enter password" placeholderTextColor={colors.secondaryLabel} style={[styles.passwordInput, { color: colors.label, backgroundColor: colors.accentSurface, borderColor: locked.incorrect ? colors.destructive : 'transparent' }]} />
+                <ThemedText accessibilityLiveRegion="polite" accessibilityRole={locked.incorrect ? 'alert' : undefined} style={[styles.body, { color: locked.incorrect ? colors.destructive : colors.secondaryLabel }]}>{locked.incorrect ? 'That password is not correct. Try again.' : 'Enter the password to read this PDF. It is used only on this device and is not saved.'}</ThemedText>
+                <ToolButton title="Open PDF" disabled={!passwordDraft} onPress={unlock} />
+              </View>
+            </View>}
             {(!document || error) && !busy && <View style={styles.empty}>
               <UniversalIcon ios={error ? 'exclamationmark.triangle' : 'doc.richtext'} android={error ? 'error-outline' : 'picture-as-pdf'} size={40} color={colors.systemBlue} />
               <ThemedText style={styles.heading}>{error ? 'Unable to display PDF' : 'Your documents, on your device'}</ThemedText>
@@ -403,6 +436,9 @@ const styles = StyleSheet.create({
   nativeView: { flex: 1 },
   landscapeCanvas: { padding: 8 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: s.lg, padding: s.xxl },
+  locked: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', padding: s.lg, paddingTop: s.xxl },
+  lockCard: { width: '100%', maxWidth: 420, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, padding: s.lg, gap: s.md, alignItems: 'center' },
+  passwordInput: { alignSelf: 'stretch', minHeight: 48, borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, fontSize: 16 },
   heading: { ...t.heading, textAlign: 'center' },
   body: { ...t.body, textAlign: 'center' },
   loading: { ...StyleSheet.absoluteFill, justifyContent: 'center', alignItems: 'center' },

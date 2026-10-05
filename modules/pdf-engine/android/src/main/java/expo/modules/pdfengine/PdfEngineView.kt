@@ -54,6 +54,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private val onZoomChange by EventDispatcher<Map<String, Any>>()
   private val onError by EventDispatcher<Map<String, Any>>()
   var source = ""
+  /** Opening password for a protected PDF; kept only in memory. */
+  var password = ""
   var requestedPage = 0
   var pageRevision = 0
   var vertical = true
@@ -118,6 +120,9 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private var descriptor: ParcelFileDescriptor? = null
   private var displayedBitmap: Bitmap? = null
   private var loadedSource = ""
+  private var loadedPassword = ""
+  // Worker-confined: the private decrypted reading copy of a password-protected PDF.
+  private var unlockedFile: File? = null
   private var selecting = false
   private var lastPage = -1
   private var lastPageRevision = -1
@@ -329,10 +334,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       lastVertical = vertical
       if (vertical) list.setSelection(max(0, lastPage)) else { requestedPage = max(0, lastPage); renderPage() }
     }
-    if (source != loadedSource) {
+    if (source != loadedSource || password != loadedPassword) {
       loadedSource = source
+      loadedPassword = password
       lastPage = requestedPage
-      openDocument(source)
+      openDocument(source, password)
     } else if (pageRevision != lastPageRevision) {
       lastPage = requestedPage
       if (vertical) list.setSelection(requestedPage) else renderPage()
@@ -347,7 +353,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     revealSearch()
   }
 
-  private fun openDocument(uriString: String) {
+  private fun openDocument(uriString: String, secret: String) {
     image.clearSelection()
     val version = documentVersion.incrementAndGet()
     renderVersion.incrementAndGet()
@@ -370,7 +376,17 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
           ParcelFileDescriptor.open(File(requireNotNull(uri.path)), ParcelFileDescriptor.MODE_READ_ONLY)
         } else context.contentResolver.openFileDescriptor(uri, "r")
         val fd = descriptor ?: throw java.io.FileNotFoundException()
-        renderer = PdfRenderer(fd)
+        renderer = try { PdfRenderer(fd) } catch (locked: SecurityException) {
+          closeDocument()
+          if (secret.isEmpty()) {
+            reportError(version, "PDF_PASSWORD_REQUIRED", "This PDF is password protected. Enter its password to open it.")
+            return@execute
+          }
+          val unlocked = unlock(uri, secret, version) ?: return@execute
+          unlockedFile = unlocked
+          descriptor = ParcelFileDescriptor.open(unlocked, ParcelFileDescriptor.MODE_READ_ONLY)
+          PdfRenderer(descriptor!!)
+        }
         val count = renderer!!.pageCount
         if (count == 0) {
           closeDocument()
@@ -512,6 +528,37 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     }
   }
 
+  /** Decrypts with the PDF engine into app-private cache; PdfRenderer cannot take a password before Android 15. */
+  private fun unlock(uri: Uri, secret: String, version: Int): File? {
+    val folder = File(context.cacheDir, "pdf-unlocked").apply { mkdirs() }
+    // Reading copies are deleted on close; clear any left behind by a crash.
+    folder.listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 6 * 60 * 60 * 1000L) it.delete() }
+    val id = java.util.UUID.randomUUID().toString()
+    val input = File(folder, "locked-$id.pdf")
+    val output = File(folder, "view-$id.pdf")
+    fun stale() = disposed || version != documentVersion.get()
+    try {
+      val opened = if (uri.scheme == "file") java.io.FileInputStream(File(requireNotNull(uri.path))) else context.contentResolver.openInputStream(uri)
+      (opened ?: throw java.io.FileNotFoundException()).use { source -> input.outputStream().use { target ->
+        val buffer = ByteArray(65536)
+        while (true) { if (stale()) return null; val read = source.read(buffer); if (read < 0) break; target.write(buffer, 0, read) }
+      } }
+      val request = JSONObject().put("action", "unlock_view").put("path", input.canonicalPath).put("outputPath", output.canonicalPath).put("inputPassword", secret).toString()
+      val result = JSONObject(NativeTextEditor({ stale() }, { _, _ -> }).run(request, context.cacheDir.canonicalPath, context.filesDir.canonicalPath))
+      if (result.has("error")) {
+        output.delete()
+        if (stale()) return null
+        when (result.optString("code")) {
+          "PDF_PASSWORD_INCORRECT", "PDF_PASSWORD_REQUIRED" -> reportError(version, "PDF_PASSWORD_INCORRECT", "That password is not correct. Try again.")
+          else -> reportError(version, "PDF_INVALID_DOCUMENT", result.optString("error", "This file could not be opened as a PDF."))
+        }
+        return null
+      }
+      if (stale()) { output.delete(); return null }
+      return output
+    } finally { input.delete() }
+  }
+
   private fun reportError(version: Int, code: String, message: String, render: Int? = null) {
     main.post {
       if (!disposed && version == documentVersion.get() && (render == null || render == renderVersion.get())) {
@@ -525,6 +572,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     renderer = null
     try { descriptor?.close() } catch (_: Exception) { }
     descriptor = null
+    unlockedFile?.delete()
+    unlockedFile = null
   }
 
   private fun selectText(row: ZoomImageView, page: Int, x: Float, y: Float) {
@@ -538,7 +587,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       try {
         fun stale() = disposed || version != documentVersion.get() || row.binding != binding
         if (stale()) return@execute
-        val path = if (uri.scheme == "file" && File(uri.path!!).canonicalPath.startsWith(context.cacheDir.canonicalPath + File.separator)) uri.path!! else {
+        val path = unlockedFile?.path ?: if (uri.scheme == "file" && File(uri.path!!).canonicalPath.startsWith(context.cacheDir.canonicalPath + File.separator)) uri.path!! else {
           val temp = File.createTempFile("pdf-selection-", ".pdf", context.cacheDir); copy = temp
           context.contentResolver.openInputStream(uri)!!.use { input -> temp.outputStream().use { output ->
             val buffer = ByteArray(65536)

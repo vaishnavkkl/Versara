@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { BackHandler, Keyboard, Pressable, StyleSheet, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Easing, ReduceMotion, useSharedValue } from 'react-native-reanimated';
 import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView, useBottomSheetTimingConfigs, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
@@ -9,6 +9,7 @@ import { usePalette } from '@/theme/colors';
 import type { OptionIcon } from '@/theme/editor-icons';
 import { ControlHelpBridge, useControlHelp } from './control-help';
 import { HelpButton } from './help-button';
+import { InBottomSheetContext } from './help-text-input';
 
 type Props = {
   visible: boolean;
@@ -48,19 +49,27 @@ export function AppBottomSheet({ visible, onClose, onDismissed, title, subtitle,
     if (visible && !shown.current) { shown.current = true; if (Keyboard.isVisible()) Keyboard.dismiss(); sheet.current?.present(); }
     else if (!visible && shown.current) sheet.current?.dismiss();
   }, [visible]);
-  // Close option sheets when a field behind them opens the keyboard.
-  // Form sheets use BottomSheetTextInput and handle their own keyboard positioning.
+  // Edge-to-edge windows do not resize for the keyboard, so the sheet is lifted by gorhom and kept short enough to fit above it.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   useEffect(() => {
-    if (!visible || keyboardInput) return;
-    const subscription = Keyboard.addListener('keyboardDidShow', () => {
-      const input = TextInput.State.currentlyFocusedInput();
-      if (!input) return;
-      const top = position.value;
-      input.measureInWindow((_x, y, _width, inputHeight) => {
-        if (y + inputHeight / 2 < top) onClose();
-      });
+    if (!visible) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const show = Keyboard.addListener('keyboardDidShow', event => {
+      setKeyboardHeight(event.endCoordinates.height);
+      // Close option sheets when a field behind them opens the keyboard; measure once the sheet has settled.
+      if (keyboardInput) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const input = TextInput.State.currentlyFocusedInput();
+        if (!input) return;
+        const top = position.value;
+        input.measureInWindow((_x, y, _width, inputHeight) => {
+          if (y + inputHeight / 2 < top) onClose();
+        });
+      }, 320);
     });
-    return () => subscription.remove();
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => { clearTimeout(timer); show.remove(); hide.remove(); setKeyboardHeight(0); };
   }, [visible, keyboardInput, onClose, position]);
   useEffect(() => {
     if (!visible) return;
@@ -84,13 +93,15 @@ export function AppBottomSheet({ visible, onClose, onDismissed, title, subtitle,
   </View>, [colors, title, subtitle, icon, close, help]);
 
   const dynamic = !snapPoints;
-  return <BottomSheetModal ref={sheet} animationConfigs={animationConfigs} animatedPosition={position} snapPoints={snapPoints} enableDynamicSizing={dynamic} maxDynamicContentSize={Math.max(200, height * maxHeight - insets.top)}
+  const maxContent = Math.max(200, height * maxHeight - insets.top);
+  const aboveKeyboard = height - insets.top - keyboardHeight - 8;
+  return <BottomSheetModal ref={sheet} animationConfigs={animationConfigs} animatedPosition={position} snapPoints={snapPoints} enableDynamicSizing={dynamic} maxDynamicContentSize={keyboardHeight ? Math.max(160, Math.min(maxContent, aboveKeyboard)) : maxContent}
     topInset={insets.top} backdropComponent={backdrop} handleComponent={handle} enableContentPanningGesture={false}
-    backgroundStyle={{ backgroundColor: colors.sheetBackground }} keyboardBehavior="interactive" keyboardBlurBehavior="restore" enableBlurKeyboardOnGesture android_keyboardInputMode="adjustResize"
+    backgroundStyle={{ backgroundColor: colors.sheetBackground }} keyboardBehavior="interactive" keyboardBlurBehavior="restore" enableBlurKeyboardOnGesture android_keyboardInputMode="adjustPan"
     onDismiss={() => { const user = shown.current && visible; shown.current = false; if (user) onClose(); onDismissed?.(); }}>
-    <ControlHelpBridge value={help}>{dynamic
+    <ControlHelpBridge value={help}><InBottomSheetContext.Provider value>{dynamic
       ? <BottomSheetScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 24 }, contentStyle]}>{children}</BottomSheetScrollView>
-      : <View style={[styles.fill, { paddingBottom: insets.bottom }, contentStyle]}>{children}</View>}</ControlHelpBridge>
+      : <View style={[styles.fill, { paddingBottom: insets.bottom }, contentStyle]}>{children}</View>}</InBottomSheetContext.Provider></ControlHelpBridge>
   </BottomSheetModal>;
 }
 

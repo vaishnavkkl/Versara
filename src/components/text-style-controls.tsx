@@ -1,5 +1,6 @@
 import React, { memo, useState } from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { HelpTextInput as TextInput } from './help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { EDIT_FONTS, familyById, familyOfFont, useEditFonts, type EditFontFamily, type FontStyleName } from '@/constants/edit-fonts';
 import { ThemedText } from '@/components/themed-text';

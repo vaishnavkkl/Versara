@@ -81,7 +81,7 @@ export function requestThumbnail(source: string, kind: FileKind, page = 0, revis
   const key = `${source}|${kind}|${page}|${revision}`;
   let entry = entries.get(key);
   if (entry?.cancelled) { entries.delete(key); entry = undefined; }
-  if (entry?.done && entry.uri && !new File(entry.uri).exists) { entries.delete(key); entry = undefined; }
+  if (entry?.done && (!entry.uri || !new File(entry.uri).exists)) { entries.delete(key); entry = undefined; }
   if (!entry) {
     evict();
     if (entries.size >= 128) return { promise: Promise.resolve(null), release() {} };

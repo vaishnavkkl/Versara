@@ -59,6 +59,7 @@ public class PdfEngineModule: Module {
     View(PdfEngineView.self) {
       Events("onLoad", "onPageChange", "onZoomChange", "onError")
       Prop("uri") { (view: PdfEngineView, uri: String) in view.source = uri }
+      Prop("password") { (view: PdfEngineView, value: String) in view.password = value }
       Prop("page") { (view: PdfEngineView, page: Int) in view.requestedPage = page }
       Prop("pageRevision") { (view: PdfEngineView, revision: Int) in view.pageRevision = revision }
       Prop("vertical") { (view: PdfEngineView, vertical: Bool) in view.vertical = vertical }
@@ -98,8 +99,9 @@ public class PdfEngineModule: Module {
       Prop("textBox") { (view: PdfEditCanvasView, value: String) in view.setTextBox(value) }
       Prop("annotations") { (view: PdfEditCanvasView, value: String) in view.setAnnotations(value) }
       Prop("focus") { (view: PdfEditCanvasView, value: String) in view.setFocus(value) }
+      Prop("highlight") { (view: PdfEditCanvasView, value: String) in view.setHighlight(value) }
       OnViewDestroys { (view: PdfEditCanvasView) in view.dispose() }
     }
-    Constant("nativeEditCanvasVersion") { 3 }
+    Constant("nativeEditCanvasVersion") { 4 }
   }
 }

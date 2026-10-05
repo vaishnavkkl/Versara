@@ -48,6 +48,7 @@ export default function FilePreviewScreen() {
   const [toolActivation, setToolActivation] = useState(active);
   if (toolActivation !== active) { setToolActivation(active); if (active) setOpeningTool(false); }
   const [focused, setFocused] = useState(false);
+  const [surrounding, setSurrounding] = useState(false);
   const [landscape, setLandscape] = useState(false);
   const lock = useRef(false);
   const mounted = useRef(true);
@@ -162,12 +163,12 @@ export default function FilePreviewScreen() {
   }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
-    {!focused && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<HeaderOrientationButton />}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader>}
+    {!focused && !surrounding && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<HeaderOrientationButton />}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader>}
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
-      {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} /> : <>
+      {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : <>
         {file.kind === 'image' ? <ImageViewer file={shown ?? file} revision={revision} busy={busy || openingTool} active={active} showImage={active && transitionReady && !openingTool} landscape={landscape}
-          changed={!!working} onSave={() => void saveChanges()} onDiscard={discardChanges}
+          changed={!!working} onSurroundChange={setSurrounding} onSave={() => void saveChanges()} onDiscard={discardChanges}
           onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} onClose={close} />
         : file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
           {landscape && <MediaToolbar side="left" kind={file.kind} busy={busy} landscape onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />}

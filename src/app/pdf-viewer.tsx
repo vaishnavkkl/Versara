@@ -19,10 +19,11 @@ function PdfViewerContent() {
   const colors = usePalette();
   const help = useControlHelp();
   const [focused, setFocused] = useState(false);
+  const [surrounding, setSurrounding] = useState(false);
   function back() { if (help?.close() || handleReaderBack()) return; if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
-    {!focused && <ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} trailing={<HeaderOrientationButton />}><HelpButton tool="viewer" intercept={handleReaderHelp} /></ScreenHeader>}
-    <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} />
+    {!focused && !surrounding && <ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} trailing={<HeaderOrientationButton />}><HelpButton tool="viewer" intercept={handleReaderHelp} /></ScreenHeader>}
+    <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} onSurroundChange={setSurrounding} />
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({ screen: { flex: 1 } });
