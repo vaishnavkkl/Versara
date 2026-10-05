@@ -21,7 +21,7 @@ import { MediaOptions } from '@/features/files/media-options';
 import { EDITOR_TOOL_TABS, MediaToolbar } from '@/features/files/media-toolbar';
 import { getRecentFile, touchRecentFile, type RecentFile } from '@/features/files/recent-files';
 import { formatSize } from '@/features/files/file-storage';
-import { concreteMimeType, saveToDevice } from '@/features/files/save-file';
+import { saveExistingFile } from '@/features/files/save-file';
 import { createImagePdfToolForFile, discardPdfToolSession } from '@/features/pdf/pdf-tool-session';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { usePalette } from '@/theme/colors';
@@ -44,6 +44,9 @@ export default function FilePreviewScreen() {
   const [loading, setLoading] = useState(!initialFile);
   const [options, setOptions] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [openingTool, setOpeningTool] = useState(false);
+  const [toolActivation, setToolActivation] = useState(active);
+  if (toolActivation !== active) { setToolActivation(active); if (active) setOpeningTool(false); }
   const [focused, setFocused] = useState(false);
   const [landscape, setLandscape] = useState(false);
   const lock = useRef(false);
@@ -124,9 +127,18 @@ export default function FilePreviewScreen() {
     if (!file || lock.current) return;
     setOptions(false);
     if (value === 'save' && working) { await saveChanges(); return; }
-    if (file.kind === 'image' && ADVANCED_IMAGE_TOOLS.has(value) && FileEngine?.nativeImageToolsVersion) { router.push({ pathname: '/image-tool', params: { id: file.id, tool: value } }); recordToolUse(`Image:${value}`); return; }
-    if (value === 'text' || value === 'edit_text') { router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } }); recordToolUse(`Image:${value}`); return; }
-    if (EDITOR_TOOL_TABS[value]) { router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value], tool: value } }); recordToolUse(`Image:${value}`); return; }
+    if (file.kind === 'image' && ((ADVANCED_IMAGE_TOOLS.has(value) && FileEngine?.nativeImageToolsVersion) || value === 'text' || value === 'edit_text' || EDITOR_TOOL_TABS[value])) {
+      lock.current = true; setOpeningTool(true);
+      // Release the full-resolution preview before another native image canvas opens.
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      if (mounted.current) {
+        if (value === 'text' || value === 'edit_text') router.push({ pathname: '/image-text', params: { id: file.id, mode: value === 'text' ? 'add' : 'edit' } });
+        else if (EDITOR_TOOL_TABS[value]) router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[value], tool: value } });
+        else router.push({ pathname: '/image-tool', params: { id: file.id, tool: value } });
+        recordToolUse(`Image:${value}`);
+      }
+      lock.current = false; return;
+    }
     if (value === 'info') { showDialog('File details', `${file.name}\n${formatSize(file.size)}\n${file.mimeType}`, undefined, { ios: 'info.circle', android: 'info-outline' }); return; }
     lock.current = true; setBusy(true); setError(null);
     let session: string | null = null;
@@ -138,8 +150,8 @@ export default function FilePreviewScreen() {
         if (!mounted.current) { discardPdfToolSession(session); return; }
         router.push({ pathname: '/pdf-tool', params: { session } });
       } else if (value === 'save') {
-        const saved = await withLoading('Saving to your device…', () => saveToDevice(target.uri, target.name, concreteMimeType(target)));
-        if (mounted.current) showDialog('Saved to your device', `${saved.name}\nSaved to ${saved.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
+        const saved = await saveExistingFile(target);
+        if (saved && mounted.current) showDialog('Saved', `${saved.file.name}\nSaved to ${saved.device.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
       } else if (value === 'share') {
         const Sharing = await import('expo-sharing');
         if (!(await Sharing.isAvailableAsync())) throw new Error('Sharing is not available on this device.');
@@ -154,7 +166,7 @@ export default function FilePreviewScreen() {
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} /> : <>
-        {file.kind === 'image' ? <ImageViewer file={shown ?? file} revision={revision} busy={busy} active={active} showImage={active && transitionReady} landscape={landscape}
+        {file.kind === 'image' ? <ImageViewer file={shown ?? file} revision={revision} busy={busy || openingTool} active={active} showImage={active && transitionReady && !openingTool} landscape={landscape}
           changed={!!working} onSave={() => void saveChanges()} onDiscard={discardChanges}
           onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} onClose={close} />
         : file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>

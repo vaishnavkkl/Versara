@@ -55,19 +55,19 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
     <View style={styles.screen}>
       <ToolActionRow left={<>
         <ToolRowButton label="Fit image" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={!showImage} onPress={() => setFitRevision(value => value + 1)} />
-        <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy} onPress={() => setToolboxOpen(true)} />
+        <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy} onPress={() => { ring.close(); setToolboxOpen(true); }} />
       </>} right={changed && <>
         <ToolRowButton label="Discard all changes" icon={{ ios: 'arrow.uturn.backward', android: 'undo' }} disabled={busy} onPress={onDiscard} />
         <Pressable accessibilityRole="button" accessibilityLabel="Save edited image" disabled={busy} onPress={onSave} style={({ pressed }) => [styles.save, getGradients(colors).module, { opacity: busy ? 0.4 : pressed ? 0.7 : 1 }]}>
           {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="square.and.arrow.down" android="save" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText></>}
         </Pressable>
       </>} />
-      <ToolSurround active={ring.active} naming={ring.naming} tools={ringTools} disabled={busy} onAction={perform}>
+      <ToolSurround active={ring.active && !ring.closing} naming={ring.naming} tools={ringTools} disabled={busy} onAction={perform} onClose={ring.close} onHidden={ring.finishClose}>
         {showImage ? <MediaPreview key={`${file.uri}:${revision ?? ''}:${fitRevision}`} file={file} onClose={onClose} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
       </ToolSurround>
     </View>
     {rails && <MediaToolbar kind="image" busy={busy} landscape={landscape} onToggleLandscape={onToggleLandscape} onAction={onAction} quickIds={quickIds} toolsButton={toolsButton} />}
-    <ToolboxSheet visible={toolboxOpen && active} title="All tools" subtitle={file.name} sections={sections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={perform} />
+    <ToolboxSheet visible={toolboxOpen && !ring.active && active} title="All tools" subtitle={file.name} sections={sections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={perform} />
   </View>;
 }
 

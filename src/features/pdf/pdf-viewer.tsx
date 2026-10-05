@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
@@ -14,12 +14,12 @@ import { getGradients, radius, spacing as s, typography as t } from '@/theme/das
 import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
 import { railSections, ToolRail, type RailTool } from '@/components/tool-rail';
-import { ToolSurround } from '@/components/tool-surround';
+import { ToolSurround, ToolSurroundCloseButton } from '@/components/tool-surround';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { useToolRing } from '@/hooks/use-tool-ring';
 import { PdfPageStrip } from './pdf-page-strip';
-import { saveToDevice } from '../files/save-file';
+import { saveExistingFile } from '../files/save-file';
 
 import { createPdfToolForDocument, discardPdfToolSession, implementedPdfTools, type PdfTool } from './pdf-tool-session';
 import { PDF_SECTIONS } from '@/constants/pdf-methods';
@@ -40,7 +40,7 @@ const allPdfTools = PDF_SECTIONS.filter(section => section.title !== 'Read & exp
 const editTools: RailTool[] = allPdfTools.filter(tool => implementedPdfTools.has(tool.id))
   .map(tool => ({ id: tool.id, title: tool.title, ios: tool.ios, android: tool.android, category: PDF_SECTIONS.find(section => section.tools.some(item => item.id === tool.id))?.title }));
 const fileTools: RailTool[] = [
-  { id: 'save', title: 'Save to device', ios: 'square.and.arrow.down', android: 'save' },
+  { id: 'save', title: 'Save', ios: 'square.and.arrow.down', android: 'save' },
   { id: 'share', title: 'Share', ios: 'square.and.arrow.up', android: 'share' },
   { id: 'info', title: 'Details', ios: 'info.circle', android: 'info-outline' },
   { id: 'open', title: 'Open PDF', ios: 'folder', android: 'folder-open' },
@@ -51,7 +51,6 @@ const DEFAULT_QUICK = ['edit_text', 'ocr', 'remove_text', 'text'];
 /** Longer than the native stack's push animation. */
 const RELEASE_DELAY_MS = 500;
 const SLOW_OPEN_MS = 350;
-const hideSurround: RailTool = { id: 'surround', title: 'Hide tools around page', ios: 'xmark.circle', android: 'close' };
 export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void } = {}) {
   const colors = usePalette();
   const screenActive = usePdfScreenActive();
@@ -187,8 +186,8 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
     actionLock.current = true; setBusyLabel('Saving to your device...'); setBusy(true); setActionError(null);
     try {
       const name = /\.pdf$/i.test(document.name) ? document.name : document.name + '.pdf';
-      const saved = await saveToDevice(document.uri, name, 'application/pdf');
-      if (mounted.current) showDialog('PDF saved', `${saved.name}\nSaved to ${saved.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
+      const saved = await saveExistingFile({ ...document, name, mimeType: 'application/pdf', kind: 'pdf' });
+      if (saved && mounted.current) showDialog('PDF saved', `${saved.file.name}\nSaved to ${saved.device.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
     } catch (cause) {
       if (mounted.current) setActionError((cause as Error).message || 'Could not save this PDF. Please try again.');
     } finally {
@@ -286,7 +285,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
 
   const ready = !!document && pageCount > 0 && !error;
   const ring = useToolRing(ready && !focused);
-  const tools: RailTool[] = [
+  const tools = useMemo<RailTool[]>(() => [
     ...(searchAvailable ? [{ id: 'search', title: 'Search PDF', ios: 'doc.text.magnifyingglass' as const, android: 'search' as const }] : []),
     { id: 'orientation', title: landscapeRequested ? 'Portrait' : 'Landscape', ios: 'rectangle', android: 'screen-rotation', highlighted: true, accessibilityLabel: `Switch to ${landscapeRequested ? 'portrait' : 'landscape'} view` },
     ...editTools,
@@ -295,16 +294,16 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
     { id: 'thumbnails', title: thumbnails ? 'Hide pages' : 'Pages', ios: 'square.grid.2x2', android: 'view-carousel', accessibilityLabel: thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails' },
     { id: 'focus', title: 'Focus', ios: 'arrow.up.left.and.arrow.down.right', android: 'fullscreen' },
     ...fileTools, ...upcomingTools,
-  ];
-  const visibleTools = landscape ? tools.filter(tool => !['scroll', 'orientation'].includes(tool.id)) : tools.filter(tool => tool.id !== 'orientation');
-  const toolboxSections = railSections(visibleTools);
+  ], [searchAvailable, landscapeRequested, vertical, thumbnails]);
+  const visibleTools = useMemo(() => landscape ? tools.filter(tool => !['scroll', 'orientation'].includes(tool.id)) : tools.filter(tool => tool.id !== 'orientation'), [landscape, tools]);
+  const toolboxSections = useMemo(() => railSections(visibleTools), [visibleTools]);
   const surrounding = ring.active;
-  // Tools open on the page in view, so the ring scrolls with only that page in focus (one page at a time on older builds).
-  const surroundTools = [hideSurround, ...tools.filter(tool => !tool.soon && !['fit', 'thumbnails', 'orientation', 'scroll'].includes(tool.id))];
+  // Keep every visible page readable, including several short image pages at the end.
+  const surroundTools = useMemo(() => tools.filter(tool => !tool.soon && !['fit', 'thumbnails', 'orientation', 'scroll'].includes(tool.id)), [tools]);
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
-  const strip = showStrip && !landscape ? <PdfPageStrip uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
+  const strip = showStrip && !landscape ? <PdfPageStrip enabled={!toolboxOpen} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
   // Landscape keeps the page full height: odd pages list on the left, even pages on the right.
-  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <PdfPageStrip vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
+  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <PdfPageStrip enabled={!toolboxOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /> : null;
   const controls = ready && !focused;
   // Search takes the page row's place; closing it brings the row back.
   const searching = controls && searchOpen;
@@ -315,9 +314,9 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
   const pageBar = controls && <PdfPreviewToolbar page={page + 1} count={pageCount} disabled={busy || loading} onPageChange={target => goToPage(target - 1)} orientation={toolLayout ? undefined : orientation} rotate={!landscape || !!toolLayout}
     leading={<>
       <ToolRowButton label="Fit page" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={busy || loading} onPress={() => performOption('fit')} />
-      <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); setToolboxOpen(true); }} />
+      <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setToolboxOpen(true); }} />
     </>}>
-    {searchAvailable && <ToolRowButton label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
+    {surrounding ? <ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /> : searchAvailable && <ToolRowButton label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
     {landscape && <ToolRowButton label={thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails'} icon={{ ios: 'square.grid.2x2', android: 'view-carousel' }} selected={thumbnails} onPress={() => performOption('thumbnails')} />}
   </PdfPreviewToolbar>;
   return (
@@ -349,15 +348,15 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
           <View style={[styles.body2, landscape && styles.row]}>
           {landscape && !searching && pageBar}
           {sideStrip(0)}
-          <ToolSurround active={surrounding} naming={ring.naming} tools={surroundTools} disabled={busy || loading} onAction={performOption}>
+          <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} showClose={false} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
           <View style={[styles.canvas, landscape && !surrounding && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
             {document && !error && readerMounted && <PdfEngineView
               key={document.uri}
               uri={document.uri}
               page={page}
               pageRevision={pageRequest.revision}
-              vertical={!landscape && (surrounding ? focusAvailable : vertical)}
-              {...(focusAvailable ? { focusCurrent: surrounding } : {})}
+              vertical={!landscape && (surrounding || vertical)}
+              {...(focusAvailable ? { focusCurrent: false } : {})}
               zoom={zoomRequest.value}
               zoomRevision={zoomRequest.revision}
               dark={mode === 'dark'}
@@ -380,7 +379,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange }: {
           {sideStrip(1)}
           {ready && !focused && !surrounding && <ToolRail tools={visibleTools} quickIds={quickIds} disabled={busy || loading} landscape={landscape} onAction={performOption}
             toolsButton={{ label: 'Tools', accessibilityLabel: 'Show all tools around the page', onPress: () => performOption('surround') }} />}
-          {ready && <ToolboxSheet visible={toolboxOpen && screenActive} title="All tools" subtitle={document?.name ?? 'PDF'} sections={toolboxSections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={performOption} />}
+          {ready && <ToolboxSheet visible={toolboxOpen && !surrounding && screenActive} title="All tools" subtitle={document?.name ?? 'PDF'} sections={toolboxSections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={performOption} />}
           </View>
           </View>
           {focused && <Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" onPress={() => setFocused(false)} style={[styles.restore, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} /><ThemedText style={{ color: colors.systemBlue }}>Show controls</ThemedText></Pressable>}

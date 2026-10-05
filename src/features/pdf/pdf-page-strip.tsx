@@ -17,9 +17,10 @@ const PageThumb = memo(function PageThumb({ uri, index, selected, active, onSele
   </Pressable>;
 });
 
-export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1 }) {
+export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity, enabled = true }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1; enabled?: boolean }) {
   const colors = usePalette();
-  const active = useScreenActive();
+  const screenActive = useScreenActive();
+  const active = screenActive && enabled;
   const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const list = useRef<FlatList<number>>(null);
   const select = useRef(onSelect);

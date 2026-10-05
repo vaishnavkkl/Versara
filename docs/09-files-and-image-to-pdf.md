@@ -23,7 +23,7 @@ Native job events report completed pages. Cancellation is checked between decodi
 
 Selected files are copied into a session-specific cache folder. Picker copies and session files are cleaned up without deleting originals. The converter validates its output parent, writes to a `.partial` file, then moves it into Documents/Versara PDFs only after success. Failed/cancelled jobs remove their partial output.
 
-Successful PDFs persist in app storage. The result offers Open PDF, Save/share a copy, Create another PDF, and Delete this PDF. Users should export a copy to their preferred folder before closing the result; there is no standalone in-app file browser. The system share sheet exports copies to available destinations; iOS includes Save to Files. Removing the Files module does not delete previously created PDFs.
+Save PDF creates the PDF and publishes it through the native device saver in one action. The result shows its actual saved folder and offers Open PDF, Share, Create another PDF and deletion of the app copy. Edited files and Recents keep the saved output. An unfinished publication offers Save to retry; successful results do not require a second save. The system share sheet can send additional copies to other destinations. Removing the Files module does not delete previously created PDFs.
 
 ## Verification
 

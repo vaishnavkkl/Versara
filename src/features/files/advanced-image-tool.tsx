@@ -1,3 +1,4 @@
+import { BatchImagePreview } from './batch-image-preview';
 import { useEditHistory } from '../editor/use-edit-history';
 import { useEditorDraft } from '../editor/use-editor-draft';
 import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/responsive-editor-toolbar';
@@ -31,19 +32,18 @@ import { showDialog } from '@/components/app-dialog';
 import { IMAGE_SECTIONS } from '@/constants/image-methods';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { forgetRecentUri, rememberFile, type RecentFile } from './recent-files';
-import { recordEditedFile } from './edited-files';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, shareFile, shareNamedFile, shareRenderedFile, type LocalFile } from './file-storage';
 import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { OptionSheet } from '@/components/option-sheet';
 import { FitSlotButton } from '@/components/fit-slot';
-import { askNewFileName, saveToDevice } from './save-file';
+import { askNewFileName, askSaveOptions, saveEditedOutput, type SaveMode } from './save-file';
 import { PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
 import { SHAPES, ShapePicker } from '../pdf/shape-picker';
 import { MarkupZoomButtons, useMarkupZoom } from '../pdf/markup-zoom';
 import { usePdfScreenActive } from '../pdf/use-pdf-screen-active';
 
 type Info = { width: number; height: number; size: number; mimeType: string; formats: string[]; camera: string; taken: string; hasLocation: boolean };
-type Output = { uri: string; width: number; height: number; size: number; mimeType: string; name: string };
+type Output = { uri: string; width: number; height: number; size: number; mimeType: string; name: string; location?: string; sourceUri?: string; saveMode?: SaveMode };
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const extension = (format: string) => format === 'jpeg' ? 'jpg' : format;
 const presets = [{ label: 'Square', width: 1080, height: 1080 }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1920, height: 1080 }, { label: 'Profile', width: 512, height: 512 }];
@@ -211,6 +211,8 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const [file, setFile] = useState<RecentFile | null>(null);
   const [info, setInfo] = useState<Info>();
   const [extra, setExtra] = useState<LocalFile[]>([]);
+  const [batchIndex, setBatchIndex] = useState(0);
+  const previewFile = batch && batchIndex > 0 ? extra[batchIndex - 1] ?? file : file;
   const [preview, setPreview] = useState<Output>();
   const [previewBusy, setPreviewBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -282,7 +284,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const [changed, setChanged] = useState(false);
   // Output tools make a file by design; every other tool applies to the working image, which the preview saves once.
   const exportTool = batch || ['compress', 'convert', 'metadata', 'rename', 'info'].includes(tool);
-  const saveTitle = batch ? `Save ${1 + extra.length} images` : exportTool ? 'Save copy' : 'Apply';
+  const saveTitle = batch ? `Save ${1 + extra.length} images` : exportTool ? 'Save' : 'Apply';
   // Existing icon-only settings control: 22px symbol, 12px side padding and 1px border.
   const toolbar = useResponsiveEditorToolbar([48], [...(drawing ? ['Undo', 'Redo'] : []), saveTitle]);
   const available = !!FileEngine?.nativeImageToolsVersion && (!colorAdjusting || (FileEngine?.nativeImageColorVersion ?? 0) >= (tool === 'levels' ? 2 : 1));
@@ -430,7 +432,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
           // Publish completed frames during a continuous drag. A different source,
           // compare mode or screen lifetime always invalidates the old frame.
           if (next.epoch !== previewEpoch.current || !mounted.current || locked.current) { if (image.exists) image.delete(); continue; }
-          setPreview(value as unknown as Output); setError(''); frames.current.push(image.uri);
+          setPreview({ ...value as unknown as Output, sourceUri: next.uri }); setError(''); frames.current.push(image.uri);
           while (frames.current.length > 3) { try { new File(frames.current.shift()!).delete(); } catch { /* Session cleanup retries. */ } }
         } catch (cause) {
           if (next.epoch === previewEpoch.current && mounted.current && !previewPending.current) setError((cause as Error).message);
@@ -440,18 +442,19 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     } finally { previewRunning.current = false; if (mounted.current) setPreviewBusy(false); }
   }, [directory, run]);
   useEffect(() => {
-    const scope = JSON.stringify([active, available, file?.uri, busy, picking, results.length, tool, compare, retry]);
+    const scope = JSON.stringify([active, available, previewFile?.uri, busy, picking, results.length, tool, compare, retry]);
     if (scope !== previewScope.current) {
-      previewScope.current = scope; previewEpoch.current++; previewPending.current = null;
+      previewScope.current = scope; previewEpoch.current++;
+      previewPending.current = null;
       if (previewTimer.current) clearTimeout(previewTimer.current);
       previewTimer.current = null;
       if (previewJob.current) FileEngine?.cancelImageJob(previewJob.current);
     }
-    if (!active || !available || !file || busy || picking || results.length || !request || tool === 'info') return;
-    previewPending.current = { request, uri: file.uri, epoch: previewEpoch.current };
+    if (!active || !available || !previewFile || busy || picking || results.length || !request || tool === 'info') return;
+    previewPending.current = { request, uri: previewFile.uri, epoch: previewEpoch.current };
     if (previewRunning.current || previewTimer.current) return;
     previewTimer.current = setTimeout(() => { previewTimer.current = null; void pumpPreview(); }, 40);
-  }, [active, available, file, busy, picking, results.length, request, retry, tool, compare, pumpPreview]);
+  }, [active, available, previewFile, batch, busy, picking, results.length, request, retry, tool, compare, pumpPreview]);
   useEffect(() => () => {
     previewPending.current = null;
     if (previewTimer.current) clearTimeout(previewTimer.current);
@@ -469,7 +472,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       for (const old of watermarkImage ? (logo ? [logo] : []) : extra) {
         try { const previous = new File(old.uri); if (previous.exists) previous.delete(); } catch { /* Session teardown retries. */ }
       }
-      edit(() => { if (watermarkImage) setLogo(picked[0]); else setExtra(picked); }, true);
+      edit(() => { if (watermarkImage) setLogo(picked[0]); else { setExtra(picked); setBatchIndex(0); } }, true);
     } catch (cause) { if (mounted.current) setError((cause as Error).message); }
     finally { locked.current = false; if (mounted.current) setPicking(false); else disposeImports(directory); }
   }
@@ -494,7 +497,14 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       if (drawing && !marks.length && !workspace.changed) throw new Error('Draw on the image before saving.');
       if (tool === 'blur' && snapshot.blurArea && !area) throw new Error('Select the area to blur first.');
       const ext = tool === 'rename' ? file.name.match(/\.([^.]+)$/)?.[1] ?? 'jpg' : extension(snapshot.format);
-      const chosen = await askNewFileName(`${file.name.replace(/\.[^.]+$/, '')}${tool === 'rename' ? '' : ' - ' + tool.replace(/_/g, ' ')}.${ext}`);
+      const suggested = `${file.name.replace(/\.[^.]+$/, '')}${tool === 'rename' ? '' : ' - ' + tool.replace(/_/g, ' ')}.${ext}`;
+      const origin = workspace.origin ?? file;
+      const outputMime = tool === 'rename' ? info!.mimeType : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+      const namingOnly = batch || tool === 'rename';
+      const choice = namingOnly ? null : await askSaveOptions(origin.name, outputMime, suggested);
+      // The physical output extension must match its encoder, even when Save changes format.
+      const chosen = namingOnly ? await askNewFileName(suggested) : choice?.mode === 'replace'
+        ? `${origin.name.replace(/\.[^.]+$/, '')}.${ext}` : choice?.name;
       if (!chosen || !mounted.current) return;
       setBusy(true); setError(''); cancelled.current = false;
       jobs.current.forEach((_, job) => FileEngine?.cancelImageJob(job));
@@ -512,15 +522,27 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
           if (tool === 'rename') { await new File(inputs[index].uri).copy(output); result = { uri: output.uri, width: info!.width, height: info!.height, size: output.size, mimeType: info!.mimeType, name }; }
           else result = { ...(await run({ ...options, action: 'export', uri: inputs[index].uri, outputUri: output.uri }) as unknown as Output), name };
           if (!mounted.current || cancelled.current) break;
-          await rememberFile({ ...result, name }, 'image');
-          await recordEditedFile({ ...result, kind: 'image', deviceUri: '', location: 'Versara - app storage' });
+          // Keep generated bytes available for retry if publication fails.
+          result = { ...result, saveMode: choice?.mode ?? 'new' };
           accepted = true; outputs.push(result); if (mounted.current) setResults([...outputs]);
+          const saved = await saveEditedOutput({ output: result.uri, mimeType: result.mimeType, kind: 'image', mode: result.saveMode!, origin: batch ? undefined : origin, name });
+          outputs[outputs.length - 1] = { ...result, uri: saved.file.uri, name: saved.file.name, location: saved.device.location };
+          if (mounted.current) setResults([...outputs]);
         } finally { if (!accepted) { await forgetRecentUri(output.uri); if (output.exists) output.delete(); } }
       }
       if (outputs.length === inputs.length) { await recovery.clear(); await markRecovery.clear(); await workspace.discard(); }
       if (mounted.current) setSaved(outputs.length === inputs.length);
     } catch (cause) { if (mounted.current) setError((cause as Error).message || 'Could not save this image.'); }
     finally { locked.current = false; if (mounted.current) { setBusy(false); setPreviewBusy(false); setRetry(value => value + 1); } }
+  }
+  async function saveResult(result: Output) {
+    if (locked.current || result.location) return;
+    locked.current = true; setBusy(true); setError('');
+    try {
+      const saved = await saveEditedOutput({ output: result.uri, mimeType: result.mimeType, kind: 'image', mode: result.saveMode ?? 'new', origin: batch ? undefined : workspace.origin ?? file, name: result.name });
+      if (mounted.current) setResults(current => current.map(item => item.uri === result.uri ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item));
+    } catch (cause) { if (mounted.current) setError((cause as Error).message); }
+    finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
   const strip = (children: ReactNode) => <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.strip}>{children}</ScrollView>;
   const panel = <View style={docked ? styles.dockPanel : styles.panel}>
@@ -619,10 +641,10 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     <ToolActionRow
       left={<><FitSlotButton /><HeaderHistoryButtons disabled={busy || !!curveDraft || !recovery.ready || !!results.length} canUndo={drawing ? history.canUndo : optionHistory.canUndo} canRedo={drawing ? history.canRedo : optionHistory.canRedo} onUndo={() => edit(drawing ? () => { history.undo(); } : optionHistory.undo)} onRedo={() => edit(drawing ? () => { history.redo(); } : optionHistory.redo)} /></>}
       right={<ImageWorkspaceTools id={id} current={tool} disabled={busy || picking || !!curveDraft || !file || !info || !!results.length} onApply={applyToWorkspace} />} />
-    {!available ? <View style={styles.empty}><ThemedText>Install a new development build to use these native image tools.</ThemedText></View> : !file || !info ? <View style={styles.empty}>{error ? <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Try again" secondary onPress={()=>{initialized.current=false;setError('');setRetry(value=>value+1);}} /></> : <AppLoader />}</View> : results.length ? <ScrollView contentContainerStyle={styles.panel}><ThemedText style={styles.heading}>{busy ? progress : `${results.length} image${results.length===1?'':'s'} saved`}</ThemedText>{results.map(result=><View key={result.uri} style={[styles.result,{backgroundColor:colors.catalogSurface}]}><ThemedText>{result.name}</ThemedText><ThemedText>{result.width} x {result.height} - {formatSize(result.size)}</ThemedText><ToolButton title="Open image" disabled={busy} onPress={()=>void rememberFile(result,'image').then(value=>router.replace({pathname:'/file-preview',params:{id:value.id}}))} /><ToolButton title="Save to device" secondary disabled={busy} onPress={()=>void saveToDevice(result.uri,result.name,result.mimeType).then(async device=>{await recordEditedFile({...result,kind:'image',deviceUri:device.uri,location:device.location});showDialog('Saved',device.location);}).catch(cause=>setError((cause as Error).message))} /><ToolButton title="Share" secondary disabled={busy} onPress={()=>void shareFile(result).catch(cause=>setError((cause as Error).message))} /></View>)}{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}{busy ? <ToolButton title="Cancel remaining images" secondary onPress={cancel} /> : <ToolButton title="Return to tool" secondary onPress={()=>setResults([])} />}</ScrollView> : tool === 'info' ? <ScrollView contentContainerStyle={styles.panel}>{Object.entries({Name:file.name,Dimensions:`${info.width} x ${info.height} px`,Size:formatSize(info.size),Format:info.mimeType,Camera:info.camera||'Not recorded',Taken:info.taken||'Not recorded',Location:info.hasLocation?'GPS metadata present':'Not recorded'}).map(([key,value])=><View key={key} style={styles.field}><ThemedText style={styles.label}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView> : <View style={[styles.grow, landscape && styles.landscape]}>
+    {!available ? <View style={styles.empty}><ThemedText>Install a new development build to use these native image tools.</ThemedText></View> : !file || !info ? <View style={styles.empty}>{error ? <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Try again" secondary onPress={()=>{initialized.current=false;setError('');setRetry(value=>value+1);}} /></> : <AppLoader />}</View> : results.length ? <ScrollView contentContainerStyle={styles.panel}><ThemedText style={styles.heading}>{busy ? progress : results.some(result => !result.location) ? 'Your images are ready' : `${results.length} image${results.length===1?'':'s'} saved`}</ThemedText>{results.map(result=><View key={result.uri} style={[styles.result,{backgroundColor:colors.catalogSurface}]}><ThemedText>{result.name}</ThemedText><ThemedText>{result.width} x {result.height} - {formatSize(result.size)}</ThemedText><ToolButton title="Open image" disabled={busy} onPress={()=>void rememberFile(result,'image').then(value=>router.replace({pathname:'/file-preview',params:{id:value.id}}))} />{result.location ? <ThemedText selectable>Saved to {result.location}</ThemedText> : <ToolButton title="Save" secondary disabled={busy} onPress={()=>void saveResult(result)} />}<ToolButton title="Share" secondary disabled={busy} onPress={()=>void shareFile(result).catch(cause=>setError((cause as Error).message))} /></View>)}{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}{busy ? <ToolButton title="Cancel remaining images" secondary onPress={cancel} /> : <ToolButton title="Return to tool" secondary onPress={()=>setResults([])} />}</ScrollView> : tool === 'info' ? <ScrollView contentContainerStyle={styles.panel}>{Object.entries({Name:file.name,Dimensions:`${info.width} x ${info.height} px`,Size:formatSize(info.size),Format:info.mimeType,Camera:info.camera||'Not recorded',Taken:info.taken||'Not recorded',Location:info.hasLocation?'GPS metadata present':'Not recorded'}).map(([key,value])=><View key={key} style={styles.field}><ThemedText style={styles.label}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView> : <View style={[styles.grow, landscape && styles.landscape]}>
       <View style={styles.grow}>
-      <View style={styles.previewHeader}><ThemedText numberOfLines={1} style={[styles.grow,styles.note]}>{info.width} x {info.height} - {formatSize(info.size)}</ThemedText>{!drawing && tool !== 'rename' && <ToolRowButton label={compare ? 'Show changes' : 'Compare with original'} icon={{ ios: 'square.split.2x1', android: 'compare' }} selected={compare} onPress={() => setCompare(value => !value)} />}{drawActions}{settingsAction}</View>
-      {(drawing || selectingArea) && preview && PdfMarkupView ? <PdfPreviewStage hint={selectingArea?'Drag a rectangle around the area to blur.':tool==='redact'?'Drag a solid cover over private information.':'Draw with one finger. Zoom and pan with two.'} onFit={()=>setFit(value=>value+1)}>{active && <PdfMarkupView key={fit} style={styles.grow} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify((selectingArea ? (area ? [area] : []) : marks).map(mark=>({...mark,kind:mark.kind==='redact'?'polygon':mark.kind})))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event=>selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : selectingArea||tool==='redact'||shape!=='pen'?(shape==='line'?'line':'polygon'):'draw'} shapePath={JSON.stringify(SHAPES.find(item=>item.id===(selectingArea||tool==='redact'?'rectangle':shape))?.points??[])} fillColor={selectingArea?'':tool==='redact'?'#000000':fill===null?'':hexColor(fill)} inkColor={tool==='redact'?'#000000':hexColor(ink)} inkWidth={inkWidth} disabled={busy||!markRecovery.ready||(!selecting&&!erasing&&marks.length>=300)} onMark={({nativeEvent})=>{try {const mark=JSON.parse(nativeEvent.mark) as PdfMarkChange;if('deleted' in mark){edit(()=>history.commit(mark));return;}if(selectingArea){edit(()=>{setArea(mark);setSelectingArea(false);});return;}if(marks.filter(item=>item.id!==mark.id).reduce((total,item)=>total+item.points.length,0)+mark.points.length>20000) throw new Error('Save before adding more strokes.');edit(()=>{history.commit({...mark,page:1,kind:tool==='redact'?'redact':mark.kind});});} catch(cause){setError((cause as Error).message);}}} />}{active && !selectingArea && (selecting || !!resizeTarget) && <MarkupZoomButtons showZoom={selecting} zoom={markupZoom.zoom} onZoomBy={markupZoom.zoomBy} disabled={busy} selection={resizeTarget?.points} onResize={points => { const id = resizeTarget?.id; if (id) edit(() => history.update(id, { points })); }} />}</PdfPreviewStage> : preview ? <PdfPagePreview image={preview} active={active} preserveViewport hint={previewBusy?'Updating preview...':compare||issue?'Original image preview':'Preview - pinch to zoom, drag to move.'} /> : <View style={styles.empty}>{previewBusy ? <AppLoader /> : <ThemedText>{tool==='rename'?'Choose Save copy to enter a new name.':'Preparing image preview...'}</ThemedText>}</View>}
+      <View style={styles.previewHeader}><ThemedText numberOfLines={1} style={[styles.grow,styles.note]}>{batch ? 'Settings apply to all selected images' : `${info.width} x ${info.height} - ${formatSize(info.size)}`}</ThemedText>{!drawing && tool !== 'rename' && <ToolRowButton label={compare ? 'Show changes' : 'Compare with original'} icon={{ ios: 'square.split.2x1', android: 'compare' }} selected={compare} onPress={() => setCompare(value => !value)} />}{drawActions}{settingsAction}</View>
+      {batch ? <BatchImagePreview image={preview?.sourceUri === previewFile?.uri ? preview : undefined} name={previewFile?.name ?? file.name} index={batchIndex} count={1 + extra.length} active={active} disabled={busy || picking} updating={previewBusy} onSelect={setBatchIndex} /> : (drawing || selectingArea) && preview && PdfMarkupView ? <PdfPreviewStage hint={selectingArea?'Drag a rectangle around the area to blur.':tool==='redact'?'Drag a solid cover over private information.':'Draw with one finger. Zoom and pan with two.'} onFit={()=>setFit(value=>value+1)}>{active && <PdfMarkupView key={fit} style={styles.grow} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify((selectingArea ? (area ? [area] : []) : marks).map(mark=>({...mark,kind:mark.kind==='redact'?'polygon':mark.kind})))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event=>selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : selectingArea||tool==='redact'||shape!=='pen'?(shape==='line'?'line':'polygon'):'draw'} shapePath={JSON.stringify(SHAPES.find(item=>item.id===(selectingArea||tool==='redact'?'rectangle':shape))?.points??[])} fillColor={selectingArea?'':tool==='redact'?'#000000':fill===null?'':hexColor(fill)} inkColor={tool==='redact'?'#000000':hexColor(ink)} inkWidth={inkWidth} disabled={busy||!markRecovery.ready||(!selecting&&!erasing&&marks.length>=300)} onMark={({nativeEvent})=>{try {const mark=JSON.parse(nativeEvent.mark) as PdfMarkChange;if('deleted' in mark){edit(()=>history.commit(mark));return;}if(selectingArea){edit(()=>{setArea(mark);setSelectingArea(false);});return;}if(marks.filter(item=>item.id!==mark.id).reduce((total,item)=>total+item.points.length,0)+mark.points.length>20000) throw new Error('Save before adding more strokes.');edit(()=>{history.commit({...mark,page:1,kind:tool==='redact'?'redact':mark.kind});});} catch(cause){setError((cause as Error).message);}}} />}{active && !selectingArea && (selecting || !!resizeTarget) && <MarkupZoomButtons showZoom={selecting} zoom={markupZoom.zoom} onZoomBy={markupZoom.zoomBy} disabled={busy} selection={resizeTarget?.points} onResize={points => { const id = resizeTarget?.id; if (id) edit(() => history.update(id, { points })); }} />}</PdfPreviewStage> : preview ? <PdfPagePreview image={preview} active={active} preserveViewport hint={previewBusy?'Updating preview...':compare||issue?'Original image preview':'Preview - pinch to zoom, drag to move.'} /> : <View style={styles.empty}>{previewBusy ? <AppLoader /> : <ThemedText>{tool==='rename'?'Choose Save to enter a new name.':'Preparing image preview...'}</ThemedText>}</View>}
       {!!(issue||error) && <View style={styles.error}><ThemedText accessibilityRole="alert">{issue||error}</ThemedText>{!issue && <ToolButton title="Retry preview" secondary disabled={busy} onPress={()=>setRetry(value=>value+1)} />}</View>}
       </View>
       <View style={landscape ? styles.side : undefined}>

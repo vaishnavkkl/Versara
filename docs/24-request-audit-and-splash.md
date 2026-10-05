@@ -1,5 +1,7 @@
 # Editor request audit and splash refresh
 
+Startup update: the splash implementation below is historical. See [Startup, PDF image placement and batch previews](48-startup-image-placement-and-batch-preview.md). The native logo now replaces the blank splash, and the React introduction and two-second hold are no longer mounted.
+
 This is a source audit of the previous editor request. Implementation exists for the items below; device behavior and performance are not certified by source inspection or static checks.
 
 | Request | Implementation and limits |

@@ -1,4 +1,4 @@
-import { rememberPdfResults, forgetRecentUri } from '../files/recent-files';
+import { forgetRecentUri } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
@@ -14,7 +14,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
-import { savePdfResult } from '../files/save-file';
+import { saveEditedOutput, savePdfResult } from '../files/save-file';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfScreen } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
@@ -27,7 +27,7 @@ import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
-type Result = PdfResult & { name: string; part: number };
+type Result = PdfResult & { name: string; part: number; location?: string };
 const jobId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export function OrganizePdf({ operation, initialSelection }: { operation: 'merge' | 'split'; initialSelection?: InitialSelection }) {
@@ -122,7 +122,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   usePublishHeaderShare({ active: !!(results.length || sources.length), disabled: busy || !shareTarget,
     label: results.length > 1 ? 'Share each PDF from its card' : results.length ? 'Share new PDF' : shareTarget ? 'Share original PDF' : 'Share is available after merging',
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
-    save: { disabled: busy || (results.length ? results.length > 1 : !canRun), label: results.length > 1 ? 'Save each PDF from its card' : results.length ? 'Save new PDF to device' : merge ? 'Merge PDFs' : 'Split PDF',
+    save: { disabled: busy || (results.length ? results.length > 1 || !!results[0].location : !canRun), label: results.length && results.every(result => result.location) ? 'PDFs saved' : 'Save',
       onSave: () => results.length === 1 ? saveResult(results[0]) : results.length ? undefined : process() } });
 
   async function process() {
@@ -136,9 +136,12 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: sources.map(source => source.uri), outputUris: names.map(filename => new File(savedPdfDirectory(), filename).uri), ranges: merge ? [] : ranges });
       if (mounted.current) setResults(outputs.map((output, index) => ({ ...output, name: names[index], part: index + 1 })));
+      for (let index = 0; index < outputs.length; index++) {
+        setPhase(`Saving ${index + 1} of ${outputs.length}…`);
+        const saved = await saveEditedOutput({ output: outputs[index].uri, name: names[index], mimeType: 'application/pdf', kind: 'pdf', mode: 'new' });
+        if (mounted.current) setResults(current => current.map(item => item.part === index + 1 ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item));
+      }
       toast(merge ? 'Merged PDF saved' : `Split into ${outputs.length} PDFs`);
-      // History failure must not discard an otherwise successful native export.
-      void rememberPdfResults(outputs.map((output, index) => ({ ...output, name: names[index] }))).catch(() => {});
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -147,7 +150,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     locked.current = true; setBusy(true); setError('');
     try {
       const saved = await savePdfResult(result);
-      if (saved && mounted.current) setResults(current => current.map(item => item.uri === result.uri ? { ...item, uri: saved.file.uri, name: saved.file.name } : item));
+      if (saved && mounted.current) setResults(current => current.map(item => item.uri === result.uri ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item));
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -165,11 +168,11 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   if (previewSource) return <PdfDocumentPreview uri={previewSource.uri} count={previewSource.pageCount} onClose={() => setPreviewSource(null)} />;
 
   if (results.length) return <View style={styles.screen}>
-    <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Save the PDFs you want to keep to your device, or share them.</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
+    <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{results.every(result => result.location) ? `Saved to ${results[0].location}` : 'Saving your PDFs. Any unfinished save can be retried below.'}</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
       <ThemedText numberOfLines={2} style={styles.label}>{merge ? 'Merged document' : `Part ${item.part}`}</ThemedText>
       <ThemedText numberOfLines={2} style={styles.body}>{item.name}</ThemedText>
       <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{item.pageCount} pages · {formatSize(item.size)}</ThemedText>
-      <View style={styles.actions}><View style={styles.grow}><ToolButton title="Open PDF" onPress={() => openPdfScreen(item)} disabled={busy} /></View><View style={styles.grow}><ToolButton title="Save to device" onPress={() => saveResult(item)} disabled={busy} /></View><View style={styles.grow}><ToolButton title="Share" secondary onPress={() => share(item)} disabled={busy} /></View></View>
+      <View style={styles.actions}><View style={styles.grow}><ToolButton title="Open PDF" onPress={() => openPdfScreen(item)} disabled={busy} /></View>{item.location ? <ThemedText selectable style={styles.grow}>Saved to {item.location}</ThemedText> : <View style={styles.grow}><ToolButton title="Save" onPress={() => saveResult(item)} disabled={busy} /></View>}<View style={styles.grow}><ToolButton title="Share" secondary onPress={() => share(item)} disabled={busy} /></View></View>
       <ToolButton title="Delete output" secondary disabled={busy} onPress={() => { try { new File(item.uri).delete(); void forgetRecentUri(item.uri).catch(() => {}); setResults(current => current.filter(file => file.uri !== item.uri)); } catch { setError('Could not delete this PDF. Try again.'); } }} />
     </View>} />
     <View style={styles.footer}>{busy && <AppLoader />}<ToolButton title={merge ? 'Merge more PDFs' : 'Split another PDF'} secondary disabled={busy} onPress={() => { setResults([]); setError(''); }} /></View>

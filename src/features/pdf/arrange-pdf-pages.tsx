@@ -1,7 +1,6 @@
 import { EditorOption } from '@/components/editor-option';
 import { PdfPreviewFooter } from './pdf-preview';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
-import { rememberPdfResults } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
@@ -26,7 +25,7 @@ import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
 import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
-type Output = PdfResult & { name: string };
+type Output = PdfResult & { name: string; location?: string };
 type Page = { original: number; rotation: number };
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const originalPages = (count: number): Page[] => Array.from({ length: count }, (_, index) => ({ original: index + 1, rotation: 0 }));
@@ -127,7 +126,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   const changed = pages.filter((page, index) => reorder ? page.original !== index + 1 : page.rotation !== 0).length;
   usePublishHeaderShare({ active: !!shareTarget, disabled: busy, label: result ? 'Share new PDF' : 'Share original PDF',
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
-    save: { disabled: busy || (!result && (!available || !changed)), label: result ? 'Save new PDF to device' : reorder ? 'Save new page order' : 'Save rotated PDF',
+    save: { disabled: busy || !!result?.location || (!result && (!available || !changed)), label: result?.location ? 'PDF saved' : reorder ? 'Save new page order' : 'Save rotated PDF',
       onSave: () => result ? saveResult() : save() } });
   async function save() {
     if (!source || !PdfEngine || locked.current || !changed) return;
@@ -138,9 +137,9 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: [source.uri], outputUris: [new File(savedPdfDirectory(), filename).uri], ranges: [], pages: reorder ? pages.map(page => page.original) : [], rotations: reorder ? [] : pages.filter(page => page.rotation !== 0).map(page => ({ page: page.original, degrees: page.rotation })) });
       if (mounted.current) setResult({ ...outputs[0], name: filename });
-      toast('PDF saved');
-      // History failure must not discard an otherwise successful native export.
-      void rememberPdfResults([{ ...outputs[0], name: filename }]).catch(() => {});
+      const saved = await savePdfResult({ ...outputs[0], name: filename }, initialSelection?.origin, initialSelection?.origin ? undefined : { mode: 'new', name: filename });
+      if (saved && mounted.current) setResult({ ...outputs[0], uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
+      if (saved) toast('PDF saved');
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -149,7 +148,7 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     locked.current = true; setBusy(true); setError('');
     try {
       const saved = await savePdfResult(result, initialSelection?.origin);
-      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name });
+      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -166,10 +165,10 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
-    <ThemedText style={styles.body}>{reorder ? 'Your new page order is saved.' : 'Your page rotations are saved.'} All {result.pageCount} pages are included. Your original is unchanged.</ThemedText>
+    <ThemedText style={styles.body}>All {result.pageCount} pages are included.{!result.location ? ' Save to finish.' : ''}</ThemedText>
     <ThemedText numberOfLines={3} style={[styles.body, { color: colors.secondaryLabel }]}>{result.name}</ThemedText>
     <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(result, initialSelection?.returnRoute)} />
-    <ToolButton title="Save to device" disabled={busy} onPress={saveResult} />
+    {result.location ? <ThemedText>Saved to {result.location}</ThemedText> : <ToolButton title="Save" disabled={busy} onPress={saveResult} />}
     <ToolButton title="Share" secondary disabled={busy} onPress={exportResult} />
     <ToolButton title="Edit another PDF" secondary disabled={busy} onPress={() => { setResult(null); setSource(null); setPages([]); setError(''); }} />
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}

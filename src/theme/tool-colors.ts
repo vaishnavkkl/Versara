@@ -20,7 +20,7 @@ const families = [
   { ids: ['contrast', 'saturation', 'filters', 'sharpen', 'blur', 'draw', 'shapes'], light: '#B45071', dark: '#F4A5C0' },
   { ids: ['compress', 'batch_compress', 'batch', 'merge', 'duplicate', 'insert', 'canvas'], light: '#247E8D', dark: '#89D5DE' },
   { ids: ['redact', 'remove_text', 'delete', 'remove', 'protect', 'metadata'], light: '#AE503F', dark: '#F3AB98' },
-  { ids: ['export', 'watermark', 'sign', 'convert', 'pdf', 'save', 'share'], light: '#6260AC', dark: '#BDBBF3' },
+  { ids: ['export', 'watermark', 'sign', 'add_image', 'convert', 'pdf', 'save', 'share'], light: '#6260AC', dark: '#BDBBF3' },
 ];
 export function toolColors(id: string, colors: Palette) {
   const dark = colors.systemBackground === '#000000';

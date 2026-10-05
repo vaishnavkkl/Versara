@@ -6,7 +6,6 @@ import { useAppearance, usePalette } from '@/theme/colors';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { FileAccessPrompt } from '@/components/file-access-prompt';
-import { AnimatedSplash } from '@/components/animated-splash';
 import { DialogHost } from '@/components/app-dialog';
 import { LoadingHost } from '@/components/app-loader';
 import { recoverPendingAppSaves } from '@/features/files/save-recovery';
@@ -16,7 +15,7 @@ import { SaveRecoveryNotice } from '@/features/files/save-recovery-notice';
 export const unstable_settings = { initialRouteName: '(tabs)' };
 
 void SplashScreen.preventAutoHideAsync();
-SplashScreen.setOptions({ fade: false, duration: 0 });
+SplashScreen.setOptions({ fade: true, duration: 180 });
 
 export default function RootLayout() {
   const colors = usePalette();
@@ -24,24 +23,25 @@ export default function RootLayout() {
   const hydrated = useAppearance(state => state.hydrated);
   const hydrate = useAppearance(state => state.hydrate);
   const [splashDone, setSplashDone] = useState(false);
-  const [splashReady, setSplashReady] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const [recovering, setRecovering] = useState(false);
   const revealingSplash = useRef(false);
   async function revealSplash() {
     if (revealingSplash.current) return;
     revealingSplash.current = true;
-    try { await SplashScreen.hideAsync(); } finally { setSplashReady(true); }
+    try { await SplashScreen.hideAsync(); }
+    catch (cause) { console.warn('Could not hide the native splash.', cause); }
+    finally { setSplashDone(true); }
   }
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !splashDone) return;
     let active = true;
     void recoverPendingAppSaves().catch(cause => {
       if (active) setRecoveryError(cause instanceof Error ? cause.message : 'An interrupted save needs recovery. Its original copy has been kept.');
     });
     return () => { active = false; };
-  }, [hydrated]);
+  }, [hydrated, splashDone]);
   async function retryRecovery() {
     if (recovering) return;
     setRecovering(true);
@@ -82,7 +82,6 @@ export default function RootLayout() {
         <DialogHost />
         <LoadingHost />
         {splashDone && !!recoveryError && <SaveRecoveryNotice message={recoveryError} busy={recovering} onRetry={() => { void retryRecovery(); }} onDismiss={() => setRecoveryError('')} />}
-        {!splashDone && <AnimatedSplash ready={splashReady} onDone={() => setSplashDone(true)} />}
       </ThemeProvider>
     </GestureHandlerRootView>
   );

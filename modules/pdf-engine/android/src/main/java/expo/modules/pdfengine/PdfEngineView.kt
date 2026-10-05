@@ -122,6 +122,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private var lastPage = -1
   private var lastPageRevision = -1
   private var lastVertical = true
+  private var lastFocusCurrent = false
   private var pageCount = 0
   private val ratios = mutableMapOf<Int, Double>()
   // Accessed only on main. Never recycle an evicted bitmap while RenderThread may use it.
@@ -179,6 +180,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       applyRowFocus(row, false)
       row.searchRects = if (position == searchPage) searchRects else emptyList()
       val binding = "${documentVersion.get()}:$position:$width"
+      val rowHeight = pageRowHeight(position)
+      if (row.layoutParams?.height != rowHeight) row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight)
       if (row.binding == binding) return row
       row.clearSelection()
       row.onRequestText = { px, py -> selectText(row, position, px, py) }
@@ -186,7 +189,6 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       row.allowScroll = true
       row.setImageDrawable(null)
       row.setZoom(1f)
-      row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, max(1, (width * (ratios[position] ?: 1.414)).toInt()).coerceAtMost(100000))
       row.contentDescription = "PDF page ${position + 1} of $pageCount. Pinch to zoom."
       row.detailed = false
       row.onZoomChanged = { zoom ->
@@ -197,6 +199,13 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       if (cached != null) row.setImageBitmap(cached) else renderRow(row, position)
       return row
     }
+  }
+
+  private fun pageRowHeight(index: Int): Int {
+    val pageHeight = max(1, (width * (ratios[index] ?: 1.414)).toInt()).coerceAtMost(100000)
+    // Short pages need their own scroll space in focus mode. Otherwise several
+    // trailing pages fit at once and the final page cannot reach the midpoint.
+    return if (focusCurrent) max(pageHeight, max(1, height)) else pageHeight
   }
 
   init {
@@ -221,11 +230,23 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         if (state == AbsListView.OnScrollListener.SCROLL_STATE_IDLE) main.postDelayed(hideBadge, 900) else showBadge()
       }
       override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
-        if (!vertical || visible <= 0) return
+        if (!vertical || visible <= 0 || total <= 0) return
         updateScrollThumb(true)
-        // The page filling the middle of the screen is the one being read.
-        val top = view?.getChildAt(0)
-        val current = if (top != null && top.bottom < (view.height / 2) && first + 1 < total) first + 1 else first
+        val viewport = view ?: return
+        // A short final page cannot reach the viewport midpoint. At either end
+        // focus the boundary page; elsewhere find the nearest visible page.
+        var current = first
+        if (!viewport.canScrollVertically(-1)) current = 0
+        else if (!viewport.canScrollVertically(1)) current = total - 1
+        else {
+          val middle = viewport.height / 2
+          var nearest = Int.MAX_VALUE
+          for (index in 0 until viewport.childCount) {
+            val row = viewport.getChildAt(index)
+            val distance = max(0, max(row.top - middle, middle - row.bottom))
+            if (distance < nearest) { nearest = distance; current = first + index }
+          }
+        }
         if (current != lastPage) {
           lastPage = current
           updateFocus()
@@ -299,6 +320,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     updateScrollThumb()
     list.visibility = if (vertical) View.VISIBLE else View.GONE
     image.visibility = if (vertical) View.GONE else View.VISIBLE
+    if (focusCurrent != lastFocusCurrent) {
+      lastFocusCurrent = focusCurrent
+      pages.notifyDataSetChanged()
+      if (vertical && pageCount > 0) list.setSelection(max(0, lastPage))
+    }
     if (vertical != lastVertical) {
       lastVertical = vertical
       if (vertical) list.setSelection(max(0, lastPage)) else { requestedPage = max(0, lastPage); renderPage() }
@@ -460,7 +486,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
           if (disposed || version != documentVersion.get() || ticket != row.ticket.get()) result.recycle()
           else {
             ratios[index] = ratio
-            val rowHeight = max(1, (targetWidth * ratio).toInt()).coerceAtMost(100000)
+            val rowHeight = pageRowHeight(index)
             if (row.layoutParams.height != rowHeight) { row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight) }
             if (detail > 1f) {
               row.detailed = true
@@ -471,7 +497,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
               row.setImageBitmap(result)
               row.setZoom(1f)
             }
-            if (index == list.firstVisiblePosition) onPageChange(mapOf("page" to index, "pageCount" to pageCount))
+            // Rendering an adjacent row must not overwrite the focused page.
+            if (index == lastPage) onPageChange(mapOf("page" to index, "pageCount" to pageCount))
             if (index == searchPage) revealSearch()
           }
         }

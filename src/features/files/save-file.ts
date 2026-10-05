@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { promptFileName, showDialog } from '@/components/app-dialog';
 import { withLoading } from '@/components/app-loader';
 import { toast } from '@/components/toast';
@@ -12,7 +12,11 @@ import { notifyLibraryChanged } from './library-revision';
 
 export type SaveMode = 'replace' | 'new';
 type Origin = { uri: string; name: string };
-const extensionOf = (value: string) => decodeURIComponent(value).match(/\.[a-zA-Z0-9]{1,8}$/)?.[0].toLowerCase() ?? '';
+const extensionOf = (value: string) => {
+  let decoded = value;
+  try { decoded = decodeURIComponent(value); } catch { /* A file name can contain a literal percent sign. */ }
+  return decoded.match(/\.[a-zA-Z0-9]{1,8}$/)?.[0].toLowerCase() ?? '';
+};
 const sameExtension = (a: string, b: string) => a === b || (/^\.jpe?g$/.test(a) && /^\.jpe?g$/.test(b));
 
 export function deviceFolderLabel(mimeType: string) {
@@ -77,15 +81,33 @@ export async function saveToDevice(uri: string, name: string, mimeType: string, 
   return FileEngine.saveToDevice(uri, name, mimeType, replaceUri);
 }
 
+/** Existing files use the same Save / Save as new choices as edited files. */
+export async function saveExistingFile(file: { uri: string; name: string; mimeType: string; kind: FileKind }) {
+  const mimeType = concreteMimeType(file);
+  const choice = await askSaveOptions(file.name, mimeType, newFileName(file.name, 'copy'));
+  if (!choice) return null;
+  return withLoading('Saving…', async () => {
+    let output = file.uri;
+    if (choice.mode === 'new') {
+      const folder = new Directory(Paths.document, 'Versara Copies');
+      folder.create({ intermediates: true, idempotent: true });
+      const copy = new File(folder, `${Date.now()}-${Math.random().toString(36).slice(2)}${extensionOf(choice.name)}`);
+      await new File(file.uri).copy(copy);
+      output = copy.uri;
+    }
+    return saveEditedOutput({ output, mimeType, kind: file.kind, origin: file, mode: choice.mode, name: choice.name });
+  });
+}
+
 /** Save button for PDF tool results. Asks Save / Save as new when the tool was opened from a Versara file. */
-export async function savePdfResult(result: { uri: string; name: string }, origin?: Origin | null) {
-  const mode: SaveMode | null = origin ? await askSaveMode(origin.name, 'application/pdf') : 'new';
+export async function savePdfResult(result: { uri: string; name: string }, origin?: Origin | null, choice?: { mode: SaveMode; name: string }, notify = true) {
+  const mode: SaveMode | null = choice?.mode ?? (origin ? await askSaveMode(origin.name, 'application/pdf') : 'new');
   if (!mode) return null;
-  const name = mode === 'new' ? await askNewFileName(result.name) : result.name;
+  const name = choice?.name ?? (mode === 'new' ? await askNewFileName(result.name) : origin?.name ?? result.name);
   if (name === null) return null;
   const saved = await withLoading('Saving to your device…', () => saveEditedOutput({ output: result.uri, mimeType: 'application/pdf', kind: 'pdf', mode, origin, name }));
-  toast(`Saved to ${saved.device.location}`);
-  showDialog('PDF saved', `${saved.file.name}\nSaved to ${saved.device.location}\n\nYou can also find it in Edited files on the home screen.`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
+  if (notify) toast(`Saved to ${saved.device.location}`);
+  if (notify) showDialog('PDF saved', `${saved.file.name}\nSaved to ${saved.device.location}\n\nYou can also find it in Edited files on the home screen.`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
   return saved;
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { BackHandler, Keyboard, Pressable, StyleSheet, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
-import { useSharedValue } from 'react-native-reanimated';
-import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
+import { Easing, ReduceMotion, useSharedValue } from 'react-native-reanimated';
+import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView, useBottomSheetTimingConfigs, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
@@ -40,6 +40,8 @@ export function AppBottomSheet({ visible, onClose, onDismissed, title, subtitle,
   const sheet = useRef<BottomSheetModal>(null);
   const shown = useRef(false);
   const position = useSharedValue(0);
+  // Bound presentation/dismissal time rather than stacking a long settle after the ring exit.
+  const animationConfigs = useBottomSheetTimingConfigs({ duration: 220, easing: Easing.bezier(0.32, 0.72, 0, 1), reduceMotion: ReduceMotion.System });
   const close = useCallback(() => { Keyboard.dismiss(); onClose(); }, [onClose]);
 
   useEffect(() => {
@@ -82,7 +84,7 @@ export function AppBottomSheet({ visible, onClose, onDismissed, title, subtitle,
   </View>, [colors, title, subtitle, icon, close, help]);
 
   const dynamic = !snapPoints;
-  return <BottomSheetModal ref={sheet} animatedPosition={position} snapPoints={snapPoints} enableDynamicSizing={dynamic} maxDynamicContentSize={Math.max(200, height * maxHeight - insets.top)}
+  return <BottomSheetModal ref={sheet} animationConfigs={animationConfigs} animatedPosition={position} snapPoints={snapPoints} enableDynamicSizing={dynamic} maxDynamicContentSize={Math.max(200, height * maxHeight - insets.top)}
     topInset={insets.top} backdropComponent={backdrop} handleComponent={handle} enableContentPanningGesture={false}
     backgroundStyle={{ backgroundColor: colors.sheetBackground }} keyboardBehavior="interactive" keyboardBlurBehavior="restore" enableBlurKeyboardOnGesture android_keyboardInputMode="adjustResize"
     onDismiss={() => { const user = shown.current && visible; shown.current = false; if (user) onClose(); onDismissed?.(); }}>

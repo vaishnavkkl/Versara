@@ -1,5 +1,4 @@
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
-import { rememberPdfResults } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useInitialFiles } from './use-initial-files';
@@ -28,7 +27,7 @@ import { EditorOption } from '@/components/editor-option';
 import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
-type Output = PdfResult & { name: string };
+type Output = PdfResult & { name: string; location?: string };
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export function EditPdfPages({ operation, initialSelection }: { operation: 'extract' | 'delete'; initialSelection?: InitialSelection }) {
@@ -131,7 +130,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const canSave = available && !busy && selected.size > 0 && outputCount > 0;
   usePublishHeaderShare({ active: !!shareTarget, disabled: busy, label: result ? 'Share new PDF' : 'Share original PDF',
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
-    save: { disabled: busy || (!result && !canSave), label: result ? 'Save new PDF to device' : extracting ? 'Create PDF with selected pages' : 'Save PDF without selected pages',
+    save: { disabled: busy || !!result?.location || (!result && !canSave), label: result?.location ? 'PDF saved' : extracting ? 'Save PDF with selected pages' : 'Save PDF without selected pages',
       onSave: () => result ? saveResult() : save() } });
   async function save() {
     if (!canSave || locked.current || !source || !PdfEngine) return;
@@ -143,9 +142,9 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: [source.uri], outputUris: [new File(savedPdfDirectory(), filename).uri], ranges: [], pages: [...selected].sort((a, b) => a - b) });
       if (mounted.current) setResult({ ...outputs[0], name: filename });
-      toast('PDF saved');
-      // History failure must not discard an otherwise successful native export.
-      void rememberPdfResults([{ ...outputs[0], name: filename }]).catch(() => {});
+      const saved = await savePdfResult({ ...outputs[0], name: filename }, initialSelection?.origin, initialSelection?.origin ? undefined : { mode: 'new', name: filename });
+      if (saved && mounted.current) setResult({ ...outputs[0], uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
+      if (saved) toast('PDF saved');
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -154,7 +153,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     locked.current = true; setBusy(true); setError('');
     try {
       const saved = await savePdfResult(result, initialSelection?.origin);
-      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name });
+      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -170,10 +169,10 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
-    <ThemedText style={styles.body}>{result.pageCount} {result.pageCount === 1 ? 'page' : 'pages'} saved in a new PDF. Your original is unchanged.</ThemedText>
+    <ThemedText style={styles.body}>{result.pageCount} {result.pageCount === 1 ? 'page' : 'pages'} included.{!result.location ? ' Save to finish.' : ''}</ThemedText>
     <ThemedText numberOfLines={3} style={[styles.body, { color: colors.secondaryLabel }]}>{result.name}</ThemedText>
     <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(result, initialSelection?.returnRoute)} />
-    <ToolButton title="Save to device" disabled={busy} onPress={saveResult} />
+    {result.location ? <ThemedText>Saved to {result.location}</ThemedText> : <ToolButton title="Save" disabled={busy} onPress={saveResult} />}
     <ToolButton title="Share" secondary disabled={busy} onPress={exportResult} />
     <ToolButton title="Edit another PDF" secondary disabled={busy} onPress={() => { setResult(null); setSource(null); setSelected(new Set()); setError(''); }} />
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}

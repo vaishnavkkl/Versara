@@ -1,4 +1,4 @@
-import { rememberPdfResults, forgetRecentUri } from '../files/recent-files';
+import { forgetRecentUri } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
 import { useEffect, useRef, useState } from 'react';
@@ -44,7 +44,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<(PdfResult & { name: string }) | null>(null);
+  const [result, setResult] = useState<(PdfResult & { name: string; location?: string }) | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -52,7 +52,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   const nativeAvailable = !!PdfEngine?.imagesToPdf;
   usePublishHeaderShare({ disabled: busy || !result, label: result ? 'Share new PDF' : 'Share is available after creating the PDF',
     onShare: () => result && shareNamedFile({ uri: result.uri, name: result.name, size: result.size, mimeType: 'application/pdf' }),
-    save: { disabled: busy || (!result && (!files.length || !nativeAvailable)), label: result ? 'Save new PDF to device' : 'Create PDF',
+    save: { disabled: busy || !!result?.location || (!result && (!files.length || !nativeAvailable)), label: result?.location ? 'PDF saved' : 'Save PDF',
       onSave: () => result ? saveResult() : convert() } });
   useEffect(() => {
     mounted.current = true;
@@ -98,9 +98,9 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
       const output = new File(savedPdfDirectory(), outputName);
       const created = await PdfEngine.imagesToPdf({ jobId: id, uris: files.map(file => file.uri), outputUri: output.uri, pageSize });
       if (mounted.current) setResult({ ...created, name: outputName });
+      const saved = await savePdfResult({ ...created, name: outputName }, undefined, { mode: 'new', name: outputName });
+      if (saved && mounted.current) setResult({ ...created, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
       toast('PDF created and saved');
-      // History failure must not discard an otherwise successful native export.
-      void rememberPdfResults([{ ...created, name: outputName }]).catch(() => {});
       // Preserve completed PDFs in app storage if the sheet closes at completion.
     } catch (cause) {
       const failure = cause as { code?: string; message?: string };
@@ -116,7 +116,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     locked.current = true; setBusy(true); setError('');
     try {
       const saved = await savePdfResult(result);
-      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name });
+      if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { if (mounted.current) setError(cause instanceof Error ? cause.message : 'Could not save the PDF.'); }
     finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
   }
@@ -133,11 +133,11 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>
-    <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{result.pageCount} pages · {formatSize(result.size)}{ '\n' }Save it to your device or share a copy.</ThemedText>
+    <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{result.pageCount} pages · {formatSize(result.size)}{ '\n' }{result.location ? `Saved to ${result.location}` : 'Your PDF is ready. Save to finish.'}</ThemedText>
     <ThemedText numberOfLines={2} style={styles.body}>{result.name}</ThemedText>
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
     <ToolButton title="Open PDF" onPress={() => result && openPdfScreen(result)} disabled={busy} />
-    <ToolButton title="Save to device" onPress={saveResult} disabled={busy} />
+    {!result.location && <ToolButton title="Save" onPress={saveResult} disabled={busy} />}
     <ToolButton title="Share" secondary onPress={share} disabled={busy} />
     <ToolButton title="Create another PDF" secondary onPress={() => { setResult(null); setError(''); }} disabled={busy} />
     <ToolButton title="Delete this PDF" secondary disabled={busy} onPress={() => {
@@ -174,7 +174,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
       {progress !== null ? <><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving PDF...' : `Creating pages... ${Math.round(progress * 100)}%`}</ThemedText><ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} /></> : <View style={responsiveToolbarStyles.row}>
         <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
         <EditorOption compact label="Add images" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={busy || !nativeAvailable || files.length >= 30} onPress={() => void addImages()} />
-        <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title="Create PDF" disabled={!files.length || busy || !nativeAvailable} onPress={convert} /></View>
+        <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title="Save PDF" disabled={!files.length || busy || !nativeAvailable} onPress={convert} /></View>
       </View>}
     </PdfPreviewFooter>
   </View>;

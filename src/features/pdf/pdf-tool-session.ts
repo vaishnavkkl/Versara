@@ -6,8 +6,8 @@ import { documentRoot, rememberFile } from '../files/recent-files';
 export type PdfReturnRoute = '/file-preview' | '/pdf-viewer';
 /** `initialQuery` pre-fills Find and replace when it is opened from the reader's search. */
 export type InitialSelection = { directory: Directory; files: LocalFile[]; origin?: { uri: string; name: string }; initialPage?: number; returnRoute?: PdfReturnRoute; initialQuery?: string };
-export const advancedPdfTools = new Set<string>(['info', 'duplicate', 'insert', 'compress', 'to_image', 'highlight', 'draw', 'shapes', 'sign', 'watermark', 'numbers', 'protect', 'metadata', 'flatten', 'ocr', 'extract_text', 'repair']);
-export type PdfTool = 'viewer' | 'edit_text' | 'remove_text' | 'text' | 'replace_text' | 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate' | 'from_image' | 'info' | 'duplicate' | 'insert' | 'compress' | 'to_image' | 'highlight' | 'draw' | 'shapes' | 'sign' | 'watermark' | 'numbers' | 'protect' | 'metadata' | 'flatten' | 'ocr' | 'extract_text' | 'repair';
+export const advancedPdfTools = new Set<string>(['info', 'duplicate', 'insert', 'compress', 'to_image', 'highlight', 'draw', 'shapes', 'add_image', 'sign', 'watermark', 'numbers', 'protect', 'metadata', 'flatten', 'ocr', 'extract_text', 'repair']);
+export type PdfTool = 'viewer' | 'edit_text' | 'remove_text' | 'text' | 'replace_text' | 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate' | 'from_image' | 'info' | 'duplicate' | 'insert' | 'compress' | 'to_image' | 'highlight' | 'draw' | 'shapes' | 'add_image' | 'sign' | 'watermark' | 'numbers' | 'protect' | 'metadata' | 'flatten' | 'ocr' | 'extract_text' | 'repair';
 export type PdfToolSession = InitialSelection & { tool: PdfTool; title: string };
 const sessions = new Map<string, PdfToolSession>();
 export const implementedPdfTools = new Set<string>(['viewer', 'edit_text', 'remove_text', 'text', 'replace_text', 'merge', 'split', 'extract', 'delete', 'reorder', 'rotate', 'from_image', ...advancedPdfTools]);
@@ -32,7 +32,7 @@ export async function pickPdfTool(tool: PdfTool, title: string) {
     const files = await browseFiles(directory, images, images || tool === 'merge' ? 30 : 1, !images);
     if (!files.length) { disposeImports(directory); return null; }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const origin = !images && files.length === 1 && ['edit_text', 'text', 'remove_text', 'replace_text', 'highlight', 'draw', 'shapes', 'sign'].includes(tool) ? await retainPdfEditingSource(files[0]) : undefined;
+    const origin = !images && files.length === 1 && ['edit_text', 'text', 'remove_text', 'replace_text', 'highlight', 'draw', 'shapes', 'add_image', 'sign'].includes(tool) ? await retainPdfEditingSource(files[0]) : undefined;
     sessions.set(id, { directory, files, tool, title, origin });
     return id;
   } catch (error) { disposeImports(directory); throw error; }

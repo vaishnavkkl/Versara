@@ -33,7 +33,11 @@ export function MessageBubble({ anchor, message, onClose }: { anchor: BubbleAnch
   return <Modal transparent animationType="none" presentationStyle="overFullScreen" statusBarTranslucent navigationBarTranslucent supportedOrientations={['portrait', 'landscape']} onRequestClose={onClose}>
     <View style={styles.fill} accessibilityViewIsModal onAccessibilityEscape={onClose}>
       <Pressable accessibilityRole="button" accessibilityLabel="Dismiss help message" onPress={onClose} style={StyleSheet.absoluteFill} />
-      <View style={[styles.bubble, { left, top, width, maxHeight, backgroundColor: colors.sheetBackground, borderColor: colors.separator, shadowColor: colors.label }]} onLayout={event => setHeight(current => Math.abs(current - event.nativeEvent.layout.height) < 1 ? current : event.nativeEvent.layout.height)}>
+      <View style={[styles.bubble, { left, top, width, maxHeight, backgroundColor: colors.sheetBackground, borderColor: colors.separator, shadowColor: colors.label }]} onLayout={event => {
+        // Native events are pooled; retain only the number for the deferred update.
+        const nextHeight = event.nativeEvent.layout.height;
+        setHeight(current => Math.abs(current - nextHeight) < 1 ? current : nextHeight);
+      }}>
         <View pointerEvents="none" style={[styles.pointer, { left: pointer - s.xs, backgroundColor: colors.sheetBackground }, above ? { bottom: -s.xs } : { top: -s.xs }]} />
         <View style={styles.row}>
           <ScrollView style={styles.text} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">

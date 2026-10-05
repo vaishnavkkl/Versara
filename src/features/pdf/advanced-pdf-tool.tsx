@@ -3,7 +3,7 @@ import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/r
 import { pdfDraftId, pruneSignatureDraftAssets } from '../editor/editor-drafts';
 import { PagePositionPicker } from './page-position-picker';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Keyboard, Platform, ScrollView, StyleSheet, View, type TextInputProps } from 'react-native';
+import { KeyboardAvoidingView, Keyboard, Platform, FlatList, ScrollView, StyleSheet, View, type TextInputProps } from 'react-native';
 import { HelpTextInput as TextInput, HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-text-input';
 import { Directory, File, Paths } from 'expo-file-system';
 import { FileEngine } from '../../../modules/file-engine';
@@ -32,8 +32,8 @@ import { showDialog } from '@/components/app-dialog';
 import { usePalette } from '@/theme/colors';
 import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
 import { browseFiles, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, shareRenderedPdf, type LocalFile } from '../files/file-storage';
-import { askNewFileName, saveEditedOutput, savePdfResult, saveToDevice } from '../files/save-file';
-import { forgetRecentUri, rememberPdfResults } from '../files/recent-files';
+import { askNewFileName, askSaveOptions, saveEditedOutput, savePdfResult, saveToDevice } from '../files/save-file';
+import { forgetRecentUri } from '../files/recent-files';
 import { usePdfScreenActive } from './use-pdf-screen-active';
 import { openPdfResult } from './open-pdf-screen';
 import type { PdfToolSession } from './pdf-tool-session';
@@ -46,9 +46,9 @@ import { usePdfToolLayout } from './pdf-tool-layout';
 import { annotationCommands, PageAnnotationsPanel, type AnnotationEdit, type AnnotationEdits, type PdfAnnotation } from './page-annotations';
 
 type Info = { pageCount: number; size: number; width: number; height: number; version: string; encrypted: boolean; title: string; author: string; subject: string; creator: string; producer: string };
-type Output = PdfResult & { name: string };
+type Output = PdfResult & { name: string; location?: string };
 type Response = { info?: Info; outputs?: (PdfResult & { width?: number; height?: number; pointWidth?: number; annotations?: PdfAnnotation[] })[]; estimatedSize?: number; ocrSummary?: { wordCount: number; pagesAdded: number; skippedPages: number; emptyPages: number }; textPreview?: string };
-const markupTools = new Set(['highlight', 'draw', 'shapes', 'sign']);
+const markupTools = new Set(['highlight', 'draw', 'shapes', 'add_image', 'sign']);
 const rangeTools = new Set(['duplicate', 'to_image', 'watermark', 'numbers', 'extract_text', 'ocr']);
 const settingsTitles: Record<string, string> = {
   duplicate: 'Duplicate pages options', insert: 'Insert pages options',
@@ -167,7 +167,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   // Shapes are added from the picker; touching the page selects, moves, or scrolls instead of drawing.
   const placing = tool === 'shapes' && !!PdfEngine?.nativeMarkupPanVersion;
   const [erasing, setErasing] = useState(false);
-  const selecting = selectingChosen || (placing && !erasing);
+  const selecting = tool === 'add_image' || selectingChosen || (placing && !erasing);
   const [inkOpacity, setInkOpacity] = useState(tool === 'highlight' ? .3 : 1);
   const [selectedId, setSelectedId] = useState<string>();
   const markupEditing = !!PdfEngine?.nativeMarkupEditingVersion;
@@ -204,7 +204,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [results, setResults] = useState<Output[]>([]);
   const [textPreview, setTextPreview] = useState('');
   const [notice, setNotice] = useState('');
-  const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'compress' ? 'Compress PDF' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Export text' : tool === 'to_image' ? 'Export images' : 'Create PDF';
+  const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'compress' ? 'Compress PDF' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Save text' : tool === 'to_image' ? 'Save images' : 'Save PDF';
   const toolbar = useResponsiveEditorToolbar(markup ? ['Style', 'Select', ...(tool === 'highlight' ? [brush ? 'Brush' : 'Area'] : [])] : [tool === 'protect' ? 'Password' : 'Options'], [saveTitle], markup ? 2 : 0);
   const recovery = useEditorDraft({ id: markup && session.origin && info ? pdfDraftId(session.origin.uri, tool) : null, uri: session.origin?.uri, value: history.snapshot,
     dirty: !results.length && (marks.length > 0 || history.canRedo), validate: isMarkHistorySnapshot, restore: value => { history.restoreSnapshot(value); if (value.marks.length) setPage(Math.min(info?.pageCount ?? 1, value.marks.at(-1)!.page)); } });
@@ -273,8 +273,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   async function addSignatureImage() {
     if (locked.current || !imageSignaturesAvailable || !preview || !recovery.ready) return;
     const unique = new Set(marks.filter(mark => mark.kind === 'image').map(mark => mark.originalImageUri));
-    if (unique.size >= 8 || marks.filter(mark => mark.kind === 'image').length >= 32) { setError('Use up to 8 signature images and 32 placements per PDF.'); return; }
-    locked.current=true; setBusy(true); setPhase('Choose a signature image'); setError('');
+    if (unique.size >= 8 || marks.filter(mark => mark.kind === 'image').length >= 32) { setError('Use up to 8 images and 32 placements per PDF.'); return; }
+    locked.current=true; setBusy(true); setPhase(tool === 'add_image' ? 'Choose an image' : 'Choose a signature image'); setError('');
     const folder = new Directory(Paths.document, 'Versara Signature Drafts');
     const assets: File[] = [];
     let accepted=false;
@@ -287,7 +287,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       if (folder.list().length >= 250) throw new Error('Save or discard existing signature drafts before adding another image.');
       const used = folder.list().reduce((sum,item) => sum+(item instanceof File ? item.size : 0),0);
       if (used + 16*1024*1024 > 64*1024*1024) throw new Error('Save or discard existing signature drafts before adding another image.');
-      setPhase('Preparing your signature on this device');
+      setPhase('Preparing your image on this device');
       const prepare = async (uri: string, removeBackground: boolean) => {
         const output = new File(folder, `signature-${uid()}.png`); assets.push(output,new File(output.uri+'.bgra'));
         const key=uid(); signatureJob.current=key;
@@ -295,7 +295,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       };
       const original = await prepare(picked.uri,false);
       if (!mounted.current) return;
-      const clean = await prepare(original.uri,true);
+      const clean = tool === 'add_image' ? original : await prepare(original.uri,true);
       if (!mounted.current) return;
       const ratio = (original.height/original.width)*(preview.width/preview.height);
       const w=Math.min(.4,.3/ratio), h=w*ratio;
@@ -304,8 +304,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         cleanImageUri:clean.uri,cleanPixelPath:clean.pixelPath,backgroundRemoved:false,
         points:[[(1-w)/2,(1-h)/2],[(1+w)/2,(1+h)/2]] };
       history.commit(mark); accepted=true; setSelecting(true); setErasing(false); setShowStyle(false); setSelectedId(undefined);
-      setNotice('Drag the image to move it; drag a corner to resize. Remove background clears light paper.');
-    } catch(cause) { if (mounted.current) setError((cause as Error).message || 'Could not add this signature image.'); }
+      setNotice(tool === 'add_image' ? 'Drag the image to move it; drag a corner to resize.' : 'Drag the image to move it; drag a corner to resize. Remove background clears light paper.');
+    } catch(cause) { if (mounted.current) setError((cause as Error).message || 'Could not add this image.'); }
     finally {
       if (!accepted) for (const asset of assets) try { if (asset.exists) asset.delete(); } catch { /* Retry with draft cleanup. */ }
       signatureJob.current=undefined; locked.current=false;
@@ -324,7 +324,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       return;
     }
     const images = marks.filter(mark => mark.kind === 'image');
-    if (new Set(images.map(mark => mark.originalImageUri)).size >= 8 || images.length >= 32) { setError('Use up to 8 signature images and 32 placements per PDF.'); return; }
+    if (new Set(images.map(mark => mark.originalImageUri)).size >= 8 || images.length >= 32) { setError('Use up to 8 images and 32 placements per PDF.'); return; }
     locked.current = true; setBusy(true); setPhase('Adding your signature');
     try {
       const asset = await prepareImageSignature(entry);
@@ -426,9 +426,9 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const pendingShare = markup ? marks.length + annotationEditCount > 0 : tool === 'numbers' || (tool === 'watermark' && !!text.trim());
   usePublishHeaderShare({ disabled: busy || results.length > 1, onShare: shareCurrent,
     label: results.length > 1 ? 'Share each file from its card' : results.length ? 'Share result' : pendingShare ? 'Share edited PDF' : 'Share PDF',
-    save: { label: results.length > 1 ? 'Save each file from its card' : results.length ? 'Save result to device' : saveTitle,
-      disabled: busy || !info || (results.length ? results.length > 1 : !recovery.ready || (markup ? !marks.length && !annotationEditCount : tool === 'compress' && estimate?.quality !== quality)),
-      onSave: () => results.length === 1 ? save(results[0]) : results.length ? undefined : run() } });
+    save: { label: results.length ? 'Save remaining files' : saveTitle,
+      disabled: busy || !info || (results.length ? results.every(output => savedOutputs.has(output.uri)) : !recovery.ready || (markup ? !marks.length && !annotationEditCount : tool === 'compress' && estimate?.quality !== quality)),
+      onSave: () => results.length ? saveRemaining() : run() } });
   // Without a selection, the size buttons act on the newest shape so a tiny one can grow straight after drawing.
   const resizeTarget = selectedMark ?? (tool === 'shapes' && !selecting && !erasing ? marks.findLast(mark => mark.page === page && (mark.kind === 'polygon' || mark.kind === 'line')) : undefined);
   const markupZoom = useMarkupZoom(`${page}:${previewRetry}:${preview?.uri ?? ''}`);
@@ -450,7 +450,9 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       const extension = tool === 'to_image' ? format : tool === 'ocr' ? (ocrFormat === 'pdf' ? 'pdf' : 'txt') : tool === 'extract_text' ? 'txt' : 'pdf';
       const base = source.name.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]/g, '_').slice(0, 70);
       locked.current = true; setBusy(true);
-      const name = await askNewFileName(`${base} - ${tool.replace(/_/g, ' ')}.${extension}`);
+      const suggested = `${base} - ${tool.replace(/_/g, ' ')}.${extension}`;
+      const choice = extension === 'pdf' && session.origin ? await askSaveOptions(session.origin.name, 'application/pdf', suggested) : null;
+      const name = tool === 'to_image' ? suggested : extension === 'pdf' && session.origin ? choice?.name : await askNewFileName(suggested);
       locked.current = false;
       if (!name || !mounted.current) { if (mounted.current) setBusy(false); else disposeImports(directory); return; }
       const outputDirectory = savedPdfDirectory(); outputDirectory.create({ intermediates: true, idempotent: true });
@@ -462,13 +464,34 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         return new File(outputDirectory, candidate).uri;
       });
       const result = await process({ ...(markup || tool === 'numbers' || tool === 'watermark' ? { nativeEditor: true, action: 'save', outputUri: outputUris[0], edits: markup ? markupEdits() : numbered } : {}), operation: tool, outputUris, pages: selected, quality, format, ocrFormat, skipExistingText, position: Number(position), insertUri: insert?.uri ?? '', text: text.trim(), startNumber: Number(startNumber), password, marks }, 'Processing on your device…');
-      if (!result?.outputs) return;
-      const outputs = result.outputs.map((output, i) => ({ ...output, name: names[i] }));
-      if (extension === 'pdf') await rememberPdfResults(outputs).catch(() => {});
+      if (!result?.outputs || !mounted.current) return;
+      locked.current = true; setBusy(true); setPhase('Saving files…');
+      let outputs: Output[] = result.outputs.map((output, i) => {
+        // Use the location we asked native code to write, and verify it before
+        // clearing the draft or presenting Open PDF. Only file metadata crosses JS.
+        const file = new File(outputUris[i]);
+        if (!file.exists || file.size <= 0) throw new Error('The generated file could not be found. Your edits have been kept; try saving again.');
+        return { ...output, uri: file.uri, size: file.size, name: names[i] };
+      });
+      setSavedOutputs(new Set()); setResults(outputs);
+      for (let index = 0; index < outputs.length; index++) {
+        const output = outputs[index];
+        let published: Output;
+        if (extension === 'txt') {
+          const saved = await saveToDevice(output.uri, output.name, mime(output));
+          published = { ...output, location: saved.location };
+        } else {
+          const saved = await saveEditedOutput({ output: output.uri, mimeType: mime(output), kind: extension === 'pdf' ? 'pdf' : 'image', mode: choice?.mode ?? 'new', origin: extension === 'pdf' ? session.origin : undefined, name: output.name });
+          published = { ...output, uri: saved.file.uri, name: saved.file.name, location: saved.device.location };
+        }
+        outputs = outputs.map((item, position) => position === index ? published : item);
+        if (mounted.current) { setResults(outputs); setSavedOutputs(current => new Set(current).add(published.uri)); }
+      }
+      if (mounted.current) setNotice(`${outputs.length} file${outputs.length === 1 ? '' : 's'} saved to ${outputs[0]?.location}`);
       if (tool === 'sign' && marks.length) void rememberSignatures(marks, preview ? preview.width / Math.max(1, preview.height) : 1 / Math.SQRT2)
         .then(list => { if (mounted.current) setRecentSignatures(list); }, () => {});
       await recovery.clear();
-      if (mounted.current && result.ocrSummary) { const stats = result.ocrSummary; setNotice(`${stats.wordCount} words added on ${stats.pagesAdded} pages. ${stats.skippedPages} pages already had selectable text; ${stats.emptyPages} pages had no recognized text. Check OCR results before relying on them.`); }
+      if (mounted.current && result.ocrSummary) { const stats = result.ocrSummary; setNotice(`${outputs.length} file${outputs.length === 1 ? '' : 's'} saved to ${outputs[0]?.location}. ${stats.wordCount} words added on ${stats.pagesAdded} pages. ${stats.skippedPages} pages already had selectable text; ${stats.emptyPages} pages had no recognized text.`); }
       if (mounted.current && extension === 'txt' && outputs[0]) {
         const exported = new File(outputs[0].uri);
         // Very long exports stay in the file; the sheet shows the native preview instead.
@@ -476,26 +499,36 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         const recognized = exported.size <= TEXT_SHEET_LIMIT ? await exported.text().then(text => ({ text, truncated: false }), () => preview) : preview;
         if (mounted.current) { setFullText(recognized); setTextSheet(true); }
       }
-      if (mounted.current) { setSavedOutputs(new Set()); setResults(outputs); setTextPreview(result.textPreview ?? ''); setPassword(''); setConfirmation(''); history.clear(); setAnnotationEdits({}); setFocusAnnotation(undefined); }
-    } catch (cause) { locked.current = false; if (mounted.current) { setError((cause as Error).message); setBusy(false); } else disposeImports(directory); }
+      if (mounted.current) { setResults(outputs); setTextPreview(result.textPreview ?? ''); setPassword(''); setConfirmation(''); history.clear(); setAnnotationEdits({}); setFocusAnnotation(undefined); }
+    } catch (cause) { if (mounted.current) setError((cause as Error).message); }
+    finally { locked.current = false; if (mounted.current) { setBusy(false); setPhase(''); } else disposeImports(directory); }
+  }
+  async function saveRemaining() {
+    if (locked.current) return;
+    for (const output of results.filter(output => !savedOutputs.has(output.uri))) if (!await save(output)) break;
   }
   async function save(output: Output) {
-    if (locked.current) return;
+    if (locked.current) return false;
+    if (savedOutputs.has(output.uri)) return true;
+    let completed = false;
     locked.current = true; setBusy(true); setError('');
     try {
       if (output.name.endsWith('.pdf')) {
         const saved = await savePdfResult(output, session.origin);
-        if (saved && mounted.current) { setSavedOutputs(current => new Set(current).add(saved.file.uri)); setResults(current => current.map(item => item.uri === output.uri ? { ...item, uri: saved.file.uri, name: saved.file.name } : item)); }
+        completed = !!saved;
+        if (saved && mounted.current) { setSavedOutputs(current => new Set(current).add(saved.file.uri)); setResults(current => current.map(item => item.uri === output.uri ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item)); }
       } else {
-        const name = await askNewFileName(output.name);
+        const name = output.name;
         if (name) {
           const saved = output.name.endsWith('.txt') ? await saveToDevice(output.uri, name, mime(output)) : (await saveEditedOutput({ output: output.uri, mimeType: mime(output), kind: 'image', mode: 'new', name })).device;
+          completed = true;
           if (mounted.current) setSavedOutputs(current => new Set(current).add(output.uri));
-          if (mounted.current) setNotice(`Saved to ${saved.location}`);
+          if (mounted.current) { setNotice(`Saved to ${saved.location}`); setResults(current => current.map(item => item.uri === output.uri ? { ...item, location: saved.location } : item)); }
         }
       }
     } catch (cause) { if (mounted.current) setError((cause as Error).message); }
     finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
+    return completed;
   }
   function mime(output: Output) { return output.name.endsWith('.pdf') ? 'application/pdf' : output.name.endsWith('.txt') ? 'text/plain' : output.name.endsWith('.png') ? 'image/png' : 'image/jpeg'; }
   async function share(output: Output) {
@@ -563,10 +596,26 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const choices = (items: { id: string; label: string; icon?: OptionIcon }[], selected: string, choose: (value: string) => void) => <View style={styles.choices}>{items.map(item => <EditorOption key={item.id} label={item.label} icon={item.icon} selected={selected === item.id} disabled={busy} onPress={() => choose(item.id)} />)}</View>;
   const status = <>{busy && !pageRendering && <View style={styles.status}><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Please wait…'}{progress > 0 ? ` ${Math.round(progress * 100)}%` : ''}</ThemedText>{cancellable && <ToolButton title="Cancel" secondary onPress={() => { if (signatureJob.current) FileEngine?.cancelImageJob(signatureJob.current); if (job.current) { PdfEngine?.cancelPdfTool(job.current); PdfEngine?.cancelTextEdit(job.current); } }} />}</View>}{!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}{!!recovery.error && <ThemedText accessibilityRole="alert">{recovery.error}</ThemedText>}{!!notice && <ThemedText accessibilityLiveRegion="polite">{notice}</ThemedText>}</>;
   if (!available) return <View style={styles.content}><ThemedText>Install a new development build to use these native PDF tools on this device.</ThemedText></View>;
-  if (results.length) return <ScrollView contentContainerStyle={styles.content}>{status}<ThemedText style={styles.heading}>{tool === 'repair' ? 'Rewritten and validated' : 'Your files are ready'}</ThemedText>{tool === 'compress' && <ThemedText>Original {formatSize(source.size)} · Result {formatSize(results[0].size)}{results[0].size >= source.size ? ' — no size reduction for this document.' : ` — ${Math.round((1 - results[0].size / source.size) * 100)}% smaller.`}</ThemedText>}{results.map(output => <View key={output.uri} style={[styles.result, { backgroundColor: colors.secondarySystemBackground }]}><ThemedText style={styles.label}>{output.name}</ThemedText><ThemedText>{formatSize(output.size)}</ThemedText>{output.name.endsWith('.pdf') && tool !== 'protect' && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}{tool === 'protect' && <ThemedText>Use the password you set when opening this file in a password-capable PDF reader.</ThemedText>}<View style={styles.choices}><ToolButton title="Save to device" disabled={busy} onPress={() => void save(output)} /><ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>{!savedOutputs.has(output.uri) && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}</View>)}{fullText ? <ToolButton title="View and copy text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={busy} onPress={() => setTextSheet(true)} />
-    : !!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}
-    <ToolButton title="Run again" secondary disabled={busy} onPress={() => { setResults([]); setTextPreview(''); setNotice(''); setFullText(null); setTextSheet(false); }} />
-    {fullText && <RecognizedTextSheet text={fullText.text} truncated={fullText.truncated} isPresented={textSheet} onClose={() => setTextSheet(false)} />}</ScrollView>;
+  if (results.length) return <FlatList data={results} keyExtractor={output => output.uri}
+    contentContainerStyle={styles.content} initialNumToRender={4} maxToRenderPerBatch={2} windowSize={5}
+    ListHeaderComponent={<View style={styles.field}>{status}
+      <ThemedText style={styles.heading}>{tool === 'repair' ? 'Rewritten and validated' : 'Your files are ready'}</ThemedText>
+      {tool === 'to_image' && results.some(output => !savedOutputs.has(output.uri)) && <ToolButton title="Save remaining images" disabled={busy} onPress={() => void saveRemaining()} />}
+      {tool === 'compress' && <ThemedText>Original {formatSize(source.size)} · Result {formatSize(results[0].size)}{results[0].size >= source.size ? ' — no size reduction for this document.' : ' — ' + Math.round((1 - results[0].size / source.size) * 100) + '% smaller.'}</ThemedText>}
+    </View>}
+    renderItem={({ item: output }) => <View style={[styles.result, { backgroundColor: colors.secondarySystemBackground }]}>
+      <ThemedText style={styles.label}>{output.name}</ThemedText><ThemedText>{formatSize(output.size)}</ThemedText>
+      {output.name.endsWith('.pdf') && tool !== 'protect' && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}
+      {tool === 'protect' && <ThemedText>Use the password you set when opening this file in a password-capable PDF reader.</ThemedText>}
+      {output.location && <ThemedText selectable>Saved to {output.location}</ThemedText>}
+      <View style={styles.choices}>{tool !== 'to_image' && !savedOutputs.has(output.uri) && <ToolButton title="Save" disabled={busy} onPress={() => void save(output)} />}<ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>
+      {!savedOutputs.has(output.uri) && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}
+    </View>}
+    ListFooterComponent={<View style={styles.field}>
+      {fullText ? <ToolButton title="View and copy text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={busy} onPress={() => setTextSheet(true)} /> : !!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}
+      <ToolButton title="Run again" secondary disabled={busy} onPress={() => { setResults([]); setTextPreview(''); setNotice(''); setFullText(null); setTextSheet(false); }} />
+      {fullText && <RecognizedTextSheet text={fullText.text} truncated={fullText.truncated} isPresented={textSheet} onClose={() => setTextSheet(false)} />}
+    </View>} />;
   if (!info && !inspectFailed) return <View style={styles.loadingScreen}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite">Opening PDF…</ThemedText><ThemedText numberOfLines={2} style={{ color: colors.secondaryLabel, textAlign: 'center' }}>{source.name}</ThemedText></View>;
   if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true, false)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;
   if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
@@ -582,8 +631,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         ...BRUSHES.map(item => ({ id: item.id, label: item.label, colorKey: item.colorKey, selected: brushType === item.id && !erasing && (tool !== 'highlight' || brush), onPress: () => { setErasing(false); setSelecting(false); setBrushType(item.id); setInkWidth(item.width); setInkOpacity(item.opacity); styleSelection({ brush: item.id, width: item.width, opacity: item.opacity }); if (tool === 'highlight') setBrush(true); } })),
       ]} />}
       {tool === 'shapes' && !placing && <ShapePicker iconOnly value={shape} onChange={setShape} disabled={busy} />}
-      <ToolRowButton label="Style and colour" icon={{ ios: 'paintpalette', android: 'palette' }} selected={showStyle} expanded={showStyle} disabled={busy || selectedMark?.kind === 'image'} onPress={() => { setShowStyle(value => !value); setShowAnnotations(false); setFocusAnnotation(undefined); }} />
-      {markupEditing && <ToolRowButton label={erasing ? 'Stop erasing' : 'Stroke eraser'} icon={{ ios: 'eraser', android: 'auto-fix-normal' }} selected={erasing} disabled={busy} onPress={() => { setErasing(value => !value); setSelecting(false); }} />}
+      {tool !== 'add_image' && <ToolRowButton label="Style and colour" icon={{ ios: 'paintpalette', android: 'palette' }} selected={showStyle} expanded={showStyle} disabled={busy || selectedMark?.kind === 'image'} onPress={() => { setShowStyle(value => !value); setShowAnnotations(false); setFocusAnnotation(undefined); }} />}
+      {markupEditing && tool !== 'add_image' && <ToolRowButton label={erasing ? 'Stop erasing' : 'Stroke eraser'} icon={{ ios: 'eraser', android: 'auto-fix-normal' }} selected={erasing} disabled={busy} onPress={() => { setErasing(value => !value); setSelecting(false); }} />}
       <ToolRowButton label={annotationsAvailable ? (showAnnotations ? 'Hide page annotations' : 'Edit page annotations') : 'Edit page annotations, update the app to use this'} icon={{ ios: 'text.bubble', android: 'comment' }} selected={showAnnotations} disabled={busy || !annotationsAvailable} onPress={() => { setShowAnnotations(value => !value); setShowStyle(false); setFocusAnnotation(undefined); }} />
     </> : settingsAction}
   </View>;
@@ -625,6 +674,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       </OptionCard>
     </OptionSheet>
     <PdfPreviewFooter>{status}
+    {tool === 'add_image' && <View style={styles.choices}><EditorOption label="Choose image" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={busy || !imageSignaturesAvailable || !recovery.ready || preview?.page !== page} onPress={() => void addSignatureImage()} />{!imageSignaturesAvailable && <ThemedText>Update the native app build to add images.</ThemedText>}</View>}
     {tool === 'sign' && <View style={styles.choices}>
       <EditorOption label="Draw signature" icon={{ios:'signature',android:'draw'}} selected={!selecting} disabled={busy} onPress={() => { setSelecting(false);setErasing(false);setSelectedId(undefined); }} />
       <EditorOption label="Add image" icon={{ios:'photo.badge.plus',android:'add-photo-alternate'}} disabled={busy || !imageSignaturesAvailable || !recovery.ready || preview?.page !== page} onPress={() => void addSignatureImage()} />
@@ -638,7 +688,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {tool === 'sign' && <ThemedText style={{ color: colors.secondaryLabel, paddingHorizontal: 4 }}>{guidance.sign}</ThemedText>}
     <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
       {placing ? <ShapePicker compact label="Add shape" value={shape} onChange={placeShape} disabled={busy || !recovery.ready || preview?.page !== page || marks.length >= 300} /> : <>
-      <EditorOption compact label={tool === 'sign' ? 'Sign' : tool === 'highlight' ? 'Mark' : tool === 'shapes' ? 'Shape' : 'Draw'} selected={!selecting && !erasing} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setErasing(false); setSelectedId(undefined); }} />
+      {tool !== 'add_image' && <EditorOption compact label={tool === 'sign' ? 'Sign' : tool === 'highlight' ? 'Mark' : tool === 'shapes' ? 'Shape' : 'Draw'} selected={!selecting && !erasing} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setErasing(false); setSelectedId(undefined); }} />}
       <EditorOption compact label="Select & resize" selected={selecting} disabled={busy} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setErasing(false); }} />
       </>}
       <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={busy || !recovery.ready || (!marks.length && !annotationEditCount)} onPress={() => void run()} /></View>
@@ -649,7 +699,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {toolbar.measurements}
     <View style={styles.canvasColumn}>
     <PdfPreviewBody pages={pageList} toolbar={pageControls}>
-    <PdfPreviewStage hint={placing ? 'Pick a shape to add it. Drag a shape to move it. Drag the page to scroll, swipe to change page.' : 'Drag to mark. Select to move or resize. Two fingers to zoom.'} onFit={active && !busy ? () => setPreviewRetry(value => value + 1) : undefined}>
+    <PdfPreviewStage hint={tool === 'add_image' ? 'Choose an image, then drag to move it and use its corners to resize. Two fingers to zoom.' : placing ? 'Pick a shape to add it. Drag a shape to move it. Drag the page to scroll, swipe to change page.' : 'Drag to mark. Select to move or resize. Two fingers to zoom.'} onFit={active && !busy ? () => setPreviewRetry(value => value + 1) : undefined}>
     {active && preview?.page === page && PdfMarkupView ? <PdfMarkupView key={`${page}:${previewRetry}:${preview.uri}`} style={{ flex: 1, backgroundColor: PDF_PREVIEW_BACKGROUND }} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify(marks.filter(mark => mark.page === page))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event => selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : tool === 'shapes' ? (shape === 'line' ? 'line' : 'polygon') : tool === 'highlight' && brush ? 'highlight-brush' : tool} shapePath={JSON.stringify(SHAPES.find(item => item.id === shape)?.points ?? [])} fillColor={fillColor === null ? '' : hexColor(fillColor)} inkColor={inkColor} inkWidth={inkWidth} disabled={!!controlHelp?.active || busy || !recovery.ready || (!selecting && !erasing && marks.length >= 300)} onMark={event => addMark(event.nativeEvent.mark)}
       onPageSwipe={placing ? ({ nativeEvent }) => { const target = page + nativeEvent.direction; if (!busy && target >= 1 && target <= info.pageCount) changePage(target); } : undefined} /> : failedPreview === previewKey && !busy
       ? <View style={styles.loadingScreen}><ThemedText>Page preview unavailable.</ThemedText><ToolButton title="Retry preview" onPress={() => { previewAttempt.current = ''; setFailedPreview(''); setPreviewRetry(value => value + 1); }} /></View>
@@ -729,9 +779,17 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       </ScrollView>
       <ThemedText accessibilityLiveRegion="polite" style={styles.quickHint}>{estimate?.quality === quality ? `Estimated output: up to ${formatSize(Math.min(estimate.size, info.size))}` : 'Estimate size before compressing.'}</ThemedText>
     </>}
-    {tool === 'to_image' && <View style={styles.quickRow}>
+    {tool === 'to_image' && <>
+      <View style={styles.quickRow}>
+        <EditorOption compact label="All pages" selected={!ranges.trim()} disabled={busy} onPress={() => setRanges('')} />
+        <EditorOption compact label="Current page" selected={ranges === String(page)} disabled={busy} onPress={() => setRanges(String(page))} />
+      </View>
+      {field('Pages (empty means all)', ranges, setRanges, false, false, false)}
+      <ThemedText style={styles.quickHint}>Choose up to 100 pages, for example 1, 3, 5-8. Save writes the selected images together.</ThemedText>
+      <View style={styles.quickRow}>
       {['jpg', 'png'].map(value => <EditorOption key={value} compact label={value.toUpperCase()} selected={format === value} disabled={busy} onPress={() => setFormat(value)} />)}
-    </View>}
+      </View>
+    </>}
     {tool === 'watermark' && <View style={styles.quickRow}>
       <TextInput accessibilityLabel="Watermark text" editable={!busy} value={text} onChangeText={setText} placeholder="Watermark text" placeholderTextColor={colors.secondaryLabel} autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={100} style={[inputStyle, styles.quickInput]} />
       {[{ id: '0.15', label: 'Subtle', icon: { ios: 'circle.dotted', android: 'blur-on' } }, { id: '0.3', label: 'Balanced', icon: { ios: 'circle.lefthalf.filled', android: 'tonality' } }, { id: '0.6', label: 'Bold', icon: { ios: 'circle.fill', android: 'brightness-1' } }].map(item => <EditorOption key={item.id} compact label={item.label} accessibilityLabel={`${item.label} watermark`} icon={item.icon as OptionIcon} selected={stampOpacity === item.id} disabled={busy} onPress={() => setStampOpacity(item.id)} />)}

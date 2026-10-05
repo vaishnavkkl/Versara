@@ -22,6 +22,13 @@ Android Back. Resize/background listeners exist only while a bubble is mounted
 and are released on teardown. Help state is local to a screen, with no polling,
 document processing, or persistent cache.
 
+Bubble layout handlers copy the measured height before scheduling a state update:
+React Native releases pooled events after the handler returns, so retaining the
+event in an updater can crash immediately after the bubble appears. Bubble close
+callbacks stay stable so layout updates do not reinstall lifecycle listeners.
+Help outlines use theme-specific blue dots over a contrasting backing, including
+selected buttons and the surround tools, which share the same outline renderer.
+
 Verification: lint, TypeScript, and whitespace checks only. Manual checks remain
 necessary on Android/iOS for landscape, larger text, sheet controls, disabled
 buttons, surround-tool naming, backdrop dismissal, and leaving help before an

@@ -33,6 +33,7 @@ const SECTIONS = [
     { id: 'edit_text', title: 'Edit PDF', subtitle: 'Change existing PDF text', ios: 'pencil', android: 'edit' },
     { id: 'remove_text', title: 'Remove Text', subtitle: 'Delete selected PDF text', ios: 'eraser', android: 'format-clear' },
     { id: 'text', title: 'Add Text', subtitle: 'Place text on a page', ios: 'textformat', android: 'text-fields' },
+    { id: 'add_image', title: 'Add Image', subtitle: 'Place a photo or logo on a page', ios: 'photo.badge.plus', android: 'add-photo-alternate' },
     { id: 'replace_text', title: 'Find & Replace', subtitle: 'Replace text on every page', ios: 'text.magnifyingglass', android: 'find-replace' },
     { id: 'highlight', title: 'Highlight', subtitle: 'Mark important passages', ios: 'highlighter', android: 'highlight' },
     { id: 'draw', title: 'Draw', subtitle: 'Add freehand notes', ios: 'pencil.tip', android: 'draw' },

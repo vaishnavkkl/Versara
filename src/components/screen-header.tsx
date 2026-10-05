@@ -55,24 +55,21 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
     style={({ pressed }) => [styles.back, styles.share, { backgroundColor: colors.accentSurface, opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
     {saving ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.down" android="save" size={21} color={colors.systemBlue} />}
   </HelpPressable>;
-  const actions = close ? 1 : (children ? 1 : 0) + (share !== undefined ? 1 : 0) + (save !== undefined ? 1 : 0);
-  // Both sides reserve room for the busier one so the title stays centred and shrinks first.
-  const sideWidth = { minWidth: Math.max(44, actions * 44 + (actions - 1) * s.xs) };
   return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
-    <View style={[styles.side, styles.start, sideWidth]}>{close ? children : button}</View>
+    <View style={[styles.side, styles.start]}>{close ? children : button}</View>
     <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>
-    <View style={[styles.side, styles.end, sideWidth]}>{close ? <>{trailing}{button}</> : <>{children}{saveButton}{shareButton}</>}</View>
+    <View style={[styles.side, styles.end]}>{close ? <>{trailing}{button}</> : <>{children}{saveButton}{shareButton}</>}</View>
   </View>;
 }
 
 const styles = StyleSheet.create({
   header: { minHeight: 52, paddingLeft: s.xs, paddingRight: s.sm, flexDirection: 'row', alignItems: 'center', gap: s.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   closeHeader: { paddingLeft: s.md, paddingRight: s.sm },
-  // Equal flexible sides keep the title centred whatever each side holds.
-  side: { flex: 1, minWidth: 44, flexDirection: 'row', alignItems: 'center' },
+  // Actions use their actual intrinsic width, including multi-button help/history groups.
+  side: { flexShrink: 0, minWidth: 44, flexDirection: 'row', alignItems: 'center' },
   start: { justifyContent: 'flex-start' },
   end: { justifyContent: 'flex-end', gap: s.xs },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   share: { borderRadius: 12 },
-  title: { flexShrink: 1, maxWidth: '62%', ...t.label, fontSize: 17, textAlign: 'center' },
+  title: { flex: 1, minWidth: 0, ...t.label, fontSize: 17, textAlign: 'center' },
 });

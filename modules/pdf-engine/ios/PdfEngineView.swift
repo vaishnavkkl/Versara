@@ -17,9 +17,20 @@ final class PdfEngineView: ExpoView {
   private var veilDark: Bool?
   private let topVeil = UIVisualEffectView()
   private let bottomVeil = UIVisualEffectView()
+  private var reportedPage = -1
+  private func readingPage() -> PDFPage? {
+    guard focusCurrent, vertical, let document = pdfView.document,
+          document.pageCount > 0, let scroll = observedScroll else { return pdfView.currentPage }
+    let start = -scroll.adjustedContentInset.top
+    let end = max(start, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+    // A short boundary page may never become PDFKit's midpoint-based currentPage.
+    if scroll.contentOffset.y <= start + 1 { return document.page(at: 0) }
+    if scroll.contentOffset.y >= end - 1 { return document.page(at: document.pageCount - 1) }
+    return pdfView.currentPage
+  }
   /// Blurs everything above and below the current page while scrolling stays free.
   private func updateVeils() {
-    guard focusCurrent, vertical, let page = pdfView.currentPage else { topVeil.isHidden = true; bottomVeil.isHidden = true; return }
+    guard focusCurrent, vertical, let page = readingPage() else { topVeil.isHidden = true; bottomVeil.isHidden = true; return }
     if veilDark != dark {
       veilDark = dark
       topVeil.effect = UIBlurEffect(style: dark ? .systemMaterialDark : .systemMaterialLight)
@@ -67,6 +78,20 @@ final class PdfEngineView: ExpoView {
   private let scrollThumb = UIView()
   private let thumbPill = UIView()
   private weak var observedScroll: UIScrollView?
+  private var originalFocusInsets: UIEdgeInsets?
+  private func updateFocusInsets() {
+    guard let scroll = observedScroll else { return }
+    if focusCurrent && vertical {
+      if originalFocusInsets == nil { originalFocusInsets = scroll.contentInset }
+      var insets = originalFocusInsets ?? .zero
+      // Enough trailing space for even several short final pages to reach focus.
+      insets.bottom += bounds.height / 2
+      if scroll.contentInset != insets { scroll.contentInset = insets }
+    } else if let insets = originalFocusInsets {
+      originalFocusInsets = nil
+      scroll.contentInset = insets
+    }
+  }
   private var scrollObservation: NSKeyValueObservation?
   private var thumbHide: DispatchWorkItem?
   private var draggingThumb = false
@@ -122,6 +147,7 @@ final class PdfEngineView: ExpoView {
   override func layoutSubviews() {
     super.layoutSubviews()
     pdfView.frame = bounds
+    updateFocusInsets()
     updateScrollThumb(reveal: false)
     updateVeils()
     if bounds.size != lastSize {
@@ -148,7 +174,7 @@ final class PdfEngineView: ExpoView {
     }
     applyPageAndZoom()
     applySearchHighlights()
-    updateVeils()
+    reportPage()
   }
 
   private func openDocument() {
@@ -156,6 +182,7 @@ final class PdfEngineView: ExpoView {
     let ticket = UUID()
     generation = ticket
     pdfView.document = nil
+    reportedPage = -1
     appliedSearch = ""
     lastPageRequest = -1
     lastZoomRevision = -1
@@ -232,10 +259,13 @@ final class PdfEngineView: ExpoView {
   }
 
   private func reportPage() {
-    guard let document = pdfView.document, let page = pdfView.currentPage else { return }
+    guard let document = pdfView.document, let page = readingPage() else { return }
     let index = document.index(for: page)
-    onPageChange(["page": index, "pageCount": document.pageCount])
-    showBadge(index: index, count: document.pageCount)
+    if index != reportedPage {
+      reportedPage = index
+      onPageChange(["page": index, "pageCount": document.pageCount])
+      showBadge(index: index, count: document.pageCount)
+    }
     updateVeils()
   }
 
@@ -245,13 +275,16 @@ final class PdfEngineView: ExpoView {
     scroll.showsVerticalScrollIndicator = false
     scroll.decelerationRate = .normal
     if observedScroll !== scroll {
+      if let insets = originalFocusInsets { observedScroll?.contentInset = insets }
+      originalFocusInsets = nil
       scrollObservation?.invalidate()
       observedScroll = scroll
       scrollObservation = scroll.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
         self?.updateScrollThumb(reveal: true)
-        self?.updateVeils()
+        self?.reportPage()
       }
     }
+    updateFocusInsets()
     updateScrollThumb(reveal: false)
   }
 

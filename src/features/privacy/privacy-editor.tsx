@@ -21,10 +21,9 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { useEditHistory } from '../editor/use-edit-history';
-import { recordEditedFile } from '../files/edited-files';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { getRecentFile, rememberFile } from '../files/recent-files';
-import { askNewFileName, saveToDevice } from '../files/save-file';
+import { askNewFileName, saveEditedOutput } from '../files/save-file';
 import { ZoomableImage } from '../files/zoomable-image';
 import { PdfDocumentPreview } from '../pdf/pdf-document-preview';
 import { PdfPreviewBody, PdfPreviewToolbar, PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
@@ -35,7 +34,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 type Finding = ImagePrivacyFinding;
 type Scan = ImagePrivacyScan;
 type Info = { width: number; height: number; size: number; mimeType: string; camera: string; taken: string; hasLocation: boolean };
-type Output = LocalFile & { width: number; height: number; coverCount?: number };
+type Output = LocalFile & { width: number; height: number; coverCount?: number; location?: string };
 type Phase = 'idle' | 'opening' | 'scanning' | 'preparing' | 'saving' | 'sharing';
 const TITLES: Record<Mode, string> = { scan: 'Privacy Review', pdf_scan: 'Redact PDF', redact: 'Redact Image', metadata: 'Remove Metadata' };
 const CATEGORY_LABELS: Record<string, string> = { personal: 'Personal', financial: 'Financial', identity: 'Identity', authentication: 'Authentication', location: 'Location', other: 'Other' };
@@ -345,20 +344,20 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
       try {
         await new File(preview.uri).copy(copy);
         const output = { ...preview, uri: copy.uri, name, size: copy.size };
-        await recordEditedFile({ ...output, kind: isPdf ? 'pdf' : 'image', deviceUri: '', location: 'Versara - app storage' });
         accepted = true;
+        if (mounted.current) setSaved(output);
+        const published = await saveEditedOutput({ output: output.uri, mimeType: output.mimeType, kind: isPdf ? 'pdf' : 'image', mode: 'new', name });
         // Edited files is authoritative; an optional Recents failure must not discard a saved copy.
         await rememberFile(output, isPdf ? 'pdf' : 'image').catch(() => null);
-        if (mounted.current) { setSaved(output); setNotice('Saved in Edited files. You can now save to your device or share.'); }
+        if (mounted.current) { setSaved({ ...output, location: published.device.location }); setNotice('Saved to ' + published.device.location); }
       } finally { if (!accepted) deleteTemporary(copy.uri); }
     }));
   }
   function publishToDevice() {
     launch(perform('saving', async () => {
       if (!saved) return;
-      const device = await saveToDevice(saved.uri, saved.name, saved.mimeType);
-      await recordEditedFile({ ...saved, kind: isPdf ? 'pdf' : 'image', deviceUri: device.uri, location: device.location });
-      if (mounted.current) setNotice('Saved to ' + device.location);
+      const published = await saveEditedOutput({ output: saved.uri, name: saved.name, mimeType: saved.mimeType, kind: isPdf ? 'pdf' : 'image', mode: 'new' });
+      if (mounted.current) { setSaved({ ...saved, location: published.device.location }); setNotice('Saved to ' + published.device.location); }
     }));
   }
   const image = saved ?? preview;
@@ -370,8 +369,8 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <ScreenHeader title={TITLES[mode]} onBack={close} share={{ onPress: () => image && shareNamedFile(image), disabled: busy || !image,
       label: saved ? 'Share private copy' : preview ? 'Share previewed private copy' : 'Preview the private copy before sharing' }}
-      save={{ onPress: () => saved ? publishToDevice() : saveCopy(), disabled: busy || (!saved && !preview),
-        label: saved ? 'Save private copy to device' : preview ? 'Save private copy' : 'Preview the private copy before saving' }} />
+      save={{ onPress: () => saved ? publishToDevice() : saveCopy(), disabled: busy || !!saved?.location || (!saved && !preview),
+        label: saved?.location ? 'Private copy saved' : preview ? 'Save private copy' : 'Preview the private copy before saving' }} />
     {!available ? <View style={styles.empty}>
       <UniversalIcon ios="lock.shield" android="security" size={36} color={colors.privacyInk} />
       <ThemedText>Update the app build to use native privacy scanning and export.</ThemedText>
@@ -433,7 +432,7 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
           {(phase === 'scanning' || phase === 'preparing') && <ToolButton title="Cancel" secondary onPress={() => { cancelJobs(); setNotice('Cancelled. Your current covers are kept.'); }} />}
         </View> : saved ? <>
           <ThemedText style={styles.note}>{saved.name} · {formatSize(saved.size)} · PNG</ThemedText>
-          <View style={styles.row}><View style={styles.grow}><ToolButton title="Save to device" onPress={publishToDevice} /></View><ToolButton title="Share" secondary onPress={() => launch(perform('sharing', () => shareNamedFile(saved)))} /></View>
+          <View style={styles.row}>{!saved.location && <View style={styles.grow}><ToolButton title="Save" onPress={publishToDevice} /></View>}<ToolButton title="Share" secondary onPress={() => launch(perform('sharing', () => shareNamedFile(saved)))} /></View>
           <ToolButton title={isPdf ? "Choose another PDF" : "Choose another image"} secondary onPress={() => router.replace({ pathname: '/privacy-files', params: { mode } })} />
         </> : preview ? <>
           {isPdf && <ThemedText style={styles.note}>Image-based PDF copy. Text selection, links and forms are removed; the original stays unchanged.</ThemedText>}

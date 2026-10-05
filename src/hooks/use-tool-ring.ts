@@ -10,13 +10,16 @@ import { setReaderBackHandler, setReaderHelpHandler } from '@/features/pdf/reade
 export function useToolRing(available: boolean) {
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const close = useCallback(() => { setNaming(false); setClosing(open); }, [open]);
+  const finishClose = useCallback(() => { setOpen(false); setClosing(false); }, []);
   const active = available && open;
   const namingActive = active && naming;
   const namingRef = useRef(false);
   useEffect(() => { namingRef.current = namingActive; }, [namingActive]);
   useEffect(() => {
     if (!active) return;
-    const leave = () => { if (namingRef.current) setNaming(false); else setOpen(false); return true; };
+    const leave = () => { if (namingRef.current) setNaming(false); else close(); return true; };
     const release = setReaderBackHandler(leave);
     const releaseHelp = setReaderHelpHandler(() => {
       const next = !namingRef.current;
@@ -25,7 +28,12 @@ export function useToolRing(available: boolean) {
     });
     const back = BackHandler.addEventListener('hardwareBackPress', leave);
     return () => { release(); releaseHelp(); back.remove(); };
-  }, [active]);
-  const toggle = useCallback(() => { setNaming(false); setOpen(value => !value); }, []);
-  return { active, naming: namingActive, toggle };
+  }, [active, close]);
+  const toggle = useCallback(() => {
+    setNaming(false);
+    if (closing) { setClosing(false); setOpen(true); }
+    else if (open) close();
+    else setOpen(true);
+  }, [closing, open, close]);
+  return { active, naming: namingActive, closing, toggle, close, finishClose };
 }

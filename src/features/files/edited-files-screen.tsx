@@ -15,7 +15,7 @@ import { useScreenActive } from '@/hooks/use-screen-active';
 import { editedFileExists, listEditedFiles, removeEditedFile, renameEditedFile, recordEditedFile, subscribeEditedFiles, type EditedFile } from './edited-files';
 import { formatSize, shareNamedFile } from './file-storage';
 import { Directory, File, Paths } from 'expo-file-system';
-import { askNewFileName, saveToDevice } from './save-file';
+import { askNewFileName, saveExistingFile } from './save-file';
 import { createPdfToolForDocument, discardPdfToolSession } from '../pdf/pdf-tool-session';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { toast } from '@/components/toast';
@@ -108,9 +108,8 @@ export function EditedFilesScreen() {
         catch (cause) { if (copy.exists) copy.delete(); throw cause; }
         toast('Copy added to Edited files');
       } else if (id === 'save') {
-        const saved = await saveToDevice(file.uri, file.name, file.mimeType);
-        await recordEditedFile({ ...file, deviceUri: saved.uri, location: saved.location });
-        toast(`Saved to ${saved.location}`);
+        const saved = await saveExistingFile(file);
+        if (saved) toast(`Saved to ${saved.device.location}`);
       } else if (id === 'share') {
         await shareNamedFile(file);
       } else if (id === 'info') showDialog('File details', `${file.name}\n${file.mimeType}\n${formatSize(file.size)}\nModified ${dateLabel(file.modified)}\n${file.location}`);
@@ -126,7 +125,7 @@ export function EditedFilesScreen() {
     { id: 'edit', title: 'Edit', subtitle: '', ios: 'square.and.pencil', android: 'edit' },
     { id: 'rename', title: 'Rename', subtitle: '', ios: 'pencil', android: 'drive-file-rename-outline' },
     { id: 'duplicate', title: 'Duplicate', subtitle: '', ios: 'doc.on.doc', android: 'file-copy' },
-    { id: 'save', title: 'Save to device', subtitle: '', ios: 'square.and.arrow.down', android: 'save' },
+    { id: 'save', title: 'Save', subtitle: '', ios: 'square.and.arrow.down', android: 'save' },
     { id: 'share', title: 'Share', subtitle: '', ios: 'square.and.arrow.up', android: 'share' },
     { id: 'info', title: 'Details', subtitle: '', ios: 'info.circle', android: 'info-outline' },
     { id: 'remove', title: 'Remove from list', subtitle: '', ios: 'trash', android: 'delete-outline' },
