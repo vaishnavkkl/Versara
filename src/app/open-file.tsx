@@ -33,7 +33,8 @@ export default function OpenFileScreen() {
       <ToolButton title="Go to home" onPress={() => router.replace('/')} />
     </View> : <View style={styles.content}>
       <AppLoader size="large" />
-      <ThemedText accessibilityLiveRegion="polite" style={styles.text}>Opening file...</ThemedText>
+      <ThemedText accessibilityLiveRegion="polite" style={styles.text}>Getting your file...</ThemedText>
+      <ThemedText style={[styles.text, { color: colors.secondaryLabel }]}>Files from email or cloud apps are downloaded and kept in Versara.</ThemedText>
     </View>}
   </SafeAreaView>;
 }

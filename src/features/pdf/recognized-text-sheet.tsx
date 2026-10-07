@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
+import { AppLoader } from '@/components/app-loader';
 import { AppBottomSheet } from '@/components/app-bottom-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -60,20 +61,25 @@ function TextSheet({ title, isPresented, onClose, children }: { title: string; i
   return <AppBottomSheet visible={isPresented} onClose={onClose} title={title} icon={{ ios: 'text.viewfinder', android: 'document-scanner' }} maxHeight={0.92}>{children}</AppBottomSheet>;
 }
 
-/** Full recognized text, one page at a time, as selectable paragraphs with copy actions. */
-export function RecognizedTextSheet({ text, isPresented, onClose, truncated = false }: { text: string; isPresented: boolean; onClose: () => void; truncated?: boolean }) {
+/**
+ * Recognized text as selectable paragraphs with copy actions. With `page`, only the text of the
+ * page the user is looking at is shown; otherwise every exported page is available one at a time.
+ */
+export function RecognizedTextSheet({ text, isPresented, onClose, truncated = false, page: currentPage }: { text: string; isPresented: boolean; onClose: () => void; truncated?: boolean; page?: number }) {
   const colors = usePalette();
-  const pages = useMemo(() => parseRecognizedText(text), [text]);
+  const parsed = useMemo(() => parseRecognizedText(text), [text]);
+  const onPage = currentPage === undefined ? undefined : parsed.find(item => item.title === `Page ${currentPage}`);
+  const pages = onPage ? [onPage] : parsed;
   const [index, setIndex] = useState(0);
   const [keepLines, setKeepLines] = useState(false);
   const page = pages[Math.min(index, pages.length - 1)];
   const format = (item: TextPage) => (keepLines ? item.lines.join('\n') : item.paragraphs.join('\n\n')).trim();
   const all = pages.map(item => pages.length > 1 ? `${item.title}\n\n${format(item)}` : format(item)).join('\n\n\n');
   const empty = !page || !page.paragraphs.length;
-  return <TextSheet title="Recognized text" isPresented={isPresented} onClose={onClose}>
+  return <TextSheet title={onPage ? `Text on ${onPage.title.toLowerCase()}` : 'Recognized text'} isPresented={isPresented} onClose={onClose}>
     <OptionCard title="Copy" icon={{ ios: 'doc.on.doc', android: 'content-copy' }}>
       <View style={styles.row}>
-        <EditorOption label="Copy all text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={!all.trim()} onPress={() => void copy(all, 'All text')} />
+        <EditorOption label={onPage ? 'Copy page text' : 'Copy all text'} icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={!all.trim()} onPress={() => void copy(all, onPage ? 'Page text' : 'All text')} />
         {pages.length > 1 && <EditorOption label={`Copy ${page?.title.toLowerCase() ?? 'page'}`} icon={{ ios: 'doc.text', android: 'description' }} disabled={empty} onPress={() => page && void copy(format(page), page.title)} />}
       </View>
       <View style={styles.row}>
@@ -105,7 +111,29 @@ export function RecognizedTextSheet({ text, isPresented, onClose, truncated = fa
   </TextSheet>;
 }
 
+/** The current page's text inside a tool sheet, ready to select or copy without saving a file. */
+export function PageTextCard({ page, text, loading, error, ocr }: { page: number; text: string; loading: boolean; error: string; ocr: boolean }) {
+  const colors = usePalette();
+  const [keepLines, setKeepLines] = useState(false);
+  const shown = useMemo(() => keepLines ? text : text.split(/\n\s*\n+/).flatMap(reflow).join('\n\n'), [text, keepLines]);
+  const empty = !loading && !error && !text.trim();
+  return <OptionCard title={`Text on page ${page}`} icon={{ ios: ocr ? 'text.viewfinder' : 'doc.plaintext', android: ocr ? 'mdi:text-recognition' : 'mdi:text-box-outline' }}>
+    {loading ? <View style={styles.loading}><AppLoader /><ThemedText style={{ color: colors.secondaryLabel }}>{ocr ? `Recognizing text on page ${page}…` : `Reading page ${page}…`}</ThemedText></View>
+      : error ? <ThemedText accessibilityRole="alert">{error}</ThemedText>
+      : empty ? <ThemedText style={{ color: colors.secondaryLabel }}>{ocr ? 'No text was recognized on this page. Clear, upright scans work best.' : 'This page has no stored text. It may be a scanned image; use Scan Text (OCR) to read it.'}</ThemedText>
+      : <>
+        <View style={styles.row}>
+          <EditorOption label="Copy page text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} onPress={() => void copy(shown, `Page ${page} text`)} />
+          <EditorOption label={keepLines ? 'Original lines' : 'Paragraphs'} icon={{ ios: keepLines ? 'list.bullet' : 'text.alignleft', android: keepLines ? 'format-list-bulleted' : 'notes' }} onPress={() => setKeepLines(value => !value)} />
+        </View>
+        <ThemedText selectable style={styles.body}>{shown}</ThemedText>
+        <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Long-press to select part of the text.{ocr ? ' Review recognized text for errors.' : ''}</ThemedText>
+      </>}
+  </OptionCard>;
+}
+
 const styles = StyleSheet.create({
+  loading: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   note: { fontSize: 12, lineHeight: 16 },
   pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },

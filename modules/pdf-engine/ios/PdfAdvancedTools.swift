@@ -123,7 +123,13 @@ final class PdfAdvancedTools {
           let requested = r["pages"] as? [Int] ?? []
           let pages = requested.isEmpty ? Array(0..<count) : requested.map { $0 - 1 }
           try self.require(pages.count <= 2000 && Set(pages).count == pages.count && pages.allSatisfy { (0..<count).contains($0) }, "Choose valid, unique page numbers.")
-          if !["info", "preview"].contains(op) {
+          // Reading text never changes the PDF, so it needs only extraction rights, not edit rights or an unsigned file.
+          let readsText = op == "extract_text" || (op == "ocr" && (r["ocrFormat"] as? String ?? "text") == "text")
+          let textPreview = readsText && (r["textPreview"] as? Bool ?? false)
+          if readsText {
+            try self.require(pdf.allowsCopying, "This PDF does not allow copying its text.")
+            try self.require(!textPreview || pages.count == 1, "Preview the text of one page at a time.")
+          } else if !["info", "preview"].contains(op) {
             try self.require(pdf.allowsDocumentChanges && pdf.allowsCopying && pdf.allowsDocumentAssembly, "This PDF restricts editing or extraction. Use an unrestricted copy.")
             try self.check(id)
             try PdfIntegrity.requireUnsigned(source, password: r["inputPassword"] as? String ?? "")
@@ -214,7 +220,7 @@ final class PdfAdvancedTools {
               ocrSummary = response
               try self.check(id); progress(pages.count + 1, pages.count + 1)
             } else {
-              let target = try output(0)
+              let target = try output(0, preview: textPreview)
               try Data().write(to: target)
               let file = try FileHandle(forWritingTo: target); defer { try? file.close() }
               for (index, number) in pages.enumerated() {

@@ -1246,4 +1246,43 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
     return Json{{"code", "PDF_EDIT_FAILED"}, {"error", "Could not edit this PDF. Check the file and available storage."}}.dump();
   }
 }
+
+void* readerOpen(const std::string& path, const std::string& password, int& error) {
+  std::lock_guard<std::mutex> guard(engineLock);
+  std::call_once(initialized, [] { FPDF_InitLibrary(); });
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(path.c_str(), password.empty() ? nullptr : password.c_str());
+  error = doc ? 0 : static_cast<int>(FPDF_GetLastError());
+  return doc;
+}
+void readerClose(void* doc) {
+  if (!doc) return;
+  std::lock_guard<std::mutex> guard(engineLock);
+  FPDF_CloseDocument(static_cast<FPDF_DOCUMENT>(doc));
+}
+int readerPageCount(void* doc) {
+  std::lock_guard<std::mutex> guard(engineLock);
+  return FPDF_GetPageCount(static_cast<FPDF_DOCUMENT>(doc));
+}
+bool readerPageSize(void* doc, int index, double& width, double& height) {
+  std::lock_guard<std::mutex> guard(engineLock);
+  FS_SIZEF size;
+  if (!FPDF_GetPageSizeByIndexF(static_cast<FPDF_DOCUMENT>(doc), index, &size)) return false;
+  width = size.width; height = size.height;
+  return true;
+}
+bool readerRender(void* doc, int index, void* pixels, int width, int height, int stride,
+                  float scale, float left, float top, const float clip[4]) {
+  std::lock_guard<std::mutex> guard(engineLock);
+  FPDF_PAGE page = FPDF_LoadPage(static_cast<FPDF_DOCUMENT>(doc), index);
+  if (!page) return false;
+  FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(width, height, FPDFBitmap_BGRA, pixels, stride);
+  if (!bitmap) { FPDF_ClosePage(page); return false; }
+  const FS_MATRIX matrix{scale, 0, 0, scale, left, top};
+  const FS_RECTF area{clip[0], clip[1], clip[2], clip[3]};
+  // FPDF_ANNOT draws ink, highlight and stamp annotations the platform renderer skips.
+  FPDF_RenderPageBitmapWithMatrix(bitmap, page, &matrix, &area, FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER);
+  FPDFBitmap_Destroy(bitmap);
+  FPDF_ClosePage(page);
+  return true;
+}
 }

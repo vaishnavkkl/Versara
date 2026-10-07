@@ -10,7 +10,7 @@ import type { OptionIcon } from '@/theme/editor-icons';
  * The row under a tool's header: history on the left, navigation centred, tool actions on the right.
  * `vertical` turns it into a left rail for landscape, matching the PDF preview's side rails.
  */
-export function ToolActionRow({ left, center, right, below, style, vertical = false }: { left?: ReactNode; center?: ReactNode; right?: ReactNode; below?: ReactNode; style?: StyleProp<ViewStyle>; vertical?: boolean }) {
+export function ToolActionRow({ left, center, right, below, style, vertical = false, compact = false }: { left?: ReactNode; center?: ReactNode; right?: ReactNode; below?: ReactNode; style?: StyleProp<ViewStyle>; vertical?: boolean; /** One line that never wraps; pair with compact buttons. */ compact?: boolean }) {
   const colors = usePalette();
   if (vertical) return <View style={[styles.rail, { borderColor: colors.separator, backgroundColor: colors.systemBackground }, style]}>
     <ScrollView style={styles.railScroll} contentContainerStyle={styles.railContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
@@ -19,23 +19,23 @@ export function ToolActionRow({ left, center, right, below, style, vertical = fa
       <View style={styles.railGroup}>{right}{below}</View>
     </ScrollView>
   </View>;
-  return <View style={[styles.container, { borderColor: colors.separator }, style]}>
-    <View style={styles.row}>
-      <View style={[styles.side, styles.start]}>{left}</View>
-      {center && <View style={styles.center}>{center}</View>}
-      <View style={[styles.side, styles.end]}>{right}</View>
+  return <View style={[styles.container, compact && styles.compactContainer, { borderColor: colors.separator }, style]}>
+    <View style={[styles.row, compact && styles.compactRow]}>
+      <View style={[styles.side, styles.start, compact && styles.compactSide]}>{left}</View>
+      {center && <View style={[styles.center, compact && styles.compactRow]}>{center}</View>}
+      <View style={[styles.side, styles.end, compact && styles.compactSide]}>{right}</View>
     </View>
     {below && <View style={styles.below}>{below}</View>}
   </View>;
 }
 
 /** Square icon button for the action row; `label` is spoken and shown under the icon when `caption` is set. */
-export function ToolRowButton({ label, icon, onPress, selected = false, disabled = false, caption = false, expanded }: {
-  label: string; icon: OptionIcon; onPress: () => void; selected?: boolean; disabled?: boolean; caption?: boolean; expanded?: boolean;
+export function ToolRowButton({ label, icon, onPress, selected = false, disabled = false, caption = false, expanded, compact = false }: {
+  label: string; icon: OptionIcon; onPress: () => void; selected?: boolean; disabled?: boolean; caption?: boolean; expanded?: boolean; compact?: boolean;
 }) {
   const colors = usePalette();
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled, expanded }} disabled={disabled} onPress={onPress} hitSlop={2}
-    style={({ pressed }) => [styles.button, caption && styles.captioned, { backgroundColor: selected ? colors.accentSurface : 'transparent', borderColor: selected ? colors.accent : 'transparent', opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled, expanded }} disabled={disabled} onPress={onPress} hitSlop={compact ? { top: 2, bottom: 2 } : 2}
+    style={({ pressed }) => [styles.button, compact && styles.compactButton, caption && styles.captioned, { backgroundColor: selected ? colors.accentSurface : 'transparent', borderColor: selected ? colors.accent : 'transparent', opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
     <UniversalIcon {...icon} size={22} color={colors.systemBlue} />
     {caption && <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.systemBlue }]}>{label}</ThemedText>}
   </Pressable>;
@@ -52,6 +52,10 @@ const styles = StyleSheet.create({
   below: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingBottom: 4 },
   button: { minWidth: 44, minHeight: 44, paddingHorizontal: 4, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   captioned: { minWidth: 52, paddingVertical: 2 },
+  compactContainer: { paddingHorizontal: 2 },
+  compactRow: { gap: 0 },
+  compactSide: { flexWrap: 'nowrap', gap: 0 },
+  compactButton: { minWidth: 34, paddingHorizontal: 0 },
   rail: { width: 84, borderRightWidth: StyleSheet.hairlineWidth },
   railScroll: { flex: 1 },
   railContent: { flexGrow: 1, justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6, gap: 10 },

@@ -8,7 +8,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { HelpButton } from '@/components/help-button';
 import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
-import RecentImagesView, { hasNativeImageList, hasNativeListRefresh, hasNativeMediaList, hasNativeThumbnailRevisions } from '../../../modules/file-engine/src/RecentImagesView';
+import RecentImagesView, { hasNativeListBookmarks, hasNativeImageList, hasNativeListRefresh, hasNativeMediaList, hasNativeThumbnailRevisions } from '../../../modules/file-engine/src/RecentImagesView';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing, typography } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -33,6 +33,8 @@ import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
 import { stagePreviewFile } from './preview-handoff';
 import { formatWhen, showRecentFileActions } from './recent-file-actions';
 import { getFileRevision, useLibraryRevision } from './library-revision';
+import { isFileBookmarked, useBookmarks } from './bookmarks';
+import { toggleFileBookmarkWithFeedback } from './bookmark-actions';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
@@ -73,7 +75,10 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
   const [accessBusy, setAccessBusy] = useState(false);
   const files = useMemo(() => {
     if (!showPdfs || !hasNativePdfLibrary) return libraryFiles;
-    return [...libraryFiles, ...pdfs.items].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT);
+    // A device PDF opened before is already in the library under the same name; list it once.
+    const names = new Set(libraryFiles.map(item => `${item.kind}:${item.name.toLowerCase()}`));
+    const device = pdfs.items.filter(item => !names.has(`${item.kind}:${item.name.toLowerCase()}`));
+    return [...libraryFiles, ...device].sort((a, b) => b.opened - a.opened).slice(0, RECENT_LIMIT);
   }, [showPdfs, libraryFiles, pdfs.items]);
   const [loading, setLoading] = useState(() => !listCache.has(`${cacheKind}|`));
   const [busy, setBusy] = useState(false);
@@ -211,12 +216,15 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
 
   const label = FILE_LABELS[kind];
   const article = kind === 'image' || kind === 'audio' ? 'an' : 'a';
+  const bookmarks = useBookmarks(state => state.items);
+  const canBookmark = (item: RecentListItem) => !onSelect && (item.kind === 'pdf' || item.kind === 'image');
   const nativeItems = JSON.stringify(files.map(item => ({
+    bookmarkable: hasNativeListBookmarks && canBookmark(item), bookmarked: isFileBookmarked(bookmarks, item),
     id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
     revision: `${item.opened}:${item.size}:${getFileRevision(item.uri)}`,
     detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${formatWhen(item.opened)}`,
   })));
-  const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground });
+  const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground, accent: colors.systemBlue });
 
   return (
     <View style={[styles.screen, getGradients(colors).page]}>
@@ -296,6 +304,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
           onOpen={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item) void openItem(item); }}
           onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (!onSelect && item?.source === 'library' && !busy) remove(item); }}
           onLongPress={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && !busy) showRecentFileActions(item, refreshAll); }}
+          onBookmark={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && canBookmark(item)) toggleFileBookmarkWithFeedback(item); }}
         />
       ) : (
         <FlatList
@@ -327,6 +336,12 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
                     </ThemedText>
                   </View>
                 </Pressable>
+                {canBookmark(item) && (() => {
+                  const marked = isFileBookmarked(bookmarks, item);
+                  return <Pressable accessibilityRole="button" accessibilityLabel={marked ? `Remove bookmark from ${item.name}` : `Bookmark ${item.name}`} accessibilityState={{ selected: marked }} onPress={() => toggleFileBookmarkWithFeedback(item)} style={[styles.iconButton, grid && styles.bookmarkCorner]}>
+                    <UniversalIcon ios={marked ? 'bookmark.fill' : 'bookmark'} android={marked ? 'bookmark' : 'bookmark-border'} size={20} color={marked ? colors.systemBlue : colors.secondaryLabel} />
+                  </Pressable>;
+                })()}
                 {!fromDevice && !onSelect && (
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name} from Recents`} onPress={() => remove(item)} style={[styles.iconButton, grid ? styles.removeCorner : styles.removeTop]}>
                     <UniversalIcon ios="xmark.circle.fill" android="cancel" size={20} color={colors.secondaryLabel} />
@@ -408,6 +423,7 @@ const styles = StyleSheet.create({
   pdfStatus: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingLeft: spacing.lg, paddingRight: spacing.sm, marginBottom: spacing.xs },
   inset: { paddingHorizontal: spacing.lg },
   removeCorner: { position: 'absolute', top: spacing.xs, right: spacing.xs },
+  bookmarkCorner: { position: 'absolute', top: spacing.xs, left: spacing.xs },
   removeTop: { alignSelf: 'flex-start' },
   pageButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.35 },

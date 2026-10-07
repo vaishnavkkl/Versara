@@ -40,20 +40,20 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
     finally { if (mounted.current) setSaving(false); }
   }
   const button = <Pressable accessibilityRole="button" accessibilityLabel={backLabel ?? (close ? 'Close preview' : 'Go back')} onPress={onBack} hitSlop={4}
-    style={({ pressed }) => [styles.back, close && { backgroundColor: colors.accentSurface, borderRadius: 22 }, { opacity: pressed ? 0.6 : 1 }]}>
+    style={({ pressed }) => [styles.back, { opacity: pressed ? 0.6 : 1 }]}>
     <UniversalIcon ios={close ? 'xmark' : 'chevron.left'} android={close ? 'close' : 'arrow-back'} size={22} color={colors.systemBlue} />
   </Pressable>;
   const shareDisabled = !share || !!share.disabled || sharing;
   const shareButton = share !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={share?.label ?? 'Share'} accessibilityState={{ disabled: shareDisabled, busy: sharing }}
     disabled={shareDisabled} onPress={() => void runShare()} hitSlop={4}
-    style={({ pressed }) => [styles.back, styles.share, { backgroundColor: colors.accentSurface, opacity: shareDisabled && !sharing ? 0.4 : pressed ? 0.6 : 1 }]}>
-    {sharing ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.up" android="share" size={21} color={colors.systemBlue} />}
+    style={({ pressed }) => [styles.back, { opacity: shareDisabled && !sharing ? 0.4 : pressed ? 0.6 : 1 }]}>
+    {sharing ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.up" android="mdi:share-variant-outline" size={22} color={colors.systemBlue} />}
   </HelpPressable>;
   const saveDisabled = !save || !!save.disabled || saving;
   const saveButton = save !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={save?.label ?? 'Save'} accessibilityState={{ disabled: saveDisabled, busy: saving }}
     disabled={saveDisabled} onPress={() => void runSave()} hitSlop={4}
-    style={({ pressed }) => [styles.back, styles.share, { backgroundColor: colors.accentSurface, opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
-    {saving ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.down" android="save" size={21} color={colors.systemBlue} />}
+    style={({ pressed }) => [styles.back, { opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
+    {saving ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.down" android="mdi:content-save-outline" size={22} color={colors.systemBlue} />}
   </HelpPressable>;
   return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
     <View style={[styles.side, styles.start]}>{close ? children : button}</View>
@@ -64,12 +64,11 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
 
 const styles = StyleSheet.create({
   header: { minHeight: 52, paddingLeft: s.xs, paddingRight: s.sm, flexDirection: 'row', alignItems: 'center', gap: s.xs, borderBottomWidth: StyleSheet.hairlineWidth },
-  closeHeader: { paddingLeft: s.md, paddingRight: s.sm },
+  closeHeader: { paddingLeft: s.xs, paddingRight: s.xs },
   // Actions use their actual intrinsic width, including multi-button help/history groups.
   side: { flexShrink: 0, minWidth: 44, flexDirection: 'row', alignItems: 'center' },
   start: { justifyContent: 'flex-start' },
-  end: { justifyContent: 'flex-end', gap: s.xs },
-  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  share: { borderRadius: 12 },
+  end: { justifyContent: 'flex-end', gap: 2 },
+  back: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, minWidth: 0, ...t.label, fontSize: 17, textAlign: 'center' },
 });

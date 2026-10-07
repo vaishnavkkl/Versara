@@ -14,25 +14,25 @@ const DISMISS_DISTANCE = 120;
 const DISMISS_VELOCITY = 900;
 const SPRING = { damping: 22, stiffness: 220 };
 
-type Props = { uri: string; onClose: () => void };
+type Props = { uri: string; onClose: () => void; onTap?: () => void };
 
 /** Pinch and double-tap to zoom at the touch point, drag to pan while zoomed, swipe down at normal size to close. */
 export function ZoomableImage(props: Props) {
   return hasNativeZoomImage && NativeZoomableImage ? <NativeImage {...props} /> : <GestureImage {...props} />;
 }
 
-function NativeImage({ uri, onClose }: Props) {
+function NativeImage({ uri, onClose, onTap }: Props) {
   const [state, setState] = useState<{ uri: string; loading: boolean; error: string | null }>({ uri, loading: true, error: null });
   const current = state.uri === uri ? state : { uri, loading: true, error: null };
   if (!NativeZoomableImage) return null;
   if (current.error) return <View style={styles.message}><ThemedText style={styles.center}>{current.error}</ThemedText></View>;
   return <View style={styles.fill}>
-    <NativeZoomableImage source={uri} style={styles.fill} onLoad={() => setState({ uri, loading: false, error: null })} onError={({ nativeEvent }) => setState({ uri, loading: false, error: nativeEvent.message })} onDismiss={onClose} />
+    <NativeZoomableImage source={uri} style={styles.fill} onLoad={() => setState({ uri, loading: false, error: null })} onError={({ nativeEvent }) => setState({ uri, loading: false, error: nativeEvent.message })} onDismiss={onClose} onTap={onTap} />
     {current.loading && <AppLoader style={StyleSheet.absoluteFill} />}
   </View>;
 }
 
-function GestureImage({ uri, onClose }: Props) {
+function GestureImage({ uri, onClose, onTap }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const width = useSharedValue(1);
@@ -112,8 +112,12 @@ function GestureImage({ uri, onClose }: Props) {
       savedX.value = targetX; savedY.value = targetY;
     });
 
+  const singleTap = Gesture.Tap()
+    .enabled(!!onTap)
+    .onEnd((_event, success) => { if (success && onTap) scheduleOnRN(onTap); });
+
   // Double tap must not block pinch; pan needs movement so taps never trigger it.
-  const gesture = Gesture.Simultaneous(doubleTap, pinch, pan);
+  const gesture = Gesture.Simultaneous(Gesture.Exclusive(doubleTap, singleTap), pinch, pan);
   const imageStyle = useAnimatedStyle(() => ({
     opacity: 1 - Math.min(0.6, dismiss.value / (height.value * 1.2)),
     transform: [

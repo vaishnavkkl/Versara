@@ -101,6 +101,9 @@ declare class FileEngine extends NativeModule {
   requestFileAccessAsync(): Promise<FileAccessResult>;
   listDeviceRecents(kind: string, limit: number, search: string): Promise<DeviceRecentFile[]>;
   importDeviceFile(uri: string, kind: string, destinationUri: string): Promise<ImportedDeviceFile>;
+  /** Android: imports the file another app opened Versara with, using the exact URI its intent granted. */
+  readonly nativeIncomingFileVersion?: number;
+  importIncomingFile?(uri: string, destinationUri: string): Promise<ImportedDeviceFile>;
 }
 
 export default requireOptionalNativeModule<FileEngine>('FileEngine');

@@ -6,6 +6,7 @@ final class PdfEngineView: ExpoView {
   let onPageChange = EventDispatcher()
   let onZoomChange = EventDispatcher()
   let onError = EventDispatcher()
+  let onTap = EventDispatcher()
   var source = ""
   /// Opening password for a protected PDF; kept only in memory.
   var password = ""
@@ -16,6 +17,10 @@ final class PdfEngineView: ExpoView {
   var zoomRevision = 0
   var dark = true
   var focusCurrent = false
+  /// Two pages side by side.
+  var twoPage = false
+  /// Right-to-left reading: spreads and page swipes follow the other direction.
+  var rightToLeft = false
   private var veilDark: Bool?
   private let topVeil = UIVisualEffectView()
   private let bottomVeil = UIVisualEffectView()
@@ -139,6 +144,23 @@ final class PdfEngineView: ExpoView {
     }
     scrollThumb.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(scrubPages(_:))))
     addSubview(scrollThumb)
+    // PDFKit keeps its own double-tap zoom; a single tap only reports once a double tap is ruled out.
+    let doubleTap = UITapGestureRecognizer(target: nil, action: nil)
+    doubleTap.numberOfTapsRequired = 2
+    let singleTap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+    singleTap.require(toFail: doubleTap)
+    for gesture in [doubleTap, singleTap] {
+      gesture.cancelsTouchesInView = false
+      gesture.delegate = self
+      pdfView.addGestureRecognizer(gesture)
+    }
+    // Single-page mode turns pages with a horizontal swipe, in the reading direction.
+    for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+      let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:)))
+      swipe.direction = direction
+      swipe.delegate = self
+      pdfView.addGestureRecognizer(swipe)
+    }
     observer = NotificationCenter.default.addObserver(
       forName: .PDFViewPageChanged, object: pdfView, queue: .main
     ) { [weak self] _ in self?.reportPage() }
@@ -160,10 +182,11 @@ final class PdfEngineView: ExpoView {
   }
 
   func applyProps() {
-    let display: PDFDisplayMode = vertical ? .singlePageContinuous : .singlePage
-    if pdfView.displayMode != display {
+    let display: PDFDisplayMode = vertical ? (twoPage ? .twoUpContinuous : .singlePageContinuous) : (twoPage ? .twoUp : .singlePage)
+    if pdfView.displayMode != display || pdfView.displaysRTL != rightToLeft {
       let page = pdfView.currentPage
       pdfView.displayMode = display
+      pdfView.displaysRTL = rightToLeft
       if let page { pdfView.go(to: page) }
       applyZoom()
     }
@@ -323,6 +346,17 @@ final class PdfEngineView: ExpoView {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: hide)
   }
 
+  @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+    // A tap that clears a text selection must not also toggle the reader's controls.
+    guard gesture.state == .ended, pdfView.currentSelection == nil else { return }
+    onTap([:])
+  }
+  @objc private func swiped(_ gesture: UISwipeGestureRecognizer) {
+    guard !vertical, pdfView.scaleFactor <= pdfView.scaleFactorForSizeToFit * 1.01 else { return }
+    let forward = (gesture.direction == .left) != rightToLeft
+    if forward, pdfView.canGoToNextPage { pdfView.goToNextPage(nil) }
+    else if !forward, pdfView.canGoToPreviousPage { pdfView.goToPreviousPage(nil) }
+  }
   @objc private func scrubPages(_ gesture: UIPanGestureRecognizer) {
     guard let scroll = observedScroll else { return }
     switch gesture.state {
@@ -358,4 +392,8 @@ final class PdfEngineView: ExpoView {
     if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
     // PDFKit releases its document and tiles with the view. Pending opens hold only a weak reference.
   }
+}
+
+extension PdfEngineView: UIGestureRecognizerDelegate {
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }

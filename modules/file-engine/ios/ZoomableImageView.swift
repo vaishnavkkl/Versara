@@ -7,6 +7,7 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
   let onLoad = EventDispatcher()
   let onError = EventDispatcher()
   let onDismiss = EventDispatcher()
+  let onTap = EventDispatcher()
   private let scroll = UIScrollView()
   private let imageView = UIImageView()
   private var source = ""
@@ -39,6 +40,9 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
     let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
     doubleTap.numberOfTapsRequired = 2
     scroll.addGestureRecognizer(doubleTap)
+    let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap(_:)))
+    singleTap.require(toFail: doubleTap)
+    scroll.addGestureRecognizer(singleTap)
     isAccessibilityElement = true
     accessibilityTraits = .image
     accessibilityLabel = "Image preview"
@@ -156,6 +160,9 @@ final class ZoomableImageView: ExpoView, UIScrollViewDelegate {
     scroll.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
   }
 
+  @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {
+    if !dismissing { onTap([:]) }
+  }
   @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
     if scroll.zoomScale > 1.05 {
       scroll.setZoomScale(1, animated: true)

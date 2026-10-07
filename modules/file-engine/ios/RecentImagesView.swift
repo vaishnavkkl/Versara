@@ -13,12 +13,15 @@ private struct RecentImage: Decodable {
   let removable: Bool
   let kind: String?
   let revision: String?
+  let bookmarkable: Bool?
+  let bookmarked: Bool?
 }
 
 final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
   let onOpen = EventDispatcher()
   let onRemove = EventDispatcher()
   let onLongPress = EventDispatcher()
+  let onBookmark = EventDispatcher()
   var disabled = false
   private var active = true
   func setActive(_ value: Bool) {
@@ -42,6 +45,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   private var label = UIColor.label
   private var secondary = UIColor.secondaryLabel
   private var surface = UIColor.secondarySystemBackground
+  private var accent = UIColor.systemBlue
   private let flow = UICollectionViewFlowLayout()
   private lazy var list = UICollectionView(frame: .zero, collectionViewLayout: flow)
   private let cache = NSCache<NSString, UIImage>()
@@ -122,6 +126,7 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
       return UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255, blue: CGFloat(rgb & 255) / 255, alpha: 1)
     }
     label = color("label"); secondary = color("secondary"); surface = color("surface")
+    accent = values["accent"] == nil ? label : color("accent")
     list.reloadData()
   }
   func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { items.count }
@@ -133,10 +138,14 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
   func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
     let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "image", for: indexPath) as! RecentImageCell
     let item = items[indexPath.item]
-    cell.configure(item, grid: grid, label: label, secondary: secondary, surface: surface)
+    cell.configure(item, grid: grid, label: label, secondary: secondary, surface: surface, accent: accent)
     cell.removeAction = { [weak self] in
       guard let self = self, !self.disabled else { return }
       self.onRemove(["id": item.id])
+    }
+    cell.bookmarkAction = { [weak self] in
+      guard let self = self, !self.disabled, item.bookmarkable == true else { return }
+      self.onBookmark(["id": item.id])
     }
     load(item, into: cell)
     return cell
@@ -247,10 +256,12 @@ private final class RecentImageCell: UICollectionViewCell {
   private let name = UILabel()
   private let detail = UILabel()
   private let remove = UIButton(type: .system)
+  private let bookmark = UIButton(type: .system)
   private var grid = false
   var token = UUID()
   var cancel: (() -> Void)?
   var removeAction: (() -> Void)?
+  var bookmarkAction: (() -> Void)?
   override init(frame: CGRect) {
     super.init(frame: frame)
     contentView.layer.cornerRadius = 10
@@ -264,11 +275,13 @@ private final class RecentImageCell: UICollectionViewCell {
     name.numberOfLines = 2; detail.numberOfLines = 2
     remove.setImage(UIImage(systemName: "xmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)), for: .normal)
     remove.addTarget(self, action: #selector(removeTapped), for: .touchUpInside)
-    [image, name, detail, remove].forEach { contentView.addSubview($0) }
+    bookmark.addTarget(self, action: #selector(bookmarkTapped), for: .touchUpInside)
+    [image, name, detail, remove, bookmark].forEach { contentView.addSubview($0) }
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
   @objc private func removeTapped() { removeAction?() }
-  func configure(_ item: RecentImage, grid: Bool, label: UIColor, secondary: UIColor, surface: UIColor) {
+  @objc private func bookmarkTapped() { bookmarkAction?() }
+  func configure(_ item: RecentImage, grid: Bool, label: UIColor, secondary: UIColor, surface: UIColor, accent: UIColor) {
     releaseImage()
     self.grid = grid
     image.contentMode = item.kind == "pdf" ? .scaleAspectFit : .scaleAspectFill
@@ -283,6 +296,15 @@ private final class RecentImageCell: UICollectionViewCell {
     remove.layer.shadowOffset = .zero
     remove.isHidden = !item.removable
     remove.accessibilityLabel = "Remove \(item.name) from Recents"
+    let marked = item.bookmarked == true
+    bookmark.setImage(UIImage(systemName: marked ? "bookmark.fill" : "bookmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), for: .normal)
+    bookmark.tintColor = grid ? .white : marked ? accent : secondary.withAlphaComponent(0.7)
+    bookmark.layer.shadowOpacity = grid ? 0.45 : 0
+    bookmark.layer.shadowRadius = 3
+    bookmark.layer.shadowOffset = .zero
+    bookmark.isHidden = item.bookmarkable != true
+    bookmark.isSelected = marked
+    bookmark.accessibilityLabel = marked ? "Remove bookmark from \(item.name)" : "Bookmark \(item.name)"
     name.accessibilityLabel = "Open \(item.name)"
     setNeedsLayout()
   }
@@ -295,17 +317,21 @@ private final class RecentImageCell: UICollectionViewCell {
       name.frame = CGRect(x: 10, y: image.frame.maxY + 6, width: textWidth, height: name.font.lineHeight * 2)
       detail.frame = CGRect(x: 10, y: name.frame.maxY + 2, width: textWidth, height: detail.font.lineHeight * 2)
       remove.frame = CGRect(x: image.frame.maxX - 46, y: image.frame.minY + 2, width: 44, height: 44)
+      bookmark.frame = CGRect(x: image.frame.minX + 2, y: image.frame.minY + 2, width: 44, height: 44)
       contentView.bringSubviewToFront(remove)
+      contentView.bringSubviewToFront(bookmark)
     } else {
       image.frame = CGRect(x: 10, y: (bounds.height - 40) / 2, width: 40, height: 40)
-      let textWidth = max(1, width - 72 - (remove.isHidden ? 0 : 48))
+      let trailing = (remove.isHidden ? 0 : 48) + (bookmark.isHidden ? 0 : 44)
+      let textWidth = max(1, width - 72 - CGFloat(trailing))
       name.frame = CGRect(x: 62, y: 6, width: textWidth, height: name.font.lineHeight * 2)
       detail.frame = CGRect(x: 62, y: name.frame.maxY, width: textWidth, height: detail.font.lineHeight)
       remove.frame = CGRect(x: width - 48, y: 2, width: 48, height: 44)
+      bookmark.frame = CGRect(x: width - (remove.isHidden ? 48 : 92), y: (bounds.height - 44) / 2, width: 44, height: 44)
     }
   }
   func cancelLoad() { token = UUID(); cancel?(); cancel = nil }
   func releaseImage() { cancelLoad(); image.image = nil }
-  override func prepareForReuse() { super.prepareForReuse(); releaseImage(); removeAction = nil }
+  override func prepareForReuse() { super.prepareForReuse(); releaseImage(); removeAction = nil; bookmarkAction = nil }
   deinit { cancel?() }
 }

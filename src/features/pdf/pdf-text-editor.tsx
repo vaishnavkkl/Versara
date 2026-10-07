@@ -181,7 +181,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     return () => { show.remove(); hide.remove(); };
   }, []);
   const toolbar = useResponsiveEditorToolbar(
-    [{ label: 'Options', minWidth: TEXT_ACTION_MIN_WIDTH }],
+    [],
     [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, 'Save (' + edits.length + ')'],
   );
   const mounted = useRef(true);
@@ -307,23 +307,35 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   }, []);
   const removedIds = useMemo(() => edits.filter(edit => edit.page === page && edit.kind === 'delete').map(edit => edit.objectId!), [edits, page]);
   const previewObjects = preview?.objects;
-  // Rendered fragments carry no link to the "add" edit that produced them; match by line text and position.
+  // Page area each applied addition covers, estimated from its text, size and position. Rendered fragments carry no
+  // link to the edit that produced them, and embedded fonts can change their extracted text, so matching goes by area.
+  const additionBoxes = useMemo(() => {
+    if (!preview) return [];
+    const pointWidth = preview.pointWidth || 612;
+    const pageHeight = pointWidth * preview.height / Math.max(1, preview.width);
+    return edits.flatMap((edit, index) => {
+      if (edit.kind !== 'add' || edit.page !== page || index === editingAddition) return [];
+      const lines = (edit.text ?? '').split('\n');
+      const size = edit.size ?? 16;
+      const longest = Math.max(1, ...lines.map(line => line.length));
+      const x = edit.x ?? 0, y = edit.y ?? 0;
+      return [{ index, x: x - 0.01, y: y - 0.02, right: x + Math.min(1, longest * size * 0.6 / pointWidth) + 0.01, bottom: y + lines.length * size * 1.4 / pageHeight + 0.02 }];
+    });
+  }, [preview, edits, page, editingAddition]);
+  const additionAt = useCallback((point: { x: number; y: number }) => {
+    const hits = additionBoxes.filter(box => point.x >= box.x && point.x <= box.right && point.y >= box.y && point.y <= box.bottom);
+    // The newest addition is drawn on top.
+    return hits.length ? hits[hits.length - 1].index : undefined;
+  }, [additionBoxes]);
   const addedObjects = useMemo(() => {
     const found = new Map<number, number>();
-    if (!previewObjects || !preview) return found;
-    const pageHeight = (preview.pointWidth || 612) * preview.height / Math.max(1, preview.width);
-    edits.forEach((edit, index) => {
-      if (edit.kind !== 'add' || edit.page !== page || index === editingAddition) return;
-      const lines = (edit.text ?? '').split('\n').map(line => line.trim()).filter(Boolean);
-      const lineHeight = (edit.size ?? 16) * 1.4 / pageHeight;
-      for (const object of previewObjects) {
-        if (!object.bounds || found.has(object.id) || !lines.includes(object.text.trim())) continue;
-        const baseline = object.bounds.y + object.bounds.height;
-        if (Math.abs(object.bounds.x - (edit.x ?? 0)) < 0.05 && baseline > (edit.y ?? 0) - 0.03 && baseline < (edit.y ?? 0) + lines.length * lineHeight + 0.03) found.set(object.id, index);
-      }
-    });
+    for (const object of previewObjects ?? []) {
+      if (!object.bounds) continue;
+      const index = additionAt({ x: object.bounds.x + object.bounds.width / 2, y: object.bounds.y + object.bounds.height / 2 });
+      if (index !== undefined) found.set(object.id, index);
+    }
     return found;
-  }, [previewObjects, preview, edits, page, editingAddition]);
+  }, [previewObjects, additionAt]);
   const pageObjects = useMemo(() => (previewObjects ?? []).filter(object => !addedObjects.has(object.id)), [previewObjects, addedObjects]);
   const objectsJson = useMemo(() => JSON.stringify((previewObjects ?? [])
     .filter(object => object.bounds && (object.id === selected?.id || !removedIds.includes(object.id)))
@@ -349,12 +361,9 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     setText(edit.text ?? ''); setSize(String(edit.size ?? 16)); setTextStyle(styleFromFont(edit.font ?? 'Helvetica', edit.underline)); setIndent(0); setInk(edit.color ?? DEFAULT_INK);
   }, [edits, invalidateDraft]);
   const placeText = useCallback((point: { x: number; y: number }) => {
-    if (editingAddition === null && !placement) {
-      const hit = (previewObjects ?? []).find(object => object.bounds && addedObjects.has(object.id)
-        && point.x >= object.bounds.x - 0.01 && point.x <= object.bounds.x + object.bounds.width + 0.01
-        && point.y >= object.bounds.y - 0.01 && point.y <= object.bounds.y + object.bounds.height + 0.01);
-      if (hit) { openAddition(addedObjects.get(hit.id)!); return; }
-    }
+    // Tapping text added earlier reopens it to edit or move, also while another new box is open.
+    const hit = additionAt(point);
+    if (hit !== undefined && !(placement && text.trim() && editingAddition === null)) { openAddition(hit); return; }
     invalidateDraft(); setShowFormatting(false); setPlacement(point); setShowTextList(false); setShowOptions(false);
     if (editingAddition === null && !placement) {
       const nearest = (previewObjects ?? []).filter(object => object.bounds && object.text.trim()).reduce<TextObject | undefined>((best, object) => {
@@ -365,7 +374,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       setSize(String(nearest ? Math.max(4, Math.min(200, roundSize(nearest.size))) : 16));
       setText(''); setIndent(0); setInk(nearest?.color ?? DEFAULT_INK);
     }
-  }, [editingAddition, placement, invalidateDraft, previewObjects, addedObjects, openAddition]);
+  }, [editingAddition, placement, invalidateDraft, previewObjects, additionAt, openAddition, text]);
 
   function changeIndent(next: number) {
     const value = Math.max(0, Math.min(INDENT_STEP * 20, next));
@@ -622,11 +631,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const replaceMatches = searchMatches;
   const replacePlaces = replaceMatches.reduce((sum, match) => sum + match.count, 0);
   const replacePages = new Set(replaceMatches.map(match => match.page)).size;
-  const toolActions = <View style={responsiveToolbarStyles.tools}>
-        <EditorOption compact label="Options" style={styles.textAction} selected={showOptions} disabled={busy} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} onPress={openOptions} />
-  </View>;
   const editingText = !!(selected || placement);
-  const optionsInRow = keyboardOpen || !toolbar.atBottom;
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }];
   const changeStyle = (next: TextStyle) => { invalidateDraft(); setTextStyle(next); };
   const stepSize = (delta: number) => { invalidateDraft(); setSize(value => String(Math.max(4, Math.min(200, Math.round(Number(value) || 16) + delta)))); };
@@ -637,10 +642,10 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       {inlineSearch && <View style={[styles.searchPanel, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]}>
         <View style={styles.searchRow}>
           <TextInput accessibilityLabel="Search text in PDF" autoFocus value={findQuery} onChangeText={updateQuery} editable={!busy} maxLength={128} returnKeyType="search" autoCapitalize="none" autoCorrect={false} onSubmitEditing={() => void findText()} placeholder="Find in this PDF" placeholderTextColor={colors.secondaryLabel} style={[styles.searchInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-          <Pressable accessibilityRole="button" accessibilityLabel="Search PDF text" disabled={busy || !findQuery.trim()} onPress={() => void findText()} style={[styles.icon, (busy || !findQuery.trim()) && styles.dim]}><UniversalIcon ios="magnifyingglass" android="search" size={20} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Search PDF text" disabled={busy || !findQuery.trim()} onPress={() => void findText()} style={[styles.icon, (busy || !findQuery.trim()) && styles.dim]}><UniversalIcon ios="magnifyingglass" android="search" size={22} color={colors.systemBlue} /></Pressable>
           {findResult && <ThemedText accessibilityLiveRegion="polite" numberOfLines={1} style={[styles.searchCount, { color: colors.secondaryLabel }]}>{searchMatches.length ? `${Math.min(searchIndex + 1, searchMatches.length)}/${searchMatches.length}${findResult.truncated ? '+' : ''}` : '0'}</ThemedText>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(-1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.up" android="keyboard-arrow-up" size={24} color={colors.systemBlue} /></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.down" android="keyboard-arrow-down" size={24} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(-1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.up" android="keyboard-arrow-up" size={22} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={busy || !searchMatches.length} onPress={() => stepSearch(1)} style={[styles.icon, (busy || !searchMatches.length) && styles.dim]}><UniversalIcon ios="chevron.down" android="keyboard-arrow-down" size={22} color={colors.systemBlue} /></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Close PDF search" onPress={closeSearch} style={styles.icon}><UniversalIcon ios="xmark" android="close" size={22} color={colors.systemBlue} /></Pressable>
         </View>
         {busy && <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: colors.secondaryLabel }]}>{phase}</ThemedText>}
@@ -652,11 +657,11 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         {findResult && !searchMatches.length && <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: colors.secondaryLabel }]}>No editable text matches. Scans and words split across text pieces are skipped.</ThemedText>}
         {!!findResult?.locked && <ThemedText style={[styles.searchStatus, { color: colors.secondaryLabel }]}>{findResult.locked} matching text pieces are protected and cannot be edited.</ThemedText>}
       </View>}
-      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={inlineSearch ? null : <PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!(editingText && optionsInRow)}>
+      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={inlineSearch ? null : <PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!editingText}>
         {editingText && <ToolRowButton caption label="Style" icon={{ ios: 'textformat', android: 'text-format' }} selected={showFormatting} expanded={showFormatting} disabled={busy}
           onPress={() => { Keyboard.dismiss(); setShowFormatting(true); setShowTextList(false); setShowOptions(false); }} />}
         {(replaceAvailable || replacing) && !editingText && <ToolRowButton caption label={replacing ? 'Replace' : 'Search'} icon={replacing ? { ios: 'text.magnifyingglass', android: 'find-replace' } : { ios: 'magnifyingglass', android: 'search' }} selected={showSearch} expanded={showSearch} disabled={busy} onPress={openSearch} />}
-        {optionsInRow && <ToolRowButton caption label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={showOptions} expanded={showOptions} disabled={busy} onPress={openOptions} />}
+        <ToolRowButton caption label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={showOptions} expanded={showOptions} disabled={busy} onPress={openOptions} />
       </PdfPreviewToolbar>}>
       <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={selected ? 'Your changes appear live on the page. Tap the tick to apply.' : nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Style is in the row above.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? 'Tap text boxes to select them, then delete them together.' : 'Tap any text to change it. Pinch to zoom.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
@@ -674,7 +679,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       {multiDelete && !selected && !placement && <View style={[styles.row, styles.editorBar, { backgroundColor: colors.secondarySystemBackground }]}>
         <ThemedText style={[styles.grow, styles.markCount]} numberOfLines={1} accessibilityLiveRegion="polite">{marked.length ? `${marked.length} selected` : 'Tap text to select'}</ThemedText>
         <Pressable accessibilityRole="button" accessibilityLabel="Select all text on this page" disabled={busy || !selectable.length || marked.length === selectable.length} style={[styles.icon, (!selectable.length || marked.length === selectable.length) && styles.dim]} onPress={() => setMarked(selectable.map(object => object.id))}><UniversalIcon ios="checklist" android="select-all" size={22} color={colors.systemBlue} /></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Clear selection" disabled={busy || !marked.length} style={[styles.icon, !marked.length && styles.dim]} onPress={() => setMarked([])}><UniversalIcon ios="xmark" android="close" size={20} color={colors.secondaryLabel} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Clear selection" disabled={busy || !marked.length} style={[styles.icon, !marked.length && styles.dim]} onPress={() => setMarked([])}><UniversalIcon ios="xmark" android="close" size={22} color={colors.secondaryLabel} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${marked.length} selected text boxes`} disabled={busy || !marked.length} style={[styles.deleteButton, { backgroundColor: colors.destructive }, !marked.length && styles.dim]} onPress={deleteMarked}>
           <UniversalIcon ios="trash" android="delete-outline" size={18} color="#fff" />
           <ThemedText style={styles.deleteLabel}>Delete{marked.length ? ` (${marked.length})` : ''}</ThemedText>
@@ -687,14 +692,14 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         <View style={styles.row}>
           <ThemedText style={[styles.grow, styles.markCount]} numberOfLines={1}>{nativeTextBox ? 'Editing on the page' : selected ? 'Live on the page' : 'New text'}</ThemedText>
           <View style={styles.sizeStepper}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Smaller text" disabled={busy || Number(size) <= 4} hitSlop={2} style={[styles.sizeButton, (busy || Number(size) <= 4) && styles.dim]} onPress={() => stepSize(-1)}><UniversalIcon ios="textformat.size.smaller" android="text-decrease" size={20} color={colors.systemBlue} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Smaller text" disabled={busy || Number(size) <= 4} hitSlop={2} style={[styles.sizeButton, (busy || Number(size) <= 4) && styles.dim]} onPress={() => stepSize(-1)}><UniversalIcon ios="textformat.size.smaller" android="text-decrease" size={22} color={colors.systemBlue} /></Pressable>
             <ThemedText accessibilityLabel={`Text size ${size} points`} style={styles.sizeLabel}>{size}</ThemedText>
-            <Pressable accessibilityRole="button" accessibilityLabel="Larger text" disabled={busy || Number(size) >= 200} hitSlop={2} style={[styles.sizeButton, (busy || Number(size) >= 200) && styles.dim]} onPress={() => stepSize(1)}><UniversalIcon ios="textformat.size.larger" android="text-increase" size={20} color={colors.systemBlue} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Larger text" disabled={busy || Number(size) >= 200} hitSlop={2} style={[styles.sizeButton, (busy || Number(size) >= 200) && styles.dim]} onPress={() => stepSize(1)}><UniversalIcon ios="textformat.size.larger" android="text-increase" size={22} color={colors.systemBlue} /></Pressable>
           </View>
           {selected && <Pressable accessibilityRole="button" accessibilityLabel="Delete selected text" disabled={busy} style={styles.icon} onPress={() => apply('delete')}><UniversalIcon ios="trash" android="delete-outline" size={22} color={colors.destructive} /></Pressable>}
           {editingAddition !== null && <Pressable accessibilityRole="button" accessibilityLabel="Remove added text" disabled={busy} style={styles.icon} onPress={() => { Keyboard.dismiss(); void change(edits.filter((_, index) => index !== editingAddition)); }}><UniversalIcon ios="trash" android="delete-outline" size={22} color={colors.destructive} /></Pressable>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Apply text" disabled={busy || !text.trim()} style={styles.icon} onPress={() => apply(selected ? 'replace' : 'add')}><UniversalIcon ios="checkmark" android="check" size={24} color={colors.systemBlue} /></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="Cancel selection" style={styles.icon} onPress={() => { Keyboard.dismiss(); invalidateDraft(); setSelected(null); setPlacement(null); setEditingAddition(null); }}><UniversalIcon ios="xmark" android="close" size={20} color={colors.secondaryLabel} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Apply text" disabled={busy || !text.trim()} style={styles.icon} onPress={() => apply(selected ? 'replace' : 'add')}><UniversalIcon ios="checkmark" android="check" size={22} color={colors.systemBlue} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Cancel selection" style={styles.icon} onPress={() => { Keyboard.dismiss(); invalidateDraft(); setSelected(null); setPlacement(null); setEditingAddition(null); }}><UniversalIcon ios="xmark" android="close" size={22} color={colors.secondaryLabel} /></Pressable>
         </View>
       </View>}
       {!!(draftIssue || previewError || recovery.error) && <ThemedText accessibilityRole="alert" style={styles.hint}>{draftIssue || previewError || recovery.error}</ThemedText>}
@@ -781,7 +786,6 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     {!keyboardOpen && <View style={[styles.footer, landscape && styles.landscapeSide, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}>
       {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
       {busy ? <View style={[styles.row, landscape && styles.landscapeStack]}><AppLoader /><ThemedText style={landscape ? undefined : styles.grow} accessibilityLiveRegion="polite">{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText><ToolButton title="Cancel" secondary onPress={() => { previewQueue.cancel(); if (job.current) PdfEngine?.cancelTextEdit(job.current); }} /></View> : source && <View onLayout={toolbar.onBottomLayout} style={[responsiveToolbarStyles.row, landscape && styles.landscapeStack]}>
-        {toolbar.atBottom && toolActions}
         <EditorOption compact label={adding ? 'Select text' : 'Add text'} style={landscape ? undefined : styles.textAction} selected={adding} disabled={busy} icon={{ ios: adding ? 'cursorarrow' : 'text.badge.plus', android: adding ? 'touch-app' : 'text-fields' }} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} />
         <EditorOption compact label="Text list" style={landscape ? undefined : styles.textAction} selected={showTextList} disabled={busy} onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
         <View style={landscape ? undefined : [responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={'Save (' + edits.length + ')'} disabled={!edits.length || !recovery.ready} onPress={requestSave} /></View>

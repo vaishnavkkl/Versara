@@ -1,4 +1,3 @@
-import { openPrivacyTool } from '@/features/privacy/open-privacy-tool';
 import { toolColors } from '@/theme/tool-colors';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
@@ -13,15 +12,10 @@ import { useScreenActive } from '@/hooks/use-screen-active';
 import { FileEngine, type ExplorerEntry } from '../../../modules/file-engine';
 import { ExplorerRow } from '@/features/files/explorer-row';
 import { explorerAvailable, KIND_GLYPHS, openExplorerEntry } from '@/features/files/explorer';
-import { importRecentFile } from '@/features/files/recent-files';
-import { EDITOR_TOOL_TABS } from '@/features/files/media-toolbar';
-import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
-import { createImagePdfToolForFile } from '@/features/pdf/pdf-tool-session';
-import { discardPdfToolSession, pickPdfTool, type PdfTool } from '@/features/pdf/pdf-tool-session';
 import { SEARCH_TOOLS, SUGGESTED_TOOLS, type SearchTool } from './search-tools';
-import { clearSearchHistory, hydrateSearchHistory, recordSearch, recordToolUse, removeSearch, useSearchHistory } from './search-history';
+import { clearSearchHistory, hydrateSearchHistory, recordSearch, removeSearch, useSearchHistory } from './search-history';
+import { openSearchTool } from './open-search-tool';
 import { requestFileSearch } from './file-search';
-import { getPrivacyTool } from '@/features/privacy/privacy-tools';
 
 const QUICK_SEARCHES = [
   { label: 'PDFs', query: '.pdf', kind: 'pdf' }, { label: 'JPG photos', query: '.jpg', kind: 'image' },
@@ -92,28 +86,9 @@ export function SearchScreen() {
   const openTool = useCallback(async (tool: SearchTool) => {
     if (busy.current || tool.availability !== 'ready') return;
     busy.current = true; setOpening(tool.key); Keyboard.dismiss();
-    let session: string | null = null;
     try {
-      if (tool.module === 'Privacy') {
-        const privacyTool = getPrivacyTool(tool.id);
-        if (!privacyTool) throw new Error('This privacy tool is unavailable. Please choose another tool.');
-        if (!(await openPrivacyTool(privacyTool.id, { current: () => mounted.current }))) return;
-      } else if (tool.module === 'PDF') {
-        session = await pickPdfTool(tool.id as PdfTool, tool.title);
-        if (!session) return;
-        if (!mounted.current) { discardPdfToolSession(session); return; }
-        router.push({ pathname: '/pdf-tool', params: { session } });
-      } else {
-        const file = await importRecentFile('image');
-        if (!file || !mounted.current) return;
-        if (tool.id === 'text' || tool.id === 'edit_text') router.push({ pathname: '/image-text', params: { id: file.id, mode: tool.id === 'text' ? 'add' : 'edit' } });
-        else if (tool.id === 'pdf') { session = await createImagePdfToolForFile(file); if (!mounted.current) { discardPdfToolSession(session); return; } router.push({ pathname: '/pdf-tool', params: { session } }); }
-        else if (ADVANCED_IMAGE_TOOLS.has(tool.id)) router.push({ pathname: '/image-tool', params: { id: file.id, tool: tool.id } });
-        else router.push({ pathname: '/image-editor', params: { id: file.id, tab: EDITOR_TOOL_TABS[tool.id], tool: tool.id } });
-      }
-      recordSearch(term); recordToolUse(tool.key);
+      if (await openSearchTool(tool, () => mounted.current)) recordSearch(term);
     } catch (cause) {
-      if (session) discardPdfToolSession(session);
       if (mounted.current) showDialog('Could not open tool', (cause as Error).message || 'Please try again.');
     } finally { busy.current = false; if (mounted.current) setOpening(null); }
   }, [term]);
@@ -122,7 +97,7 @@ export function SearchScreen() {
     accessibilityLabel={`${tool.title}, ${tool.module}. ${tool.availability === 'ready' ? 'Choose a file to begin' : tool.availability === 'build' ? 'Needs a new app build' : 'Coming soon'}`}
     accessibilityState={{ disabled: tool.availability !== 'ready' || !!opening }} disabled={tool.availability !== 'ready' || !!opening}
     onPress={() => { void openTool(tool); }} style={({ pressed }) => [styles.tool, { opacity: tool.availability !== 'ready' ? 0.55 : pressed ? 0.6 : 1 }]}>
-    <View style={[styles.toolIcon, { backgroundColor: toolColors(tool.id, colors).surface }]}><UniversalIcon ios={tool.ios} android={tool.android} size={22} color={toolColors(tool.id, colors).ink} /></View>
+    <View style={[styles.toolIcon, toolColors(tool.id, colors).fill]}><UniversalIcon ios={tool.ios} android={tool.android} size={25} color={toolColors(tool.id, colors).glyph} /></View>
     <View style={styles.grow}><ThemedText style={styles.name}>{tool.title}</ThemedText><ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>{tool.module} · {tool.availability === 'ready' ? tool.subtitle : tool.availability === 'build' ? 'Needs a new app build' : 'Coming soon'}</ThemedText></View>
     {opening === tool.key ? <AppLoader /> : tool.availability === 'ready' && <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.muted} />}
   </Pressable>, [colors, openTool, opening]);
@@ -187,7 +162,7 @@ const styles = StyleSheet.create({
   field: { flexDirection: 'row', alignItems: 'center', gap: s.sm, minHeight: 54, paddingLeft: 16, paddingRight: 4, borderRadius: 27, borderWidth: StyleSheet.hairlineWidth },
   input: { flex: 1, minWidth: 0, fontSize: 16, paddingVertical: 12 }, list: { paddingHorizontal: s.xl, paddingBottom: s.section, width: '100%', maxWidth: 720, alignSelf: 'center' },
   section: { ...t.eyebrow, textTransform: 'uppercase', marginTop: s.lg, marginBottom: s.xs }, tool: { flexDirection: 'row', alignItems: 'center', gap: s.md, paddingVertical: 10, minHeight: 64 },
-  toolIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, grow: { flex: 1, minWidth: 0, gap: 2 }, name: { ...t.label }, caption: { ...t.caption },
+  toolIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, grow: { flex: 1, minWidth: 0, gap: 2 }, name: { ...t.label }, caption: { ...t.caption },
   idle: { paddingTop: s.sm }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: s.sm, marginTop: s.sm }, chip: { minHeight: 44, paddingHorizontal: 14, borderRadius: 22, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: s.sm }, chipLabel: { fontSize: 14, fontWeight: '600' },
   clear: { minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' }, sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, historyRow: { flexDirection: 'row', alignItems: 'center' }, historyQuery: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: s.md, minHeight: 48 },
   shortcuts: { flexDirection: 'row', flexWrap: 'wrap', gap: s.sm, marginVertical: s.lg }, shortcut: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: s.sm, minHeight: 52, paddingHorizontal: s.md, borderRadius: 16 }, status: { gap: s.md, paddingVertical: s.lg, alignItems: 'flex-start' },

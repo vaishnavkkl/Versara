@@ -47,7 +47,7 @@ export const CustomTabBar = memo(function CustomTabBar({ tabs, activeIndex, onTa
   }));
   return <View style={[styles.bar, { backgroundColor: colors.systemBackground, borderColor: colors.separator, paddingBottom: Math.max(insets.bottom, s.sm) }]}>
     <View style={[styles.row, rtl && styles.rtl]} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-      {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { backgroundColor: colors.accentSurface }, indicator]} />}
+      {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { backgroundColor: `${colors.systemBlue}26` }, indicator]} />}
       {tabs.map((tab, index) => <TabItem key={tab.key} tab={tab} index={index} selected={activeIndex === index} position={position} onPress={() => onTabPress(index)} />)}
     </View>
   </View>;

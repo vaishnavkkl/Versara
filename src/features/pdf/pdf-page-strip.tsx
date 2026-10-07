@@ -17,7 +17,7 @@ const PageThumb = memo(function PageThumb({ uri, index, selected, active, onSele
   </Pressable>;
 });
 
-export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity, enabled = true }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1; enabled?: boolean }) {
+export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, parity, enabled = true, rightToLeft = false }: { uri: string; count: number; page: number; onSelect: (page: number) => void; vertical?: boolean; parity?: 0 | 1; enabled?: boolean; rightToLeft?: boolean }) {
   const colors = usePalette();
   const screenActive = useScreenActive();
   const active = screenActive && enabled;
@@ -36,7 +36,7 @@ export function PdfPageStrip({ uri, count, page, onSelect, vertical = false, par
   }, [active, page, count, parity, pages.length]);
   const renderItem = useCallback<ListRenderItem<number>>(({ item }) => <PageThumb uri={uri} index={item} active={active && visibleKeys.has(String(item))} selected={item === page} onSelect={stableSelect} />, [uri, page, active, visibleKeys, stableSelect]);
   return <View style={[vertical ? styles.sideStrip : styles.strip, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
-    <FlatList ref={list} onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} horizontal={!vertical} data={pages} keyExtractor={String} initialNumToRender={vertical ? 3 : 8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
+    <FlatList ref={list} onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} horizontal={!vertical} inverted={!vertical && rightToLeft} data={pages} keyExtractor={String} initialNumToRender={vertical ? 3 : 8} maxToRenderPerBatch={6} updateCellsBatchingPeriod={80} windowSize={5}
       removeClippedSubviews showsHorizontalScrollIndicator={false} renderItem={renderItem} getItemLayout={vertical ? (_, index) => ({ length: 86, offset: 86 * index, index }) : getItemLayout} />
   </View>;
 }

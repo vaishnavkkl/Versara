@@ -33,6 +33,7 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
   private val onLoad by EventDispatcher<Map<String, Any>>()
   private val onError by EventDispatcher<Map<String, Any>>()
   private val onDismiss by EventDispatcher<Map<String, Any>>()
+  private val onTap by EventDispatcher<Map<String, Any>>()
   // At most one decoder and one replacement request; relayouts never accumulate work.
   private val worker = ThreadPoolExecutor(1, 1, 10, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(1)).apply {
     allowCoreThreadTimeOut(true)
@@ -92,6 +93,7 @@ class ZoomableImageView(context: Context, appContext: AppContext) : ExpoView(con
       animateZoom(if (zoom > 1.1f) 1f else DOUBLE_TAP_ZOOM, event.x, event.y)
       return true
     }
+    override fun onSingleTapConfirmed(event: MotionEvent): Boolean { if (!dismissing && dismissY == 0f) onTap(emptyMap()); return true }
   })
 
   init {

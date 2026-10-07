@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { AppLoader } from '@/components/app-loader';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -10,6 +11,7 @@ import { railSections } from '@/components/tool-rail';
 import { ToolSurround, ToolSurroundCloseButton } from '@/components/tool-surround';
 import { HelpButton } from '@/components/help-button';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
+import { FocusChrome, focusLayout } from '@/components/focus-chrome';
 import { useToolRing } from '@/hooks/use-tool-ring';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { MediaPreview } from './media-preview';
@@ -25,18 +27,21 @@ type Props = {
   changed: boolean; onSave: () => void; onDiscard: () => void;
   /** Lets the screen hide its header while tools surround the image; help and close then sit in the action row. */
   onSurroundChange?: (surrounding: boolean) => void;
+  /** Tapping the image hides every control; the screen hides its header too. */
+  onFocusChange?: (focused: boolean) => void;
 };
 
 /**
  * The image preview laid out like the PDF reader: Fit and All tools above the image, recent tools below,
  * and a Tools button that frames the image with every tool.
  */
-export function ImageViewer({ file, revision, busy, active, showImage, landscape, onToggleLandscape, onAction, onClose, changed, onSave, onDiscard, onSurroundChange }: Props) {
+export function ImageViewer({ file, revision, busy, active, showImage, landscape, onToggleLandscape, onAction, onClose, changed, onSave, onDiscard, onSurroundChange, onFocusChange }: Props) {
   const colors = usePalette();
   const [toolboxOpen, setToolboxOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   // The native zoom view has no reset, so Fit remounts it at its fitted size.
   const [fitRevision, setFitRevision] = useState(0);
-  const ring = useToolRing(showImage);
+  const ring = useToolRing(showImage && !focused);
   const recentTools = useSearchHistory(state => state.tools);
   useEffect(hydrateSearchHistory, []);
   const tools = useMemo(() => mediaTools('image'), []);
@@ -50,16 +55,18 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
     onAction(id);
   }
   const toolsButton = { label: 'Tools', accessibilityLabel: 'Show all tools around the image', onPress: ring.toggle };
-  const rails = !ring.active;
   const surrounding = ring.active;
+  const rails = !surrounding && !focused;
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
+  useEffect(() => { onFocusChange?.(focused); }, [focused, onFocusChange]);
+  const toggleFocus = () => { if (showImage && !surrounding && !toolboxOpen && !busy) setFocused(value => !value); };
 
-  return <View style={[styles.screen, landscape && styles.row]}>
-    {landscape && rails && <MediaToolbar side="left" kind="image" busy={busy} landscape onToggleLandscape={onToggleLandscape} onAction={onAction} />}
+  return <Animated.View layout={focusLayout} style={[styles.screen, landscape && styles.row]}>
+    {landscape && rails && <FocusChrome edge="side"><MediaToolbar side="left" kind="image" busy={busy} landscape onToggleLandscape={onToggleLandscape} onAction={onAction} /></FocusChrome>}
     <View style={styles.screen}>
-      <ToolActionRow left={<>
+      {!focused && <FocusChrome edge="top"><ToolActionRow left={<>
         <ToolRowButton label="Fit image" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={!showImage} onPress={() => setFitRevision(value => value + 1)} />
-        <ToolRowButton label="All tools" icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} expanded={toolboxOpen} disabled={busy} onPress={() => { ring.close(); setToolboxOpen(true); }} />
+        <ToolRowButton label="All tools" icon={{ ios: 'wrench.and.screwdriver', android: 'handyman' }} expanded={toolboxOpen} disabled={busy} onPress={() => { ring.close(); setToolboxOpen(true); }} />
       </>} right={(changed || surrounding) && <>
         {changed && <>
         <ToolRowButton label="Discard all changes" icon={{ ios: 'arrow.uturn.backward', android: 'undo' }} disabled={busy} onPress={onDiscard} />
@@ -68,14 +75,21 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
         </Pressable>
         </>}
         {surrounding && <>{onSurroundChange && <HelpButton />}<ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /></>}
-      </>} />
-      <ToolSurround active={ring.active && !ring.closing} naming={ring.naming} tools={ringTools} disabled={busy} showClose={false} onAction={perform} onClose={ring.close} onHidden={ring.finishClose}>
-        {showImage ? <MediaPreview key={`${file.uri}:${revision ?? ''}:${fitRevision}`} file={file} onClose={onClose} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
-      </ToolSurround>
+      </>} /></FocusChrome>}
+      <Animated.View layout={focusLayout} style={styles.screen}>
+        <ToolSurround active={ring.active && !ring.closing} naming={ring.naming} tools={ringTools} disabled={busy} showClose={false} onAction={perform} onClose={ring.close} onHidden={ring.finishClose}>
+          {showImage ? <MediaPreview key={`${file.uri}:${revision ?? ''}:${fitRevision}`} file={file} onClose={onClose} onTap={toggleFocus} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
+        </ToolSurround>
+      </Animated.View>
+      {focused && <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)} style={styles.restore}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" accessibilityHint="Or tap the image" onPress={() => setFocused(false)} style={[styles.restoreButton, { backgroundColor: colors.accentSurface }]}>
+          <UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} />
+        </Pressable>
+      </Animated.View>}
     </View>
-    {rails && <MediaToolbar kind="image" busy={busy} landscape={landscape} onToggleLandscape={onToggleLandscape} onAction={onAction} quickIds={quickIds} toolsButton={toolsButton} />}
+    {rails && <FocusChrome edge={landscape ? 'side' : 'bottom'}><MediaToolbar kind="image" busy={busy} landscape={landscape} onToggleLandscape={onToggleLandscape} onAction={onAction} quickIds={quickIds} toolsButton={toolsButton} /></FocusChrome>}
     <ToolboxSheet visible={toolboxOpen && !ring.active && active} title="All tools" subtitle={file.name} sections={sections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={perform} />
-  </View>;
+  </Animated.View>;
 }
 
 const styles = StyleSheet.create({
@@ -83,4 +97,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   save: { minHeight: 40, paddingHorizontal: 14, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  restore: { position: 'absolute', bottom: 16, right: 16 },
+  restoreButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', opacity: 0.9 },
 });

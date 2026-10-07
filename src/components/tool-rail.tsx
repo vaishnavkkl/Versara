@@ -7,7 +7,7 @@ import { AppLoader } from '@/components/app-loader';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
-import { toolColors } from '@/theme/tool-colors';
+import { allToolsColors, toolColors } from '@/theme/tool-colors';
 
 export type RailTool = Pick<Method, 'id' | 'title' | 'ios' | 'android'> & { category?: string; soon?: boolean; requiresBuild?: boolean; highlighted?: boolean; accessibilityLabel?: string };
 type Props = {
@@ -31,6 +31,7 @@ export function railSections(tools: RailTool[]) {
 export const ToolRail = memo(function ToolRail({ tools, busyId, disabled = false, landscape = false, onAction, quickIds, side = 'right', showToolbox = true, toolsButton }: Props) {
   const colors = usePalette();
   const [open, setOpen] = useState(false);
+  const allTools = allToolsColors(colors);
   const quick = quickIds ? quickIds.flatMap(id => tools.find(tool => tool.id === id && !tool.soon) ?? []) : tools.filter(tool => !tool.soon).slice(0, 4);
   const sections = useMemo(() => railSections(tools), [tools]);
 
@@ -45,8 +46,8 @@ export const ToolRail = memo(function ToolRail({ tools, busyId, disabled = false
           accessibilityState={{ disabled: off, busy: working }} disabled={off}
           onPress={() => onAction(tool.id)}
           style={({ pressed }) => [styles.tool, !landscape && { flex: 1 }, { opacity: tool.soon ? 0.45 : off ? 0.5 : pressed ? 0.6 : 1 }]}>
-          <View style={[styles.icon, { backgroundColor: tint.surface }]}>
-            {working ? <AppLoader /> : <UniversalIcon ios={tool.ios} android={tool.android} size={22} color={tint.ink} />}
+          <View style={[styles.icon, tint.fill]}>
+            {working ? <AppLoader /> : <UniversalIcon ios={tool.ios} android={tool.android} size={26} color={tint.glyph} />}
           </View>
           <ThemedText numberOfLines={2} style={styles.label}>{tool.title}</ThemedText>
           {tool.soon && <ThemedText style={[styles.soon, { color: colors.secondaryLabel }]}>Soon</ThemedText>}
@@ -54,7 +55,7 @@ export const ToolRail = memo(function ToolRail({ tools, busyId, disabled = false
       })}
       </ScrollView>
       {showToolbox && <Pressable accessibilityRole="button" accessibilityLabel={toolsButton?.accessibilityLabel ?? 'Open toolbox'} accessibilityState={toolsButton ? { selected: !!toolsButton.selected } : { expanded: open }} disabled={disabled} onPress={toolsButton?.onPress ?? (() => setOpen(true))} style={[styles.tool, !landscape && { flex: 1 }]}>
-        <View style={[styles.icon, { backgroundColor: colors.systemBlue }]}><UniversalIcon ios="square.grid.2x2" android="grid-view" size={22} color={colors.systemBackground} /></View><ThemedText style={styles.label}>{toolsButton?.label ?? 'Tools'}</ThemedText>
+        <View style={[styles.icon, allTools.fill]}><UniversalIcon ios="square.grid.2x2" android="mdi:view-grid-outline" size={26} color={allTools.glyph} /></View><ThemedText style={styles.label}>{toolsButton?.label ?? 'Tools'}</ThemedText>
       </Pressable>}
     </View>
   </View>{showToolbox && !toolsButton && <ToolboxSheet visible={open} title="Toolbox" subtitle={tools.some(tool => tool.requiresBuild) ? 'Dimmed image tools need a new app build' : 'Find your next action'} sections={sections} footer={<View />} onClose={() => setOpen(false)} onAction={onAction} />}</>;
@@ -71,8 +72,8 @@ const styles = StyleSheet.create({
   quickColumn: { alignItems: 'center', gap: 6 },
   quickRow: { flex: 4 },
   quickRowContent: { flexGrow: 1, flexDirection: 'row', gap: 4 },
-  tool: { minWidth: 0, minHeight: 70, maxWidth: 76, alignItems: 'center', gap: 4 },
-  icon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  tool: { minWidth: 0, minHeight: 74, maxWidth: 76, alignItems: 'center', gap: 4 },
+  icon: { width: 52, height: 52, borderRadius: 17, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
   label: { fontSize: 12, lineHeight: 16, fontWeight: '500', textAlign: 'center' },
   soon: { fontSize: 10, lineHeight: 12 },
 });

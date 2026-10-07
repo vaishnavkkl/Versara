@@ -20,4 +20,10 @@ export type PdfEngineViewProps = ViewProps & {
   onPageChange: (event: { nativeEvent: PdfPageEvent }) => void;
   onZoomChange: (event: { nativeEvent: { zoom: number } }) => void;
   onError: (event: { nativeEvent: PdfErrorEvent }) => void;
+  /** Two pages side by side. `page` and page events still use the first page of a spread. */
+  twoPage?: boolean;
+  /** Right-to-left reading order for spreads and single-page swipes. */
+  rightToLeft?: boolean;
+  /** A single tap on the page, after double-tap zoom is ruled out. */
+  onTap?: () => void;
 };

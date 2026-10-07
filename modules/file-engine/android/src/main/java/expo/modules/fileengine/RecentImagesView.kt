@@ -81,6 +81,40 @@ private class RemoveGlyph(private val density: Float) : Drawable() {
   override fun getOpacity() = PixelFormat.TRANSLUCENT
 }
 
+private class BookmarkGlyph(private val density: Float) : Drawable() {
+  var fill = 0x26FFFFFF
+  var stroke = Color.WHITE
+  var accent = Color.WHITE
+  var on = false
+  private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeJoin = Paint.Join.ROUND }
+  private val ribbon = android.graphics.Path()
+  override fun draw(canvas: Canvas) {
+    val cx = bounds.exactCenterX()
+    val cy = bounds.exactCenterY()
+    paint.style = Paint.Style.FILL
+    paint.color = fill
+    canvas.drawCircle(cx, cy, 12 * density, paint)
+    val half = 4.25f * density
+    val top = cy - 5.75f * density
+    val bottom = cy + 5.75f * density
+    ribbon.reset()
+    ribbon.moveTo(cx - half, top)
+    ribbon.lineTo(cx + half, top)
+    ribbon.lineTo(cx + half, bottom)
+    ribbon.lineTo(cx, bottom - 3.5f * density)
+    ribbon.lineTo(cx - half, bottom)
+    ribbon.close()
+    paint.style = if (on) Paint.Style.FILL_AND_STROKE else Paint.Style.STROKE
+    paint.strokeWidth = 1.6f * density
+    paint.color = if (on) accent else stroke
+    canvas.drawPath(ribbon, paint)
+  }
+  override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+  override fun setColorFilter(filter: ColorFilter?) { paint.colorFilter = filter }
+  @Deprecated("Deprecated in Android")
+  override fun getOpacity() = PixelFormat.TRANSLUCENT
+}
+
 private class SquareImageView(context: Context) : ImageView(context) {
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     super.onMeasure(widthMeasureSpec, widthMeasureSpec)
@@ -94,9 +128,10 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private val onRemove by EventDispatcher()
   private val onLongPress by EventDispatcher()
   private val onRefresh by EventDispatcher()
+  private val onBookmark by EventDispatcher()
   private val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(context)
   fun setRefreshing(value: Boolean) { if (swipe.isRefreshing != value) swipe.isRefreshing = value }
-  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String, val revision: String)
+  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String, val revision: String, val bookmarkable: Boolean, val bookmarked: Boolean)
   private var items = emptyList<Item>()
   private var itemsJson = ""
   private var paletteJson = ""
@@ -114,6 +149,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private var label = Color.WHITE
   private var secondary = Color.LTGRAY
   private var surface = Color.DKGRAY
+  private var accent = Color.WHITE
   private var paletteVersion = 0
   private var flinging = false
   private val main = Handler(Looper.getMainLooper())
@@ -195,7 +231,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     val array = JSONArray(json)
     items = (0 until min(array.length(), 160)).map { index ->
       val item = array.getJSONObject(index)
-      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"), item.optString("revision"))
+      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"), item.optString("revision"), item.optBoolean("bookmarkable"), item.optBoolean("bookmarked"))
     }
     refresh()
   }
@@ -212,6 +248,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     label = Color.parseColor(palette.getString("label"))
     secondary = Color.parseColor(palette.getString("secondary"))
     surface = Color.parseColor(palette.getString("surface"))
+    accent = Color.parseColor(palette.optString("accent", palette.getString("label")))
     paletteVersion++
     refresh()
   }
@@ -231,6 +268,8 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     private val detail = TextView(context)
     private val remove = View(context)
     private val removeGlyph = RemoveGlyph(resources.displayMetrics.density)
+    private val bookmark = View(context)
+    private val bookmarkGlyph = BookmarkGlyph(resources.displayMetrics.density)
     private val shape = GradientDrawable().apply { cornerRadius = dp(10).toFloat() }
     private var item: Item? = null
     private var wanted: String? = null
@@ -257,6 +296,10 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       remove.isClickable = true
       remove.isFocusable = true
       remove.setOnClickListener { item?.let { if (!disabled && it.removable) onRemove(mapOf("id" to it.id)) } }
+      bookmark.background = bookmarkGlyph
+      bookmark.isClickable = true
+      bookmark.isFocusable = true
+      bookmark.setOnClickListener { item?.let { if (!disabled && it.bookmarkable) onBookmark(mapOf("id" to it.id)) } }
       setOnClickListener { item?.let { if (!disabled) onOpen(mapOf("id" to it.id)) } }
       setOnLongClickListener {
         val current = item ?: return@setOnLongClickListener false
@@ -273,6 +316,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
         val frame = android.widget.FrameLayout(context)
         frame.addView(image, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         frame.addView(remove, android.widget.FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END))
+        frame.addView(bookmark, android.widget.FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.START))
         addView(frame, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(text, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
       } else {
@@ -281,6 +325,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
         setPadding(dp(10), dp(8), dp(4), dp(8))
         addView(image, LayoutParams(dp(LIST_THUMB_DP), dp(LIST_THUMB_DP)))
         addView(text, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+        addView(bookmark, LayoutParams(dp(44), dp(44)))
         addView(remove, LayoutParams(dp(44), dp(44)).apply { gravity = Gravity.TOP })
       }
     }
@@ -308,7 +353,16 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
         removeGlyph.fill = if (gridCell) 0x99000000.toInt() else (secondary and 0x00FFFFFF) or 0x24000000
         removeGlyph.stroke = if (gridCell) Color.WHITE else secondary
         removeGlyph.invalidateSelf()
+        bookmarkGlyph.fill = removeGlyph.fill
+        bookmarkGlyph.stroke = removeGlyph.stroke
+        bookmarkGlyph.accent = if (gridCell) Color.WHITE else accent
       }
+      bookmarkGlyph.on = next.bookmarked
+      bookmarkGlyph.invalidateSelf()
+      bookmark.alpha = if (disabled) 0.4f else 1f
+      bookmark.visibility = if (next.bookmarkable) VISIBLE else GONE
+      bookmark.contentDescription = if (next.bookmarked) "Remove bookmark from ${next.name}" else "Bookmark ${next.name}"
+      bookmark.isSelected = next.bookmarked
       name.text = next.name
       detail.text = next.detail
       remove.alpha = if (disabled) 0.4f else 1f
@@ -378,8 +432,14 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     return scaled
   }
 
+  // PDFium (in the pdf-engine module) draws signatures and other annotations; PdfRenderer skips them.
+  private val pdfiumThumbnail: java.lang.reflect.Method? by lazy {
+    runCatching { Class.forName("expo.modules.pdfengine.PdfPageThumbnails").getMethod("render", String::class.java, Int::class.javaPrimitiveType) }.getOrNull()
+  }
+
   private fun renderPdf(uri: Uri, size: Int): Bitmap? = context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-    PdfRenderer(descriptor).use { pdf ->
+    runCatching { pdfiumThumbnail?.invoke(null, "/proc/self/fd/${descriptor.fd}", size) as? Bitmap }.getOrNull()
+      ?: PdfRenderer(descriptor).use { pdf ->
       if (pdf.pageCount == 0) return@use null
       pdf.openPage(0).use { page ->
         val scale = size.toDouble() / max(page.width, page.height)

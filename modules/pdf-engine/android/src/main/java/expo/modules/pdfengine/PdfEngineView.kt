@@ -53,6 +53,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private val onPageChange by EventDispatcher<Map<String, Any>>()
   private val onZoomChange by EventDispatcher<Map<String, Any>>()
   private val onError by EventDispatcher<Map<String, Any>>()
+  private val onTap by EventDispatcher<Map<String, Any>>()
+  private val tapped: () -> Unit = { onTap(emptyMap()) }
   var source = ""
   /** Opening password for a protected PDF; kept only in memory. */
   var password = ""
@@ -63,6 +65,48 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   var zoomRevision = 0
   var dark = true
   var focusCurrent = false
+  /** Two pages side by side per row (or per screen in single-page mode). */
+  var spread = false
+  /** Right-to-left reading: spreads show the later page on the left and swipes turn the other way. */
+  var rtl = false
+  private var lastSpread = false
+  private var lastRtl = false
+  // List rows and single-page screens show one "unit": a page, or a spread of two pages.
+  private fun unitCount() = if (spread) (pageCount + 1) / 2 else pageCount
+  private fun unitOf(page: Int) = if (spread) page / 2 else page
+  private fun firstPageOf(unit: Int) = if (spread) unit * 2 else unit
+  private fun unitPages(unit: Int, count: Int, twoUp: Boolean, rightToLeft: Boolean): List<Int> {
+    if (!twoUp) return listOf(unit)
+    val shown = listOf(unit * 2, unit * 2 + 1).filter { it < count }
+    return if (rightToLeft) shown.reversed() else shown
+  }
+  private fun pagesOf(unit: Int) = unitPages(unit, pageCount, spread, rtl)
+  private fun pageLabel(unit: Int): String {
+    val shown = pagesOf(unit).sorted()
+    return if (shown.size > 1) "${shown[0] + 1}–${shown[1] + 1}" else "${(shown.firstOrNull() ?: unit) + 1}"
+  }
+  /** Height over width of a unit; spread pages share one height with a small gutter between them. */
+  private fun unitRatio(unit: Int): Double {
+    if (!spread) return ratios[unit] ?: 1.414
+    val shown = pagesOf(unit)
+    return 1.0 / (shown.sumOf { 1.0 / (ratios[it] ?: 1.414) } + SPREAD_GUTTER * max(0, shown.size - 1))
+  }
+  /** Where each page sits inside a unit's bitmap, normalised to 0..1. */
+  private fun framesOf(unit: Int): List<Pair<Int, RectF>> {
+    val shown = pagesOf(unit)
+    if (shown.size < 2) return shown.map { it to RectF(0f, 0f, 1f, 1f) }
+    val widths = shown.map { 1.0 / (ratios[it] ?: 1.414) }
+    val total = widths.sum() + SPREAD_GUTTER * (shown.size - 1)
+    var x = 0.0
+    return shown.mapIndexed { index, page ->
+      val left = x / total; x += widths[index]; val right = x / total; x += SPREAD_GUTTER
+      page to RectF(left.toFloat(), 0f, right.toFloat(), 1f)
+    }
+  }
+  private fun searchRectsFor(unit: Int): List<RectF> {
+    val frame = framesOf(unit).firstOrNull { it.first == searchPage }?.second ?: return emptyList()
+    return searchRects.map { RectF(frame.left + it.left * frame.width(), frame.top + it.top * frame.height(), frame.left + it.right * frame.width(), frame.top + it.bottom * frame.height()) }
+  }
   private fun applyRowFocus(row: ZoomImageView, animate: Boolean) {
     val focused = !focusCurrent || !vertical || row.pageIndex == lastPage
     val alpha = if (focused) 1f else 0.35f
@@ -95,18 +139,19 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     updateSearchHighlights()
   }
   private fun updateSearchHighlights() {
-    image.searchRects = if (image.pageIndex == searchPage) searchRects else emptyList()
+    image.searchRects = if (image.pageIndex >= 0) searchRectsFor(image.pageIndex) else emptyList()
     image.invalidate()
     for (i in 0 until list.childCount) (list.getChildAt(i) as? ZoomImageView)?.let { row ->
-      row.searchRects = if (row.pageIndex == searchPage) searchRects else emptyList(); row.invalidate()
+      row.searchRects = if (row.pageIndex >= 0) searchRectsFor(row.pageIndex) else emptyList(); row.invalidate()
     }
   }
   private fun revealSearch() {
     if (disposed || !searchRevealPending || searchPage !in 0 until pageCount) return
     if (vertical) {
-      val ratio = ratios[searchPage] ?: return
-      val offset = (height / 3f - searchRects.first().centerY() * width * ratio).toInt().coerceAtMost(0)
-      list.setSelectionFromTop(searchPage, offset)
+      if (ratios[searchPage] == null) return
+      val unit = unitOf(searchPage)
+      val offset = (height / 3f - searchRects.first().centerY() * width * unitRatio(unit)).toInt().coerceAtMost(0)
+      list.setSelectionFromTop(unit, offset)
     }
     searchRevealPending = false
   }
@@ -116,7 +161,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private val documentVersion = AtomicInteger(0)
   private val renderVersion = AtomicInteger(0)
   // Renderer and descriptor are confined to worker; only the displayed bitmap lives on main.
-  private var renderer: PdfRenderer? = null
+  private var renderer: ReaderDocument? = null
   private var descriptor: ParcelFileDescriptor? = null
   private var displayedBitmap: Bitmap? = null
   private var loadedSource = ""
@@ -155,11 +200,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     if (!draggingThumb) scrollThumb.animate().alpha(0f).setDuration(180).withEndAction { scrollThumb.visibility = View.INVISIBLE }.start()
   }
   private fun updateScrollThumb(reveal: Boolean = false) {
-    if (!vertical || pageCount < 2 || height <= 0) { scrollThumb.visibility = View.INVISIBLE; return }
+    if (!vertical || unitCount() < 2 || height <= 0) { scrollThumb.visibility = View.INVISIBLE; return }
     val first = list.getChildAt(0)
     val fraction = if (first != null && first.height > 0) (-first.top.toFloat() / first.height).coerceIn(0f, 1f) else 0f
     val extent = if (first != null && first.height > 0) list.height.toFloat() / first.height else 1f
-    scrollProgress = ((list.firstVisiblePosition + fraction) / max(1f, pageCount - extent)).coerceIn(0f, 1f)
+    scrollProgress = ((list.firstVisiblePosition + fraction) / max(1f, unitCount() - extent)).coerceIn(0f, 1f)
     val travel = max(0f, height - scrollThumb.height - 24 * resources.displayMetrics.density)
     scrollThumb.translationY = scrollProgress * travel
     if (reveal) {
@@ -171,20 +216,21 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   private val badge = TextView(context)
   private val hideBadge = Runnable { badge.animate().alpha(0f).setDuration(250).start() }
   private fun showBadge() {
-    if (!vertical || pageCount < 2) return
-    badge.text = "${max(0, lastPage) + 1} / $pageCount"
+    if (!vertical || unitCount() < 2) return
+    badge.text = "${pageLabel(max(0, lastPage))} / $pageCount"
     badge.animate().alpha(1f).setDuration(120).start()
   }
   private val pages = object : BaseAdapter() {
-    override fun getCount() = pageCount
+    override fun getCount() = unitCount()
     override fun getItem(position: Int): Any = position
     override fun getItemId(position: Int) = position.toLong()
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
       val row = (convertView as? ZoomImageView) ?: ZoomImageView(context)
       row.pageIndex = position
+      row.onTap = tapped
       applyRowFocus(row, false)
-      row.searchRects = if (position == searchPage) searchRects else emptyList()
-      val binding = "${documentVersion.get()}:$position:$width"
+      row.searchRects = searchRectsFor(position)
+      val binding = "${documentVersion.get()}:$position:$width:$spread:$rtl"
       val rowHeight = pageRowHeight(position)
       if (row.layoutParams?.height != rowHeight) row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight)
       if (row.binding == binding) return row
@@ -194,7 +240,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       row.allowScroll = true
       row.setImageDrawable(null)
       row.setZoom(1f)
-      row.contentDescription = "PDF page ${position + 1} of $pageCount. Pinch to zoom."
+      row.contentDescription = "PDF ${if (spread) "pages" else "page"} ${pageLabel(position)} of $pageCount. Pinch to zoom."
       row.detailed = false
       row.onZoomChanged = { zoom ->
         onZoomChange(mapOf("zoom" to zoom.toDouble()))
@@ -207,7 +253,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
   }
 
   private fun pageRowHeight(index: Int): Int {
-    val pageHeight = max(1, (width * (ratios[index] ?: 1.414)).toInt()).coerceAtMost(100000)
+    val pageHeight = max(1, (width * unitRatio(index)).toInt()).coerceAtMost(100000)
     // Short pages need their own scroll space in focus mode. Otherwise several
     // trailing pages fit at once and the final page cannot reach the midpoint.
     return if (focusCurrent) max(pageHeight, max(1, height)) else pageHeight
@@ -255,8 +301,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         if (current != lastPage) {
           lastPage = current
           updateFocus()
-          badge.text = "${current + 1} / $total"
-          onPageChange(mapOf("page" to current, "pageCount" to total))
+          badge.text = "${pageLabel(current)} / $pageCount"
+          onPageChange(mapOf("page" to firstPageOf(current), "pageCount" to pageCount))
         }
       }
     })
@@ -285,7 +331,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         MotionEvent.ACTION_MOVE -> {
           val travel = max(1f, height - scrollThumb.height - 24 * resources.displayMetrics.density)
           val progress = (thumbStartProgress + (event.rawY - thumbStartY) / travel).coerceIn(0f, 1f)
-          val target = (progress * max(0, pageCount - 1)).toInt()
+          val target = (progress * max(0, unitCount() - 1)).toInt()
           list.setSelectionFromTop(target, 0)
           updateScrollThumb(true)
           true
@@ -300,6 +346,15 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     addView(scrollThumb)
     image.onZoomChanged = { zoom ->
       onZoomChange(mapOf("zoom" to zoom.toDouble()))
+    }
+    image.onTap = tapped
+    image.onSwipe = { velocityX ->
+      val forward = if (rtl) velocityX > 0 else velocityX < 0
+      val target = unitOf(requestedPage) + if (forward) 1 else -1
+      if (pageCount > 0 && target in 0 until unitCount()) {
+        requestedPage = firstPageOf(target); lastPage = target
+        renderPage()
+      }
     }
   }
 
@@ -330,18 +385,27 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       pages.notifyDataSetChanged()
       if (vertical && pageCount > 0) list.setSelection(max(0, lastPage))
     }
+    if (spread != lastSpread || rtl != lastRtl) {
+      // Keep the page being read when pages regroup into or out of spreads.
+      val page = if (lastPage >= 0) (if (lastSpread) lastPage * 2 else lastPage) else requestedPage
+      lastSpread = spread; lastRtl = rtl
+      bitmapCache.evictAll()
+      requestedPage = page; lastPage = unitOf(page)
+      pages.notifyDataSetChanged()
+      if (pageCount > 0) { if (vertical) list.setSelection(lastPage) else renderPage() }
+    }
     if (vertical != lastVertical) {
       lastVertical = vertical
-      if (vertical) list.setSelection(max(0, lastPage)) else { requestedPage = max(0, lastPage); renderPage() }
+      if (vertical) list.setSelection(max(0, lastPage)) else { requestedPage = firstPageOf(max(0, lastPage)); renderPage() }
     }
     if (source != loadedSource || password != loadedPassword) {
       loadedSource = source
       loadedPassword = password
-      lastPage = requestedPage
+      lastPage = unitOf(requestedPage)
       openDocument(source, password)
     } else if (pageRevision != lastPageRevision) {
-      lastPage = requestedPage
-      if (vertical) list.setSelection(requestedPage) else renderPage()
+      lastPage = unitOf(requestedPage)
+      if (vertical) list.setSelection(lastPage) else renderPage()
     }
     lastPageRevision = pageRevision
     if (zoomRevision != lastZoomRevision) {
@@ -376,7 +440,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
           ParcelFileDescriptor.open(File(requireNotNull(uri.path)), ParcelFileDescriptor.MODE_READ_ONLY)
         } else context.contentResolver.openFileDescriptor(uri, "r")
         val fd = descriptor ?: throw java.io.FileNotFoundException()
-        renderer = try { PdfRenderer(fd) } catch (locked: SecurityException) {
+        val (native, nativeError) = PdfiumDocument.open(if (uri.scheme == "file") requireNotNull(uri.path) else "/proc/self/fd/${fd.fd}")
+        renderer = native ?: try {
+          if (nativeError == PdfiumDocument.PASSWORD_ERROR) throw SecurityException("Password required")
+          PlatformDocument(PdfRenderer(fd))
+        } catch (locked: SecurityException) {
           closeDocument()
           if (secret.isEmpty()) {
             reportError(version, "PDF_PASSWORD_REQUIRED", "This PDF is password protected. Enter its password to open it.")
@@ -385,7 +453,7 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
           val unlocked = unlock(uri, secret, version) ?: return@execute
           unlockedFile = unlocked
           descriptor = ParcelFileDescriptor.open(unlocked, ParcelFileDescriptor.MODE_READ_ONLY)
-          PdfRenderer(descriptor!!)
+          PdfiumDocument.open(unlocked.path).first ?: PlatformDocument(PdfRenderer(descriptor!!))
         }
         val count = renderer!!.pageCount
         if (count == 0) {
@@ -397,14 +465,14 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         // demand; a long document must not scan thousands of pages before paint.
         if (disposed || version != documentVersion.get()) return@execute
         val firstPage = requestedPage.coerceIn(0, count - 1)
-        val firstRatio = renderer!!.openPage(firstPage).use { it.height.toDouble() / max(1, it.width) }
+        val firstRatio = renderer!!.size(firstPage).let { (pageWidth, pageHeight) -> pageHeight / max(1.0, pageWidth) }
         main.post {
           if (!disposed && version == documentVersion.get()) {
             ratios[firstPage] = firstRatio
             onLoad(mapOf("pageCount" to count))
             pageCount = count
             pages.notifyDataSetChanged()
-            if (vertical) list.setSelection(requestedPage) else renderPage()
+            if (vertical) list.setSelection(unitOf(requestedPage)) else renderPage()
           }
         }
       } catch (_: SecurityException) {
@@ -423,13 +491,41 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     }
   }
 
+  /**
+   * Worker only. Draws a unit's pages side by side at one shared height; `scaleFor` gets the unit's
+   * size in PDF points and returns pixels per point. Gutters stay transparent over the reader background.
+   */
+  private fun drawUnit(pdf: ReaderDocument, shown: List<Int>, measured: MutableMap<Int, Double>, scaleFor: (Double, Double) -> Double): Bitmap {
+    val sizes = shown.map { index -> pdf.size(index) }
+    val unitHeight = sizes.maxOf { it.second }
+    val widths = sizes.map { it.first * unitHeight / it.second }
+    val gutter = SPREAD_GUTTER * unitHeight
+    val unitWidth = widths.sum() + gutter * (shown.size - 1)
+    val scale = scaleFor(unitWidth, unitHeight)
+    val bitmap = Bitmap.createBitmap(max(1, (unitWidth * scale).toInt()), max(1, (unitHeight * scale).toInt()), Bitmap.Config.ARGB_8888)
+    try {
+      val canvas = Canvas(bitmap)
+      val paper = Paint().apply { color = Color.WHITE }
+      var x = 0.0
+      shown.forEachIndexed { slot, index ->
+        measured[index] = sizes[slot].second / sizes[slot].first
+        val left = (x * scale).toFloat(); val right = ((x + widths[slot]) * scale).toFloat()
+        canvas.drawRect(left, 0f, right, bitmap.height.toFloat(), paper)
+        pdf.render(index, bitmap, Rect(left.toInt(), 0, right.toInt(), bitmap.height), (widths[slot] * scale / sizes[slot].first).toFloat(), left)
+        x += widths[slot] + gutter
+      }
+      return bitmap
+    } catch (error: Throwable) { bitmap.recycle(); throw error }
+  }
+
   private fun renderPage() {
     image.clearSelection()
-    image.onRequestText = { px, py -> selectText(image, requestedPage, px, py) }
     if (disposed || width <= 0 || height <= 0) return
     val version = documentVersion.get()
     val render = renderVersion.incrementAndGet()
-    val pageIndex = max(0, requestedPage)
+    val requestedUnit = unitOf(max(0, requestedPage))
+    val twoUp = spread; val rightToLeft = rtl
+    image.onRequestText = { px, py -> selectText(image, requestedUnit, px, py) }
     val targetWidth = width
     val targetHeight = height
     worker.execute {
@@ -437,33 +533,27 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
       val pdf = renderer ?: return@execute
       var bitmap: Bitmap? = null
       try {
-        val index = min(pageIndex, pdf.pageCount - 1)
-        val page = pdf.openPage(index)
-        page.use {
-          // Increase detail only within this device's bounded pixel budget.
-          val fit = min(targetWidth.toDouble() / page.width, targetHeight.toDouble() / page.height)
-          val budget = sqrt(pixelBudget / (page.width.toDouble() * page.height.toDouble()))
-          val scale = min(fit * 2.0, budget)
-          val bitmapWidth = max(1, (page.width * scale).toInt())
-          val bitmapHeight = max(1, (page.height * scale).toInt())
-          bitmap = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
-          bitmap!!.eraseColor(Color.WHITE)
-          page.render(bitmap!!, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        val count = pdf.pageCount
+        val unit = min(requestedUnit, (if (twoUp) (count + 1) / 2 else count) - 1)
+        val measured = mutableMapOf<Int, Double>()
+        // Increase detail only within this device's bounded pixel budget.
+        bitmap = drawUnit(pdf, unitPages(unit, count, twoUp, rightToLeft), measured) { unitWidth, unitHeight ->
+          min(min(targetWidth / unitWidth, targetHeight / unitHeight) * 2.0, sqrt(pixelBudget / (unitWidth * unitHeight)))
         }
         val result = bitmap!!
-        val count = pdf.pageCount
         main.post {
           if (disposed || version != documentVersion.get() || render != renderVersion.get()) {
             result.recycle()
           } else {
+            ratios.putAll(measured)
             image.setImageBitmap(result)
-            image.pageIndex = index
+            image.pageIndex = unit
             updateSearchHighlights()
             image.setZoom(requestedZoom)
-            image.contentDescription = "PDF page ${index + 1} of $count. Pinch to zoom, drag to pan."
+            image.contentDescription = "PDF ${if (twoUp) "pages" else "page"} ${pageLabel(unit)} of $count. Pinch to zoom, drag to pan."
             displayedBitmap = result
             // Let Android release displayed bitmaps after RenderThread drops its references.
-            onPageChange(mapOf("page" to index, "pageCount" to count))
+            onPageChange(mapOf("page" to firstPageOf(unit), "pageCount" to count))
           }
         }
       } catch (_: OutOfMemoryError) {
@@ -482,26 +572,23 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     val ticket = row.ticket.incrementAndGet()
     val targetWidth = max(1, width)
     val binding = row.binding
+    val twoUp = spread; val rightToLeft = rtl
     worker.execute {
       if (disposed || version != documentVersion.get() || ticket != row.ticket.get()) return@execute
       val pdf = renderer ?: return@execute
       var bitmap: Bitmap? = null
       try {
-        var ratio = 1.414
-        pdf.openPage(index).use { page ->
-          ratio = page.height.toDouble() / page.width
-          // Rows match the screen; a zoomed row is re-rendered sharper within a larger single-page budget.
-          val budget = if (detail > 1f) pixelBudget * 2.5 else pixelBudget
-          val scale = min(targetWidth.toDouble() * detail / page.width, sqrt(budget / (page.width.toDouble() * page.height)))
-          bitmap = Bitmap.createBitmap(max(1, (page.width * scale).toInt()), max(1, (page.height * scale).toInt()), Bitmap.Config.ARGB_8888)
-          bitmap!!.eraseColor(Color.WHITE)
-          page.render(bitmap!!, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        val measured = mutableMapOf<Int, Double>()
+        // Rows match the screen; a zoomed row is re-rendered sharper within a larger single-page budget.
+        val budget = if (detail > 1f) pixelBudget * 2.5 else pixelBudget
+        bitmap = drawUnit(pdf, unitPages(index, pdf.pageCount, twoUp, rightToLeft), measured) { unitWidth, unitHeight ->
+          min(targetWidth * detail / unitWidth, sqrt(budget / (unitWidth * unitHeight)))
         }
         val result = bitmap!!
         main.post {
           if (disposed || version != documentVersion.get() || ticket != row.ticket.get()) result.recycle()
           else {
-            ratios[index] = ratio
+            ratios.putAll(measured)
             val rowHeight = pageRowHeight(index)
             if (row.layoutParams.height != rowHeight) { row.layoutParams = AbsListView.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight) }
             if (detail > 1f) {
@@ -514,8 +601,8 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
               row.setZoom(1f)
             }
             // Rendering an adjacent row must not overwrite the focused page.
-            if (index == lastPage) onPageChange(mapOf("page" to index, "pageCount" to pageCount))
-            if (index == searchPage) revealSearch()
+            if (index == lastPage) onPageChange(mapOf("page" to firstPageOf(index), "pageCount" to pageCount))
+            if (searchPage in measured) { row.searchRects = searchRectsFor(index); row.invalidate(); revealSearch() }
           }
         }
       } catch (_: OutOfMemoryError) {
@@ -576,9 +663,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
     unlockedFile = null
   }
 
-  private fun selectText(row: ZoomImageView, page: Int, x: Float, y: Float) {
+  private fun selectText(row: ZoomImageView, unit: Int, x: Float, y: Float) {
     if (disposed || selecting) return
     if (row.selectAt(x, y)) return
+    // In a spread, select within the page under the finger and place its glyphs in the spread.
+    val (page, frame) = framesOf(unit).firstOrNull { x >= it.second.left && x <= it.second.right } ?: return
     selecting = true
     val version = documentVersion.get(); val binding = row.binding; val uri = Uri.parse(source)
     Toast.makeText(context, "Selecting text...", Toast.LENGTH_SHORT).show()
@@ -597,7 +686,11 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
         val result = JSONObject(NativeTextEditor({ stale() }, { _, _ -> }).run(JSONObject().put("action", "selection").put("path", path).put("page", page).toString(), context.cacheDir.canonicalPath, context.filesDir.canonicalPath))
         if (result.has("error")) error(result.getString("error"))
         val items = result.getJSONArray("glyphs")
-        val glyphs = List(items.length()) { index -> val g = items.getJSONObject(index); PdfGlyph(g.getString("text"), RectF(g.getDouble("left").toFloat(), g.getDouble("top").toFloat(), g.getDouble("right").toFloat(), g.getDouble("bottom").toFloat())) }
+        val glyphs = List(items.length()) { index ->
+          val g = items.getJSONObject(index)
+          val left = g.getDouble("left").toFloat(); val right = g.getDouble("right").toFloat()
+          PdfGlyph(g.getString("text"), RectF(frame.left + left * frame.width(), g.getDouble("top").toFloat(), frame.left + right * frame.width(), g.getDouble("bottom").toFloat()))
+        }
         main.post { if (!stale()) { row.glyphs = glyphs; if (!row.selectAt(x, y)) Toast.makeText(context, "No selectable text here. Use Scan Text for a scanned page.", Toast.LENGTH_SHORT).show() } }
       } catch (error: Exception) { main.post { if (!disposed) Toast.makeText(context, error.message ?: "Text selection unavailable.", Toast.LENGTH_SHORT).show() } }
       finally { copy?.delete(); main.post { selecting = false } }
@@ -628,6 +721,9 @@ class PdfEngineView(context: Context, appContext: AppContext) : ExpoView(context
 
 private data class PdfGlyph(val text: String, val rect: RectF)
 
+/** Gap between the two pages of a spread, as a share of the page height. */
+private const val SPREAD_GUTTER = 0.03
+
 // Zoom and pan stay entirely in Android's UI toolkit; no per-frame JS events.
 private class ZoomImageView(context: Context) : ImageView(context) {
   var pageIndex = -1
@@ -635,6 +731,11 @@ private class ZoomImageView(context: Context) : ImageView(context) {
   private val searchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x665B6FFF }
   var glyphs = emptyList<PdfGlyph>()
   var onRequestText: ((Float, Float) -> Unit)? = null
+  var onTap: (() -> Unit)? = null
+  /** Horizontal fling at fitted size in single-page mode, with its x velocity. */
+  var onSwipe: ((Float) -> Unit)? = null
+  // A tap that dismisses a text selection must not also toggle the reader's controls.
+  private var tapAllowed = true
   private var selectionStart = -1; private var selectionEnd = -1
   private var actionMode: ActionMode? = null
   private var selectingEnd = true
@@ -718,7 +819,11 @@ private class ZoomImageView(context: Context) : ImageView(context) {
       animateZoom(if (zoom > 1.1f) 1f else 2.5f, event.x, event.y)
       return true
     }
-    override fun onSingleTapConfirmed(event: MotionEvent): Boolean { performClick(); return true }
+    override fun onSingleTapConfirmed(event: MotionEvent): Boolean { performClick(); if (tapAllowed) onTap?.invoke(); return true }
+    override fun onFling(start: MotionEvent?, end: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+      if (allowScroll || zoom > 1.01f || scaleGesture.isInProgress || kotlin.math.abs(velocityX) < 600 * resources.displayMetrics.density || kotlin.math.abs(velocityX) < kotlin.math.abs(velocityY) * 1.5f) return false
+      onSwipe?.invoke(velocityX); return true
+    }
   })
 
   var detailed = false
@@ -778,6 +883,7 @@ private class ZoomImageView(context: Context) : ImageView(context) {
     imageMatrix = transform
   }
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (event.actionMasked == MotionEvent.ACTION_DOWN) tapAllowed = selectionStart < 0
     if (selectionStart >= 0 && selectionEnd >= 0 && event.pointerCount == 1) {
       if (event.actionMasked == MotionEvent.ACTION_DOWN) {
         val a = displayRect(glyphs[selectionStart].rect); val b = displayRect(glyphs[selectionEnd].rect); val radius = 30 * resources.displayMetrics.density

@@ -79,7 +79,7 @@ const ToolTile = memo(function ToolTile({ id, title, subtitle, ios, android, una
   const tint = toolColors(id, colors);
   return <View style={styles.cell}><Pressable accessibilityRole="button" accessibilityLabel={`${title}${unavailable ? ', ' + (subtitle || 'unavailable') : ''}`} accessibilityState={{ disabled: !!unavailable }} disabled={unavailable}
     onPress={() => onSelect(id)} style={({ pressed }) => [styles.tool, { backgroundColor: pressed ? colors.catalogPressed : colors.catalogSurface, borderColor: colors.catalogBorder, opacity: unavailable ? .45 : 1 }]}>
-    <View style={[styles.toolIcon, { backgroundColor: tint.surface }]}><UniversalIcon ios={ios} android={android} size={22} color={tint.ink} /></View>
+    <View style={[styles.toolIcon, tint.fill]}><UniversalIcon ios={ios} android={android} size={26} color={tint.glyph} /></View>
     <ThemedText numberOfLines={2} style={styles.toolLabel}>{title.replace(/ (Image|PDF)$/, '')}</ThemedText>
   </Pressable></View>;
 });
@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
   section: { flexDirection: 'row', alignItems: 'center', gap: s.sm }, sectionTitle: { ...t.caption, flex: 1, fontWeight: '600' }, count: { ...t.caption, fontVariant: ['tabular-nums'] },
   row: { flexDirection: 'row', gap: s.sm, paddingBottom: s.sm }, cell: { flex: 1, flexBasis: 0, minWidth: 0 },
   tool: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: s.sm, paddingHorizontal: s.xs, borderRadius: radius.sm, borderWidth: StyleSheet.hairlineWidth },
-  toolIcon: { width: 36, height: 36, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  toolIcon: { width: 46, height: 46, borderRadius: 14, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
   toolLabel: { fontSize: 12, lineHeight: 17, textAlign: 'center', fontWeight: '600' },
   footer: { paddingVertical: s.sm }, empty: { paddingVertical: s.section, alignItems: 'center', justifyContent: 'center', gap: s.md },
 });

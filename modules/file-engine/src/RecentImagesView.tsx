@@ -14,7 +14,10 @@ export type RecentImagesProps = ViewProps & {
   /** Version 4: pull to refresh. Set `refreshing` false once the reload finishes. */
   refreshing?: boolean;
   onRefresh?: () => void;
+  /** Version 6: a bookmark button on items with `bookmarkable`, filled when `bookmarked`. */
+  onBookmark?: (event: { nativeEvent: { id: string } }) => void;
 };
+export const hasNativeListBookmarks = (FileEngine?.nativeImageListVersion ?? 0) >= 6;
 export const hasNativeImageList = !!FileEngine?.nativeImageListVersion;
 export const hasNativeListRefresh = (FileEngine?.nativeImageListVersion ?? 0) >= 4;
 /** Version 5 separates cached thumbnails by file revision. */

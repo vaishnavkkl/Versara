@@ -7,6 +7,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
 import { ModuleCard } from '@/components/module-card';
 import { HelpButton } from '@/components/help-button';
+import { RecentToolsRow } from '@/features/search/recent-tools-row';
 import { usePalette } from '@/theme/colors';
 import { brandFont, catalog, radius, spacing as s, typography as t } from '@/theme/dashboard';
 
@@ -61,6 +62,7 @@ export default function HomeScreen() {
           </View>)}
         </View>
       </View>
+      <RecentToolsRow />
       <View style={styles.offline}>
         <UniversalIcon ios="checkmark.shield" android="verified-user" size={17} color={colors.secondaryLabel} />
         <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>On your device. Under your control.</ThemedText>

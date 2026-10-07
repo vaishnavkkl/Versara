@@ -2,7 +2,7 @@ import { EditorMenu } from '@/components/editor-menu';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, FlatList, ScrollView, StyleSheet, View } from 'react-native';
+import { BackHandler, FlatList, Keyboard, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Checkbox, Host } from '@expo/ui';
@@ -35,7 +35,21 @@ type Finding = ImagePrivacyFinding;
 type Scan = ImagePrivacyScan;
 type Info = { width: number; height: number; size: number; mimeType: string; camera: string; taken: string; hasLocation: boolean };
 type Output = LocalFile & { width: number; height: number; coverCount?: number; location?: string };
-type Phase = 'idle' | 'opening' | 'scanning' | 'preparing' | 'saving' | 'sharing';
+type Phase = 'idle' | 'opening' | 'scanning' | 'finding' | 'preparing' | 'saving' | 'sharing';
+type TextMatch = { page: number; rects: number[][] };
+const MAX_COVERS = 300;
+/** A little margin so anti-aliased glyph edges stay inside the burned-in cover. */
+const TEXT_PADDING = 0.002;
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+function textMark(page: number, rect: number[]): PdfMark | null {
+  const [left, top, right, bottom] = rect;
+  if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+  const x1 = clamp01(left - TEXT_PADDING), y1 = clamp01(top - TEXT_PADDING), x2 = clamp01(right + TEXT_PADDING), y2 = clamp01(bottom + TEXT_PADDING);
+  return {
+    id: `text:${page}:${x1.toFixed(4)}:${y1.toFixed(4)}:${x2.toFixed(4)}:${y2.toFixed(4)}`, page, kind: 'polygon', color: '#000000', fillColor: '#000000', opacity: 1, width: .001,
+    points: [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+  };
+}
 const TITLES: Record<Mode, string> = { scan: 'Privacy Review', pdf_scan: 'Redact PDF', redact: 'Redact Image', metadata: 'Remove Metadata' };
 const CATEGORY_LABELS: Record<string, string> = { personal: 'Personal', financial: 'Financial', identity: 'Identity', authentication: 'Authentication', location: 'Location', other: 'Other' };
 const RECTANGLE = JSON.stringify([[0, 0], [1, 0], [1, 1], [0, 1]]);
@@ -88,6 +102,10 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   const [selecting, setSelecting] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [fit, setFit] = useState(0);
+  const [finding, setFinding] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findScope, setFindScope] = useState<'all' | 'page'>('all');
+  const canFindText = isPdf && !!PdfEngine?.nativeReaderSearchVersion;
   const history = useEditHistory<PdfMark[]>([]);
   const marks = history.value;
   const marksJson = useMemo(() => JSON.stringify(marks.filter(mark => mark.page === page).map(mark => ({ ...mark, page: 1 }))), [marks, page]);
@@ -97,14 +115,14 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   const cancelled = useRef(false);
   const initial = useRef(false);
   const autoScanned = useRef(false);
-  const jobs = useRef(new Map<string, { scan: boolean; pdf?: boolean; promise: Promise<unknown> }>());
+  const jobs = useRef(new Map<string, { scan: boolean; pdf?: boolean; text?: boolean; promise: Promise<unknown> }>());
   const pending = useRef(new Set<Promise<unknown>>());
   const closeRef = useRef<() => void>(() => {});
   const busy = phase !== 'idle';
   const editing = !preview && !saved;
   const cancelJobs = useCallback(() => {
     cancelled.current = true;
-    jobs.current.forEach((job, key) => job.pdf ? PdfEngine?.cancelPdfTool(key) : job.scan ? FileEngine?.cancelPrivacyScan(key) : FileEngine?.cancelImageJob(key));
+    jobs.current.forEach((job, key) => job.text ? PdfEngine?.cancelTextEdit(key) : job.pdf ? PdfEngine?.cancelPdfTool(key) : job.scan ? FileEngine?.cancelPrivacyScan(key) : FileEngine?.cancelImageJob(key));
   }, []);
   function launch(operation: Promise<unknown>) {
     pending.current.add(operation);
@@ -301,6 +319,39 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
       if (changed && changed.page !== page) changePage(changed.page);
     }
   }
+  /** Native text-layer search; every match becomes an ordinary cover the user can review, resize or undo. */
+  function coverText() {
+    const query = findQuery.trim();
+    if (!query || !pdfInput.current) return;
+    Keyboard.dismiss();
+    let jump: number | undefined;
+    launch(perform('finding', async () => {
+      if (!PdfEngine?.nativeReaderSearchVersion) throw new Error('Update the app build to find text in PDFs.');
+      const key = uid(), promise = PdfEngine.editPdfText(key, JSON.stringify({ action: 'search', uri: pdfInput.current!.uri, query }));
+      jobs.current.set(key, { scan: false, text: true, promise });
+      let response: { matches: TextMatch[]; truncated: boolean };
+      try { response = JSON.parse(await promise); } finally { jobs.current.delete(key); }
+      if (!mounted.current || cancelled.current) return;
+      const matches = response.matches.filter(match => findScope === 'all' || match.page + 1 === page);
+      const found = matches.flatMap(match => match.rects.map(rect => textMark(match.page + 1, rect)).filter((mark): mark is PdfMark => !!mark));
+      if (!found.length) {
+        setNotice(`No text matching “${query}” ${findScope === 'page' ? 'on this page' : 'in this PDF'}. Scanned pages have no text layer: use Scan page or draw covers.`);
+        return;
+      }
+      const current = history.getCurrent();
+      const present = new Set(current.map(mark => mark.id));
+      const fresh = found.filter(mark => !present.has(mark.id) && !!present.add(mark.id));
+      const room = Math.max(0, MAX_COVERS - current.length);
+      const limited = fresh.length > room, added = Math.min(fresh.length, room);
+      if (added) history.update([...current, ...fresh.slice(0, room)]);
+      const pages = new Set(matches.map(match => match.page + 1));
+      const count = `${matches.length} ${matches.length === 1 ? 'match' : 'matches'} on ${pages.size} ${pages.size === 1 ? 'page' : 'pages'}`;
+      setNotice(added ? `Covered ${count}.${limited ? ` Cover limit of ${MAX_COVERS} reached; some matches are not covered.` : ''}${response.truncated ? ' Search stopped at 500 matches.' : ''} Review each page before saving.`
+        : limited ? `Cover limit of ${MAX_COVERS} reached. Remove some covers first.` : `All ${count} are already covered.`);
+      setFindQuery('');
+      if (added && !pages.has(page)) jump = Math.min(...pages);
+    }).then(() => { if (jump && mounted.current) changePage(jump); }));
+  }
   function preparePreview() {
     launch(perform('preparing', async () => {
       if (!source) return;
@@ -387,6 +438,19 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
         <ThemedText numberOfLines={1} style={styles.grow}>{source.name}</ThemedText>
         <ThemedText style={[styles.note, secondaryText]}>{info.width} × {info.height}</ThemedText>
       </View>
+      {finding && editing && canFindText && <View style={[styles.findPanel, { borderColor: colors.separator }]}>
+        <View style={styles.row}>
+          <TextInput accessibilityLabel="Text or number to redact" value={findQuery} onChangeText={setFindQuery} editable={!busy} maxLength={128} autoFocus autoCapitalize="none" autoCorrect={false}
+            returnKeyType="done" onSubmitEditing={coverText} placeholder="Text or number to redact" placeholderTextColor={colors.secondaryLabel}
+            style={[styles.findInput, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
+        </View>
+        <View style={styles.row}>
+          <EditorOption compact label="All pages" selected={findScope === 'all'} disabled={busy} onPress={() => setFindScope('all')} />
+          <EditorOption compact label="This page" selected={findScope === 'page'} disabled={busy} onPress={() => setFindScope('page')} />
+          <View style={styles.grow}><ToolButton title="Cover matches" icon={{ ios: 'eye.slash', android: 'visibility-off' }} disabled={busy || !findQuery.trim()} onPress={coverText} /></View>
+        </View>
+        <ThemedText style={[styles.note, secondaryText]}>Matches every place this text appears, ignoring upper and lower case. Works on the text inside the PDF; scanned pages need Scan page or manual covers.</ThemedText>
+      </View>}
       {!isPdf && !image && mode !== 'metadata' && <ToolActionRow left={<><FitSlotButton />{historyButtons}</>} />}
       <PdfPreviewBody toolbar={isPdf && !image ? <PdfPreviewToolbar page={page} count={pageCount} disabled={busy} onPageChange={changePage} leading={historyButtons} /> : null}>
       {isPdf && image ? <PdfDocumentPreview uri={image.uri} count={pageCount} embedded onClose={close} /> : image ? <PdfPreviewStage hint={saved ? 'Saved PNG copy. Pinch to zoom and review.' : 'Final PNG preview. Review every cover before saving.'} onFit={() => setFit(value => value + 1)}>
@@ -428,8 +492,8 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
       </View>}
       <PdfPreviewFooter>
         {busy ? <View style={styles.row}>
-          <AppLoader />{isPdf && !!progress && <ThemedText>{progress}</ThemedText>}<ThemedText style={styles.grow}>{phase === 'scanning' ? 'Scanning on your device…' : phase === 'preparing' ? 'Preparing the copy…' : phase === 'sharing' ? 'Opening share options…' : 'Saving…'}</ThemedText>
-          {(phase === 'scanning' || phase === 'preparing') && <ToolButton title="Cancel" secondary onPress={() => { cancelJobs(); setNotice('Cancelled. Your current covers are kept.'); }} />}
+          <AppLoader />{isPdf && !!progress && <ThemedText>{progress}</ThemedText>}<ThemedText style={styles.grow}>{phase === 'scanning' ? 'Scanning on your device…' : phase === 'finding' ? 'Finding text on your device…' : phase === 'preparing' ? 'Preparing the copy…' : phase === 'sharing' ? 'Opening share options…' : 'Saving…'}</ThemedText>
+          {(phase === 'scanning' || phase === 'finding' || phase === 'preparing') && <ToolButton title="Cancel" secondary onPress={() => { cancelJobs(); setNotice('Cancelled. Your current covers are kept.'); }} />}
         </View> : saved ? <>
           <ThemedText style={styles.note}>{saved.name} · {formatSize(saved.size)} · PNG</ThemedText>
           <View style={styles.row}>{!saved.location && <View style={styles.grow}><ToolButton title="Save" onPress={publishToDevice} /></View>}<ToolButton title="Share" secondary onPress={() => launch(perform('sharing', () => shareNamedFile(saved)))} /></View>
@@ -445,7 +509,8 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
               <EditorOption compact label="Select & resize" selected={selecting} disabled={busy || !canSelect} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setReviewing(false); }} />
               {selecting && <EditorOption label="Delete" compact disabled={!selectedId || !marks.some(mark => mark.id === selectedId)} onPress={() => changeMarks(current => current.filter(mark => mark.id !== selectedId))} />}
             </>}
-            <EditorOption label={mode === 'metadata' ? 'Metadata' : 'Review'} compact icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => setReviewing(value => !value)} />
+            <EditorOption label={mode === 'metadata' ? 'Metadata' : 'Review'} compact icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => { setReviewing(value => !value); setFinding(false); }} />
+            {canFindText && <EditorOption label="Find text" compact icon={{ ios: 'text.magnifyingglass', android: 'mdi:text-search' }} selected={finding} disabled={busy} onPress={() => { setFinding(value => !value); setReviewing(false); }} />}
           </View>
           <View style={styles.row}>
             {mode !== 'metadata' && <ToolButton title={isPdf ? (scan ? 'Rescan page' : 'Scan page') : scan ? 'Scan again' : 'Scan'} secondary icon={{ ios: 'text.viewfinder', android: 'document-scanner' }} onPress={() => launch(perform('scanning', () => scanSource(isPdf ? basePreview : source)))} />}
@@ -481,5 +546,7 @@ const styles = StyleSheet.create({
   note: { fontSize: 12, lineHeight: 17 }, message: { fontSize: 13, paddingHorizontal: 12, paddingVertical: 6 },
   review: { height: '30%', borderTopWidth: StyleSheet.hairlineWidth },
   details: { padding: 12, gap: 12 }, detailsHeading: { gap: 8 },
+  findPanel: { paddingHorizontal: 12, paddingVertical: 10, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  findInput: { flex: 1, minHeight: 44, borderRadius: 12, paddingHorizontal: 12, fontSize: 16 },
   finding: { paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 4 },
 });

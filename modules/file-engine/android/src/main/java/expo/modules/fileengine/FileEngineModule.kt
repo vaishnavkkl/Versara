@@ -27,6 +27,17 @@ class FileEngineModule : Module() {
   private val pdfs = PdfDeviceLibrary()
   private val imageTools = ImageTools()
   private val privacy = ImagePrivacy()
+  @Volatile private var incoming: Uri? = null
+
+  private fun decoded(value: String): String {
+    var current = value
+    repeat(4) {
+      val next = Uri.decode(current)
+      if (next == current) return current
+      current = next
+    }
+    return current
+  }
 
   override fun definition() = ModuleDefinition {
     Name("FileEngine")
@@ -49,7 +60,7 @@ class FileEngineModule : Module() {
       else imageTools.run(context, id, request, promise)
     }
     Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 5 }
+    Constant("nativeImageListVersion") { 6 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -95,7 +106,7 @@ class FileEngineModule : Module() {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView::class) {
-      Events("onOpen", "onRemove", "onLongPress", "onRefresh")
+      Events("onOpen", "onRemove", "onLongPress", "onRefresh", "onBookmark")
       Prop("items") { view: RecentImagesView, value: String -> view.setItems(value) }
       Prop("refreshing") { view: RecentImagesView, value: Boolean -> view.setRefreshing(value) }
       Prop("grid") { view: RecentImagesView, value: Boolean -> view.setGrid(value) }
@@ -128,7 +139,7 @@ class FileEngineModule : Module() {
       }
     }
     View(ZoomableImageView::class) {
-      Events("onLoad", "onError", "onDismiss")
+      Events("onLoad", "onError", "onDismiss", "onTap")
       Prop("source") { view: ZoomableImageView, value: String -> view.setSource(value) }
       OnViewDestroys { view: ZoomableImageView -> view.dispose() }
     }
@@ -206,6 +217,30 @@ class FileEngineModule : Module() {
       worker.execute {
         try {
           promise.resolve(library.import(context, uri, kind, destinationUri))
+        } catch (error: Throwable) {
+          promise.reject("FILE_IMPORT_FAILED", error.message ?: "Could not import this file.", error)
+        }
+      }
+    }
+
+    // Apps like Gmail grant read access to the exact URI in their VIEW intent. Routing decodes that URI, which no
+    // longer matches the grant, so the import reads the original from the intent itself.
+    OnNewIntent { intent -> if (intent.action == Intent.ACTION_VIEW) intent.data?.let { incoming = it } }
+    Constant("nativeIncomingFileVersion") { 1 }
+    AsyncFunction("importIncomingFile") { uri: String, destinationUri: String, promise: Promise ->
+      val context = appContext.reactContext
+      if (context == null) {
+        promise.reject("FILE_UNAVAILABLE", "The app is not ready.", null)
+        return@AsyncFunction
+      }
+      val launched = appContext.currentActivity?.intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data
+      val wanted = decoded(uri)
+      val source = listOfNotNull(incoming, launched).firstOrNull { decoded(it.toString()) == wanted }?.toString() ?: uri
+      worker.execute {
+        try {
+          promise.resolve(library.import(context, source, "file", destinationUri))
+        } catch (error: SecurityException) {
+          promise.reject("FILE_ACCESS_DENIED", "The other app did not allow Versara to read this file. Save it to your device first, then open it from Files.", error)
         } catch (error: Throwable) {
           promise.reject("FILE_IMPORT_FAILED", error.message ?: "Could not import this file.", error)
         }

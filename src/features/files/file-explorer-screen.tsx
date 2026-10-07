@@ -14,6 +14,7 @@ import { ExplorerRow } from './explorer-row';
 import { explorerAvailable, openExplorerEntry } from './explorer';
 import { RecentFilesSection } from './recent-files-section';
 import { compareFiles, FileSortMenu, useFileSort } from './file-sort-menu';
+import { LayoutToggle } from '@/components/layout-toggle';
 
 const LISTING_CACHE = 24;
 const listings = new Map<string, DirectoryListing>();
@@ -45,7 +46,7 @@ function formatBytes(bytes: number) {
 
 export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } = {}) {
   const colors = usePalette();
-  const { fontScale } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const available = explorerAvailable();
   const [roots, setRoots] = useState<StorageRoot[]>([]);
   const [path, setPath] = useState<string | null>(null);
@@ -129,9 +130,12 @@ export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } 
   if (!path) {
     return (
       <RecentFilesSection picker={picker} header={<View style={styles.homeHeader}>
-        <View style={styles.intro}>
-          <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Files</ThemedText>
-          <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>Browse folders on this device</ThemedText>
+        <View style={styles.titleRow}>
+          <View style={[styles.intro, styles.grow]}>
+            <ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Files</ThemedText>
+            <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>Browse folders on this device</ThemedText>
+          </View>
+          <LayoutToggle gridAvailable={width >= 340 && fontScale <= 1.5} />
         </View>
         {!available ? (
           <View style={[styles.notice, { backgroundColor: colors.accentSurface }]}>
@@ -215,6 +219,7 @@ export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } 
 const styles = StyleSheet.create({
   homeHeader: { gap: s.md },
   intro: { gap: s.xs, marginBottom: s.sm },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: s.sm },
   title: { ...t.title },
   subtitle: { ...t.body },
   notice: { borderRadius: 16, padding: s.lg },

@@ -122,8 +122,8 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
     return <Pressable key={tool.id} helpMode={naming} helpText={tool.title} helpOnLongPress accessibilityRole="button" accessibilityLabel={tool.accessibilityLabel ?? tool.title} accessibilityHint={naming ? 'Shows the tool name' : 'Long press to see the tool name'} accessibilityState={{ disabled: off }} disabled={off}
         onPress={() => onAction(tool.id)} hitSlop={3}
         style={({ pressed }) => [styles.button, { backgroundColor: tint.surface, borderColor: `${tint.ink}33`, opacity: off ? 0.4 : pressed ? 0.6 : 1, transform: [{ scale: pressed ? 0.94 : 1 }] }]}>
-        <UniversalIcon ios={tool.ios} android={tool.android} size={24} color={tint.ink} />
-        <ThemedText numberOfLines={2} maxFontSizeMultiplier={1.2} style={[styles.name, { color: tint.ink }]}>{tool.title}</ThemedText>
+        <View style={[styles.chip, tint.fill]}><UniversalIcon ios={tool.ios} android={tool.android} size={21} color={tint.glyph} /></View>
+        <ThemedText numberOfLines={2} maxFontSizeMultiplier={1.2} style={[styles.name, { color: colors.label }]}>{tool.title}</ThemedText>
       </Pressable>;
   };
   // A strip that cannot fit its tools keeps its scrollbar visible and shows a chevron, so scrolling is discoverable.
@@ -187,6 +187,7 @@ const styles = StyleSheet.create({
   rowContent: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: ROW_INSET },
   rowScrolling: { justifyContent: 'flex-start' },
   columnContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'space-evenly', gap: 4, paddingVertical: 2 },
-  button: { width: TILE_WIDTH, height: TILE_HEIGHT, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', gap: 2, paddingHorizontal: 3 },
+  button: { width: TILE_WIDTH, height: TILE_HEIGHT, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 3 },
+  chip: { width: 34, height: 34, borderRadius: 11, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
   name: { fontSize: 8, lineHeight: 10, fontWeight: '600', textAlign: 'center' },
 });

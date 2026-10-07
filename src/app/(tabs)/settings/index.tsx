@@ -11,8 +11,7 @@ import { toast } from '@/components/toast';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { Host, Switch } from '@expo/ui';
 import { useReducedMotion } from 'react-native-reanimated';
-import { toolColors } from '@/theme/tool-colors';
-import { brandFont, spacing as s, typography as t } from '@/theme/dashboard';
+import { toolColors } from '@/theme/tool-colors';import { brandFont, spacing as s, typography as t } from '@/theme/dashboard';
 import { getFileAccessStatus, isFileEngineAvailable, requestFileAccess, type FileAccessStatus } from '@/features/files/file-access';
 import { clearRecentFiles } from '@/features/files/recent-files';
 import { formatSize } from '@/features/files/file-storage';
@@ -165,7 +164,7 @@ function Row({ icon, title, caption, value, trailing, onPress, disabled, externa
   const colors = usePalette();
   const tint = toolColors(icon.android, colors);
   const content = <>
-    <View style={[styles.icon, { backgroundColor: tint.surface }]}><UniversalIcon ios={icon.ios} android={icon.android} size={19} color={tint.ink} /></View>
+    <View style={[styles.icon, tint.fill]}><UniversalIcon ios={icon.ios} android={icon.android} size={19} color={tint.glyph} /></View>
     <View style={styles.grow}>
       <ThemedText style={[styles.label, { color: colors.label }]}>{title}</ThemedText>
       {!!caption && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>{caption}</ThemedText>}
@@ -186,8 +185,7 @@ const styles = StyleSheet.create({
   group: { borderRadius: 20, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', gap: s.md, minHeight: 60, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, marginTop: -StyleSheet.hairlineWidth },
   icon: { width: 34, height: 34, borderRadius: 10, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
-  grow: { flex: 1, gap: 2 },
-  label: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
+  grow: { flex: 1, gap: 2 },  label: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
   caption: { ...t.caption },
   value: { fontSize: 14, fontWeight: '600' },
   developer: { borderRadius: 24, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, padding: s.xl, gap: s.sm, overflow: 'hidden' },

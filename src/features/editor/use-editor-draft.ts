@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
+import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { draftSource, readEditorDraft, removeEditorDraft, writeEditorDraft, discardEditorDraft } from './editor-drafts';
 
@@ -23,10 +24,15 @@ export function useEditorDraft<T>({ id, uri, value, dirty, restore, validate }: 
     let current = true;
     hydrated.current = ''; skipped.current = null; hasDraft.current = false;
     if (!id || !token) return;
+    const finish = () => { if (current) { hydrated.current = token; setReady(token); } };
     void readEditorDraft<unknown>(id, source).then(saved => {
       if (!current) return;
-      if (saved && latest.current.validate(saved)) { hasDraft.current = true; latest.current.restore(saved); toast('Restored your local draft'); }
-      hydrated.current = token; setReady(token);
+      if (!saved || !latest.current.validate(saved)) { finish(); return; }
+      // Back or a full dialog queue keeps the draft; only Start over deletes it.
+      showDialog('Continue your draft?', 'This file has unsaved changes from last time.', [
+        { text: 'Start over', style: 'destructive', onPress: () => { void removeEditorDraft(id).catch(() => undefined).finally(finish); } },
+        { text: 'Continue', style: 'cancel', onPress: () => { if (!current) return; hasDraft.current = true; latest.current.restore(saved); toast('Restored your draft'); finish(); } },
+      ], { ios: 'clock.arrow.circlepath', android: 'history' });
     }).catch(() => { if (current) { hydrated.current = token; setReady(token); setError('Draft recovery is unavailable. You can still save your file.'); } });
     return () => { current = false; };
   }, [id, source, token]);

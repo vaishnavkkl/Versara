@@ -2,6 +2,8 @@ package expo.modules.pdfengine
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.cos.COSName
@@ -84,7 +86,13 @@ class PdfAdvancedTools {
           val pages = if (p.length() == 0) (0 until count).toList() else (0 until p.length()).map { p.getInt(it) - 1 }
           require(pages.size <= 2000 && pages.all { it in 0 until count } && pages.distinct().size == pages.size) { "Choose valid, unique page numbers." }
           val permission = pdf.currentAccessPermission
-          if (op !in setOf("info", "preview")) {
+          // Reading text never changes the PDF, so it needs only extraction rights, not edit rights or an unsigned file.
+          val readsText = op == "extract_text" || (op == "ocr" && r.optString("ocrFormat", "text") == "text")
+          val textPreview = readsText && r.optBoolean("textPreview", false)
+          if (readsText) {
+            require(permission.canExtractContent()) { "This PDF does not allow copying its text." }
+            require(!textPreview || pages.size == 1) { "Preview the text of one page at a time." }
+          } else if (op !in setOf("info", "preview")) {
             require(permission.canModify() && permission.canExtractContent() && permission.canAssembleDocument()) { "This PDF restricts editing or extraction. Use an unrestricted copy." }
             require(pdf.signatureDictionaries.isEmpty()) { "This PDF is digitally signed. Use an unsigned copy to preserve its signatures." }
             PdfIntegrity.requireUnsigned(context, input, password, check)
@@ -152,6 +160,30 @@ class PdfAdvancedTools {
             }
             "extract_text", "ocr" -> {
               val tess = if (op == "ocr") TessBaseAPI() else null
+              // PDFium decodes the JBIG2/JPEG 2000 images common in scans, which PDFBox can render blank.
+              // Tesseract reads best near 300 DPI, so OCR gets a larger, memory-bounded budget than previews.
+              val ocrDocument = if (tess != null) PdfiumDocument.open(input.canonicalPath, password).first else null
+              val ocrPixels = if (Runtime.getRuntime().maxMemory() < 256L * 1024 * 1024) 4_000_000.0 else 8_000_000.0
+              fun recognizeImage(page: Int): Bitmap {
+                check()
+                if (ocrDocument != null) {
+                  val (width, height) = ocrDocument.size(page)
+                  require(width > 0 && height > 0 && width.isFinite() && height.isFinite()) { "This PDF has invalid page dimensions." }
+                  val scale = min(min(300.0 / 72, sqrt(ocrPixels / (width * height))), 6000.0 / max(width, height))
+                  val bitmap = Bitmap.createBitmap(max(1, (width * scale).toInt()), max(1, (height * scale).toInt()), Bitmap.Config.ARGB_8888)
+                  try {
+                    bitmap.eraseColor(Color.WHITE)
+                    ocrDocument.render(page, bitmap, Rect(0, 0, bitmap.width, bitmap.height), scale.toFloat(), 0f)
+                    tess!!.setVariable("user_defined_dpi", (scale * 72).roundToInt().coerceIn(70, 2400).toString())
+                    check(); return bitmap
+                  } catch (error: Throwable) { bitmap.recycle(); throw error }
+                }
+                val bitmap = render(page, 300f)
+                val source = pdf.getPage(page)
+                val pageWidth = if (source.rotation % 180 != 0) source.cropBox.height else source.cropBox.width
+                tess!!.setVariable("user_defined_dpi", (bitmap.width * 72.0 / max(1f, pageWidth)).roundToInt().coerceIn(70, 2400).toString())
+                return bitmap
+              }
               try {
                 if (tess != null) {
                   val root = File(context.filesDir, "versara-ocr")
@@ -159,6 +191,7 @@ class PdfAdvancedTools {
                   if (!data.isFile) { data.parentFile!!.mkdirs(); val temp = File(data.parentFile, "eng.partial"); try { context.assets.open("tessdata/eng.traineddata").use { from -> temp.outputStream().use { from.copyTo(it) } }; check(temp.renameTo(data)) { "Could not prepare offline OCR." } } finally { temp.delete() } }
                   require(tess.init(root.path, "eng")) { "Offline OCR data could not be loaded." }
                   tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+                  tess.setVariable("preserve_interword_spaces", "1")
                   synchronized(recognitionLock) { check(); recognizers[id] = tess }
                 }
                 val searchable = op == "ocr" && r.optString("ocrFormat", "text") == "pdf"
@@ -172,7 +205,7 @@ class PdfAdvancedTools {
                     val hasText = r.optBoolean("skipExistingText", true) && hasSelectableText(pdf, page, check)
                     val words = JSONArray()
                     if (!hasText) {
-                      val bitmap = render(page, 220f)
+                      val bitmap = recognizeImage(page)
                       try {
                         tess!!.setImage(bitmap); tess.utF8Text; check()
                         val iterator = tess.resultIterator
@@ -205,17 +238,17 @@ class PdfAdvancedTools {
                   require(!response.has("error")) { response.optString("error", "Could not create a searchable PDF.") }
                   ocrSummary = response
                   check(); progress(pages.size + 1, pages.size + 1)
-                } else output(0).bufferedWriter(Charsets.UTF_8).use { writer ->
+                } else output(0, textPreview).bufferedWriter(Charsets.UTF_8).use { writer ->
                   pages.forEachIndexed { index, page ->
                     check(); writer.write("--- Page ${page + 1} ---\n")
                     val text = if (tess == null) PDFTextStripper().apply { startPage = page + 1; endPage = page + 1; sortByPosition = true }.getText(pdf) else {
-                      val bitmap = render(page, 220f)
+                      val bitmap = recognizeImage(page)
                       try { tess.setImage(bitmap); tess.utF8Text ?: "" } finally { tess.clear(); bitmap.recycle() }
                     }
                     writer.write(text); writer.write("\n\n"); check(); progress(index + 1, pages.size)
                   }
                 }
-              } finally { synchronized(recognitionLock) { recognizers.remove(id); tess?.recycle() } }
+              } finally { synchronized(recognitionLock) { recognizers.remove(id); tess?.recycle() }; ocrDocument?.close() }
             }
             "compress" -> {
               if (pdf.isEncrypted) input.copyTo(output(0))

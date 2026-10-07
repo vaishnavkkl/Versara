@@ -3,6 +3,9 @@ import { BackHandler, Pressable, StyleSheet, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ScreenHeader } from '@/components/screen-header';
 import { HeaderOrientationButton } from '@/components/header-orientation';
+import { HeaderActions, HeaderIconButton } from '@/components/header-actions';
+import { useFileBookmarked } from '@/features/files/bookmarks';
+import { toggleFileBookmarkWithFeedback } from '@/features/files/bookmark-actions';
 import { router, Stack, useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router';
 import { File } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,6 +33,8 @@ import { recordToolUse } from '@/features/search/search-history';
 import { ADVANCED_IMAGE_TOOLS } from '@/features/files/image-tools';
 import { FileEngine } from '../../modules/file-engine';
 import { takePreviewFile } from '@/features/files/preview-handoff';
+import { FocusChrome } from '@/components/focus-chrome';
+import { LayoutAnimationConfig } from 'react-native-reanimated';
 
 export default function FilePreviewScreen() {
   const { id, uri: resultUri, name: resultName, revision } = useLocalSearchParams<{ id: string; uri?: string; name?: string; revision?: string }>();
@@ -163,12 +168,13 @@ export default function FilePreviewScreen() {
   }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
-    {!focused && !surrounding && <ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<HeaderOrientationButton />}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader>}
+    <LayoutAnimationConfig skipEntering>
+    {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}<HeaderActions /><HeaderOrientationButton /></>}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader></FocusChrome>}
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : <>
         {file.kind === 'image' ? <ImageViewer file={shown ?? file} revision={revision} busy={busy || openingTool} active={active} showImage={active && transitionReady && !openingTool} landscape={landscape}
-          changed={!!working} onSurroundChange={setSurrounding} onSave={() => void saveChanges()} onDiscard={discardChanges}
+          changed={!!working} onSurroundChange={setSurrounding} onFocusChange={setFocused} onSave={() => void saveChanges()} onDiscard={discardChanges}
           onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} onClose={close} />
         : file.kind === 'video' ? <View style={[styles.screen, landscape && styles.row]}>
           {landscape && <MediaToolbar side="left" kind={file.kind} busy={busy} landscape onToggleLandscape={() => setLandscape(value => !value)} onAction={value => void action(value)} />}
@@ -179,6 +185,13 @@ export default function FilePreviewScreen() {
         <MediaOptions file={file} visible={options && active} onClose={() => setOptions(false)} onAction={value => void action(value)} /></>}
       </>}
     </>}
+    </LayoutAnimationConfig>
   </SafeAreaView>;
 }
+function ImageBookmarkButton({ file }: { file: RecentFile }) {
+  const bookmarked = useFileBookmarked(file);
+  return <HeaderIconButton label={bookmarked ? 'Remove bookmark' : 'Bookmark this image'} ios={bookmarked ? 'bookmark.fill' : 'bookmark'} android={bookmarked ? 'mdi:bookmark' : 'mdi:bookmark-outline'} selected={bookmarked}
+    onPress={() => toggleFileBookmarkWithFeedback(file)} />;
+}
+
 const styles = StyleSheet.create({ screen: { flex: 1 }, row: { flexDirection: 'row' }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }, error: { padding: 16 }, footer: { padding: 12, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 12 }, meta: { flex: 1, ...t.caption }, options: { minHeight: 48, borderRadius: 24, paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' } });

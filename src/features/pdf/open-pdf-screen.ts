@@ -19,10 +19,16 @@ export function openPdfScreen(document: { uri: string; name: string }, page = 0)
   if (params) router.push({ pathname: '/pdf-viewer', params });
 }
 
-/** Reuse the originating reader so Back cannot reveal an older PDF beneath the result. */
+/**
+ * Replaces the originating reader so Back cannot reveal an older PDF beneath the result.
+ * Updating the existing reader's params is not enough: the screen can keep showing the PDF it
+ * opened with, so the result always gets a fresh reader route.
+ */
 export function openPdfResult(document: { uri: string; name: string }, returnRoute?: PdfReturnRoute) {
   const params = readerParams(document, 0);
   if (!params) return;
-  if (returnRoute) router.dismissTo({ pathname: returnRoute, params: { ...params, revision: String(Date.now()) } });
-  else openPdfScreen(document);
+  if (!returnRoute) { openPdfScreen(document); return; }
+  const fresh = { ...params, revision: String(Date.now()) };
+  router.dismissTo({ pathname: returnRoute, params: fresh });
+  router.replace({ pathname: '/pdf-viewer', params: fresh });
 }

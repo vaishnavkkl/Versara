@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { StyleSheet } from 'react-native';
 import { HelpPressable as Pressable } from './help-pressable';
+import { HEADER_ICON_SIZE, headerButtonStyle } from './header-actions';
 import { UniversalIcon } from './universal-icon';
 import { usePalette } from '@/theme/colors';
 
@@ -26,13 +26,11 @@ export function HeaderOrientationButton() {
   const orientation = useHeaderOrientation();
   if (!orientation) return null;
   return <Pressable accessibilityRole="button" accessibilityLabel={orientation.landscape ? 'Switch to portrait' : 'Switch to landscape'}
-    accessibilityState={{ selected: orientation.landscape, disabled: orientation.disabled }} disabled={orientation.disabled} onPress={orientation.onToggle} hitSlop={4}
-    style={({ pressed }) => [styles.button, { backgroundColor: colors.accentSurface, opacity: orientation.disabled ? 0.4 : pressed ? 0.6 : 1 }]}>
-    <UniversalIcon ios={orientation.landscape ? 'rectangle.portrait' : 'rectangle'} android="screen-rotation" size={20} color={colors.systemBlue} />
+    accessibilityState={{ selected: orientation.landscape, disabled: orientation.disabled }} disabled={orientation.disabled} onPress={orientation.onToggle} hitSlop={2}
+    style={({ pressed }) => [headerButtonStyle, { opacity: orientation.disabled ? 0.4 : pressed ? 0.6 : 1 }]}>
+    <UniversalIcon ios={orientation.landscape ? 'rectangle.portrait' : 'rectangle'} android="mdi:phone-rotate-landscape" size={HEADER_ICON_SIZE} color={colors.systemBlue} />
   </Pressable>;
 }
-
-const styles = StyleSheet.create({ button: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' } });
 
 export function usePublishHeaderOrientation({ active = true, landscape, disabled = false, onToggle }: {
   active?: boolean; landscape: boolean; disabled?: boolean; onToggle: () => void;

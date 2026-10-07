@@ -23,8 +23,8 @@ export const palettes = {
     tileSurface: '#101010', tileBorder: '#1F1F1F', tileShadow: '0 1px 2px rgba(0, 0, 0, 0.4)', tileTint: '2E',
     catalogSurface: '#17181C', catalogPressed: '#22242A', catalogBorder: '#2A2D35',
     sheetBackground: '#101114', fieldSurface: '#202228', scrim: '#00000080',
-    pdfInk: '#FFADA6', pdfSurface: '#382321', wordInk: '#8EB4FF', wordSurface: '#1C2740', imageInk: '#89D5B0', imageSurface: '#1E3028',
-    filesInk: '#A7C7FF', filesSurface: '#202E44', privacyInk: '#C8B9F3', privacySurface: '#302A40',
+    pdfInk: '#F4A3A3', pdfSurface: '#33201F', wordInk: '#9DB8F5', wordSurface: '#1D2640', imageInk: '#86D9B5', imageSurface: '#1A2E26',
+    filesInk: '#8CC7EE', filesSurface: '#1A2A38', privacyInk: '#C3B2F5', privacySurface: '#2A2440',
   },
   light: {
     destructive: '#BE123C',
@@ -47,8 +47,8 @@ export const palettes = {
     tileSurface: '#FFFFFF', tileBorder: '#E8EAF3', tileShadow: '0 6px 18px rgba(26, 25, 83, 0.08)', tileTint: '24',
     catalogSurface: '#FFFFFF', catalogPressed: '#F0F2F8', catalogBorder: '#E2E5ED',
     sheetBackground: '#F6F7FA', fieldSurface: '#EDEFF5', scrim: '#0B102966',
-    pdfInk: '#B94338', pdfSurface: '#FCECE8', wordInk: '#2451A6', wordSurface: '#E8EEFB', imageInk: '#216B4B', imageSurface: '#E7F4EC',
-    filesInk: '#315FAA', filesSurface: '#EAF0FC', privacyInk: '#6F4E9B', privacySurface: '#F0EAF8',
+    pdfInk: '#C8434F', pdfSurface: '#FBEBEC', wordInk: '#3462C8', wordSurface: '#EAEFFA', imageInk: '#1E8A63', imageSurface: '#E6F4EE',
+    filesInk: '#1F7AB8', filesSurface: '#E6F1F8', privacyInk: '#6B4FC4', privacySurface: '#EFEBF9',
   },
 } as const;
 export type Palette = { [Key in keyof typeof palettes.dark]: string };

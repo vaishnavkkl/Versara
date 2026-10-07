@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { View } from 'react-native';
 import type { PrivacyMode } from '@/features/privacy/privacy-tools';
+import { recordToolUse } from '@/features/search/search-history';
 
 function ExistingPrivacyTool({ mode, id }: { mode: PrivacyMode; id?: string }) {
   const started = useRef(false), mounted = useRef(true);
@@ -32,6 +33,8 @@ export default function PrivacyToolRoute() {
   const { id, mode, session } = useLocalSearchParams<{ id?: string; mode?: string; session?: string }>();
   const colors = usePalette();
   const selectedMode = mode === 'metadata' || mode === 'redact' || mode === 'remove_text' || mode === 'pdf_scan' ? mode : 'scan';
+  const editing = !!id && (selectedMode === 'scan' || selectedMode === 'pdf_scan');
+  useEffect(() => { if (editing) recordToolUse(`Privacy:${selectedMode}`); }, [editing, selectedMode]);
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={{ flex: 1, backgroundColor: colors.systemBackground }}>
     <Stack.Screen options={{ gestureEnabled: false }} />
     {id && (selectedMode === 'scan' || selectedMode === 'pdf_scan') ? <PrivacyEditor key={session ?? id ?? selectedMode} id={id} mode={selectedMode} /> : <ExistingPrivacyTool mode={selectedMode} id={id} />}

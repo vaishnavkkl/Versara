@@ -9,10 +9,10 @@ import type { RecentFile } from './recent-files';
 import { ZoomableImage } from './zoomable-image';
 import NativeVideoView from '../../../modules/file-engine/src/NativeVideoView';
 
-export function MediaPreview({ file, onClose }: { file: RecentFile; onClose: () => void }) {
+export function MediaPreview({ file, onClose, onTap }: { file: RecentFile; onClose: () => void; onTap?: () => void }) {
   if (file.kind === 'video') return <VideoPreview uri={file.uri} />;
   if (file.kind === 'audio') return <AudioPreview uri={file.uri} />;
-  return <ZoomableImage uri={file.uri} onClose={onClose} />;
+  return <ZoomableImage uri={file.uri} onClose={onClose} onTap={onTap} />;
 }
 function VideoPreview({ uri }: { uri: string }) {
   const colors = usePalette();

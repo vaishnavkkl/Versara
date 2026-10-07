@@ -18,7 +18,7 @@ export function EditorOption({ label, selected = false, disabled = false, onPres
   const symbol = icon ?? optionIcon(label);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }, style]}>
-    {symbol && <UniversalIcon {...symbol} size={compact ? 20 : 22} color={tint.ink} />}
+    {symbol && <UniversalIcon {...symbol} size={22} color={tint.ink} />}
     <ThemedText style={{ fontSize: compact ? 13 : 15, lineHeight: compact ? 17 : 21, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
   </Pressable>;
 }

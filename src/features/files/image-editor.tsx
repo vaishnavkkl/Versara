@@ -328,8 +328,8 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
 
   const tabs = <View style={landscape ? styles.tabColumn : [styles.tabRow, { flexDirection: 'row', flexWrap: 'wrap' }]}>
     {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} disabled={!draft.ready || busy || compare} onPress={() => { if (locked.current) return; setTab(item.id); setSheetOpen(SHEET_TABS.has(item.id)); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={[styles.tab, !landscape && { width: fontScale >= 1.4 ? '31%' : '15.5%' }]}>
-      <View style={[styles.tabIcon, { backgroundColor: tab === item.id ? toolColors(item.id, colors).ink : toolColors(item.id, colors).surface }]}>
-        <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : toolColors(item.id, colors).ink} />
+      <View style={[styles.tabIcon, tab === item.id ? { backgroundColor: toolColors(item.id, colors).ink } : toolColors(item.id, colors).fill]}>
+        <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : toolColors(item.id, colors).glyph} />
       </View>
       <ThemedText style={styles.tabLabel}>{item.title}</ThemedText>
     </Pressable>)}

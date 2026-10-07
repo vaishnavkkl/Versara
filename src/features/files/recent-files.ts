@@ -34,9 +34,37 @@ function db() {
 export const libraryDatabase = db;
 export { storedUri, documentRoot };
 
+/** Copies made by Open, device recents and other apps live directly in the library folder; saved results do not. */
+function isImportCopy(uri: string) {
+  const root = library().uri.replace(/\/+$/, '') + '/';
+  return uri.startsWith(root) && !decodeURIComponent(uri.slice(root.length)).includes('/');
+}
+const sameFile = (file: Pick<RecentFile, 'kind' | 'name' | 'size'>) => `${file.kind}:${file.name.toLowerCase()}:${file.size}`;
+
 export async function listRecentFiles(kind: FileKind, search = '') {
   const database = await db();
-  return (await database.getAllAsync<RecentFile>(`SELECT * FROM recent_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY opened DESC LIMIT ${RECENT_LIMIT}`, kind, search.trim())).map(restored);
+  const rows = (await database.getAllAsync<RecentFile>(`SELECT * FROM recent_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY opened DESC LIMIT ${RECENT_LIMIT * 2}`, kind, search.trim())).map(restored);
+  // Earlier versions copied a file again every time it was opened. Keep the newest entry and drop older import copies.
+  const seen = new Set<string>();
+  const kept: RecentFile[] = [], stale: RecentFile[] = [];
+  for (const row of rows) {
+    const key = sameFile(row);
+    if (seen.has(key) && isImportCopy(row.uri)) stale.push(row);
+    else { seen.add(key); kept.push(row); }
+  }
+  if (stale.length) cleanupDuplicates(stale);
+  return kept.slice(0, RECENT_LIMIT);
+}
+
+// Several lists load at once; one cleanup at a time, and lists reload once it has finished.
+let cleanup: Promise<void> | null = null;
+function cleanupDuplicates(rows: RecentFile[]) {
+  if (cleanup) return;
+  cleanup = (async () => {
+    let removed = 0;
+    for (const row of rows) if (await deleteRecentRow(row).then(() => true, () => false)) removed++;
+    if (removed) notifyLibraryChanged(rows.map(row => row.uri));
+  })().finally(() => { cleanup = null; });
 }
 
 /** Library imports plus bounded native device recents (MediaStore / Photos). Metadata only. */
@@ -76,6 +104,19 @@ export async function rememberFile(file: { uri: string; name: string; mimeType?:
   if (!file.uri.startsWith(documentRoot())) throw new Error('This file must be imported before it can be kept in Recents.');
   const database = await db();
   const existing = await database.getFirstAsync<RecentFile>('SELECT * FROM recent_files WHERE uri = ?', storedUri(file.uri));
+  // Opening the same file again reuses its earlier copy instead of listing it twice.
+  if (!existing && isImportCopy(file.uri)) {
+    const size = file.size ?? new File(file.uri).size;
+    const twin = await database.getFirstAsync<RecentFile>('SELECT * FROM recent_files WHERE kind = ? AND lower(name) = lower(?) AND size = ? ORDER BY opened DESC', kind, file.name, size);
+    const kept = twin ? restored(twin) : null;
+    if (kept && kept.uri !== file.uri && new File(kept.uri).exists) {
+      try { new File(file.uri).delete(); } catch { /* Library cleanup removes it later. */ }
+      const opened = Date.now();
+      await database.runAsync('UPDATE recent_files SET opened = ? WHERE id = ?', opened, kept.id);
+      notifyLibraryChanged([kept.uri]);
+      return { ...kept, opened };
+    }
+  }
   const value: RecentFile = { id: existing?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: file.uri, name: file.name, kind, mimeType: file.mimeType ?? mimeTypes[kind], size: file.size ?? new File(file.uri).size, opened: Date.now() };
   await database.runAsync('INSERT INTO recent_files(id,uri,name,kind,mimeType,size,opened) VALUES (?,?,?,?,?,?,?) ON CONFLICT(uri) DO UPDATE SET name=excluded.name, size=excluded.size, opened=excluded.opened', value.id, storedUri(value.uri), value.name, value.kind, value.mimeType, value.size, value.opened);
   notifyLibraryChanged([value.uri]);
@@ -133,7 +174,9 @@ export async function importExternalFile(uri: string): Promise<RecentFile> {
   let named: File | null = null;
   try {
     root.create({ intermediates: true, idempotent: true });
-    const imported = await FileEngine.importDeviceFile(uri, 'file', copy.uri);
+    const imported = FileEngine.nativeIncomingFileVersion && FileEngine.importIncomingFile
+      ? await FileEngine.importIncomingFile(uri, copy.uri)
+      : await FileEngine.importDeviceFile(uri, 'file', copy.uri);
     const mimeType = imported.mimeType.toLowerCase();
     let kind: FileKind | null = mimeType === 'application/pdf' ? 'pdf' : mimeType.startsWith('image/') ? 'image' : null;
     if (!kind) {
@@ -161,11 +204,17 @@ export async function importExternalFile(uri: string): Promise<RecentFile> {
 /** Same cleanup as removing each item from its list. Returns how many entries were removed. */
 export async function clearRecentFiles() {
   const rows = (await (await db()).getAllAsync<RecentFile>('SELECT * FROM recent_files')).map(restored);
-  for (const row of rows) await removeRecentFile(row);
+  for (const row of rows) await deleteRecentRow(row);
+  if (rows.length) notifyLibraryChanged(rows.map(row => row.uri));
   return rows.length;
 }
 
 export async function removeRecentFile(file: RecentFile) {
+  await deleteRecentRow(file);
+  notifyLibraryChanged([file.uri]);
+}
+
+async function deleteRecentRow(file: RecentFile) {
   // Never remove saved tool outputs or originals outside our import directory.
   const root = library().uri.replace(/\/+$/, '') + '/';
   if (file.uri.startsWith(root) && !decodeURIComponent(file.uri.slice(root.length)).includes('/')) {

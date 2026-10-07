@@ -1,10 +1,12 @@
 import React from 'react';
 import { SymbolView } from 'expo-symbols';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { usePalette } from '@/theme/colors';
 
 type IOSSymbol = import('expo-symbols').SFSymbol;
-type AndroidIcon = React.ComponentProps<typeof MaterialIcons>['name'];
+type CommunityIcon = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+/** A Material icon name, or `mdi:<name>` for the Material Community outline set. */
+type AndroidIcon = React.ComponentProps<typeof MaterialIcons>['name'] | `mdi:${CommunityIcon}`;
 
 type IconProps = {
   /** SF Symbol name for iOS */
@@ -39,9 +41,12 @@ export function UniversalIcon({
     );
   }
 
+  if (android.startsWith('mdi:')) {
+    return <MaterialCommunityIcons name={android.slice(4) as CommunityIcon} size={size} color={tint} />;
+  }
   return (
     <MaterialIcons
-      name={android}
+      name={android as React.ComponentProps<typeof MaterialIcons>['name']}
       size={size}
       color={tint}
     />

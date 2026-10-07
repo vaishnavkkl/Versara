@@ -28,21 +28,22 @@ internal class FileThumbnailer {
   // thumbnails reuse one open document and release it after a short idle period.
   private var pdfKey = ""
   private var pdfDescriptor: ParcelFileDescriptor? = null
-  private var pdfRenderer: PdfRenderer? = null
+  private var pdfRenderer: ReaderDocument? = null
   private var idleClose: ScheduledFuture<*>? = null
   private fun openInput(context: Context, input: Uri): ParcelFileDescriptor = when (input.scheme) {
     "file" -> ParcelFileDescriptor.open(File(requireNotNull(input.path)).canonicalFile, ParcelFileDescriptor.MODE_READ_ONLY)
     "content" -> requireNotNull(context.contentResolver.openFileDescriptor(input, "r")) { "File unavailable." }
     else -> throw IllegalArgumentException("Unsupported file.")
   }
-  private fun pdfFor(context: Context, input: Uri): PdfRenderer {
+  private fun pdfFor(context: Context, input: Uri): ReaderDocument {
     val descriptor = openInput(context, input)
     try {
       val stat = Os.fstat(descriptor.fileDescriptor)
       val key = "$input:${stat.st_mtime}:${stat.st_size}"
       pdfRenderer?.let { if (key == pdfKey) { descriptor.close(); return it } }
       closePdf()
-      val renderer = PdfRenderer(descriptor)
+      val path = if (input.scheme == "file") File(requireNotNull(input.path)).canonicalPath else "/proc/self/fd/${descriptor.fd}"
+      val renderer = PdfiumDocument.open(path).first ?: PlatformDocument(PdfRenderer(descriptor))
       pdfDescriptor = descriptor; pdfRenderer = renderer; pdfKey = key
       return renderer
     } catch (error: Throwable) { if (pdfDescriptor !== descriptor) descriptor.close(); throw error }
@@ -77,12 +78,11 @@ internal class FileThumbnailer {
           "pdf" -> try {
             val pdf = pdfFor(context, inputUrl)
             require(pageIndex in 0 until pdf.pageCount)
-            pdf.openPage(pageIndex).use { page ->
-              val scale = 240.0 / max(page.width, page.height)
-              val image = Bitmap.createBitmap(max(1, (page.width * scale).toInt()), max(1, (page.height * scale).toInt()), Bitmap.Config.ARGB_8888)
-              try { image.eraseColor(Color.WHITE); page.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY); image }
-              catch (error: Throwable) { image.recycle(); throw error }
-            }
+            val (pageWidth, pageHeight) = pdf.size(pageIndex)
+            val scale = 240.0 / max(pageWidth, pageHeight)
+            val image = Bitmap.createBitmap(max(1, (pageWidth * scale).toInt()), max(1, (pageHeight * scale).toInt()), Bitmap.Config.ARGB_8888)
+            try { image.eraseColor(Color.WHITE); pdf.render(pageIndex, image, android.graphics.Rect(0, 0, image.width, image.height), scale.toFloat(), 0f); image }
+            catch (error: Throwable) { image.recycle(); throw error }
           } catch (error: Throwable) { closePdf(); throw error } finally { scheduleIdleClose() }
           "video", "audio" -> {
             val retriever = MediaMetadataRetriever()

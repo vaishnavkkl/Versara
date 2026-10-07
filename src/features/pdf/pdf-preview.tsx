@@ -24,9 +24,15 @@ export type PdfPreviewImage = { uri: string; width: number; height: number; poin
  * Undo/redo (`history`) and `leading` sit on the left, page navigation is centred and `children` sit on the right.
  * `below` holds wider tool menus on a second line.
  */
-export function PdfPreviewToolbar({ page, count, disabled, onPageChange, children, history = false, leading, below, rotate = true, orientation }: {
+export function PdfPreviewToolbar({ page, count, disabled, onPageChange, children, history = false, leading, below, rotate = true, orientation, compact = false, step = 1, rightToLeft = false }: {
   page: number; count: number; disabled?: boolean; onPageChange: (page: number) => void; children?: ReactNode;
   history?: boolean; leading?: ReactNode; below?: ReactNode; rotate?: boolean;
+  /** Pages per arrow press: 2 when the reader shows two-page spreads. */
+  step?: number;
+  /** Right-to-left reading puts "next" on the left. */
+  rightToLeft?: boolean;
+  /** Keep every control on one line on narrow phones; buttons passed in should be compact too. */
+  compact?: boolean;
   /** Screens that own their orientation (the PDF reader) pass it here instead of the toolbar setting it. */
   orientation?: { landscape: boolean; onToggle: () => void };
 }) {
@@ -57,17 +63,26 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   const crowded = !sideways && (history || !!leading);
   const fitBelow = crowded && !!below;
   const fitRight = crowded && !below;
+  const tight = compact && !sideways;
+  const flipped = rightToLeft && !sideways;
+  const arrow = (forward: boolean) => {
+    const off = disabled || (forward ? page + step > count : page <= 1);
+    const pointsLeft = forward === flipped;
+    return <Pressable accessibilityRole="button" accessibilityLabel={forward ? 'Next page' : 'Previous page'} disabled={off} onPress={() => onPageChange(Math.max(1, Math.min(count, page + (forward ? step : -step))))} style={[styles.icon, tight && styles.tightIcon, off && styles.dim]}>
+      <UniversalIcon ios={sideways ? forward ? 'chevron.down' : 'chevron.up' : pointsLeft ? 'chevron.left' : 'chevron.right'} android={sideways ? forward ? 'keyboard-arrow-down' : 'keyboard-arrow-up' : pointsLeft ? 'chevron-left' : 'chevron-right'} size={22} color={colors.systemBlue} />
+    </Pressable>;
+  };
   return <>
     {!toolLayout && !orientation && <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />}
-    <ToolActionRow vertical={sideways}
+    <ToolActionRow vertical={sideways} compact={tight}
       left={<>{!crowded && <FitSlotButton />}{history && <HeaderHistorySlot />}{leading}</>}
       center={<>
-        <Pressable accessibilityRole="button" accessibilityLabel="Previous page" disabled={disabled || page <= 1} onPress={() => onPageChange(page - 1)} style={[styles.icon, (disabled || page <= 1) && styles.dim]}><UniversalIcon ios={sideways ? 'chevron.up' : 'chevron.left'} android={sideways ? 'keyboard-arrow-up' : 'chevron-left'} size={24} color={colors.systemBlue} /></Pressable>
-        <TextInput accessibilityLabel={`Page number, 1 to ${count}`} keyboardType="number-pad" returnKeyType="done" selectTextOnFocus value={input} onChangeText={setInput} editable={!disabled} onSubmitEditing={Keyboard.dismiss} onEndEditing={submit} maxLength={6} style={[styles.pageInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
-        <ThemedText numberOfLines={1} style={styles.pageCount}>of {count}</ThemedText>
-        <Pressable accessibilityRole="button" accessibilityLabel="Next page" disabled={disabled || page >= count} onPress={() => onPageChange(page + 1)} style={[styles.icon, (disabled || page >= count) && styles.dim]}><UniversalIcon ios={sideways ? 'chevron.down' : 'chevron.right'} android={sideways ? 'keyboard-arrow-down' : 'chevron-right'} size={24} color={colors.systemBlue} /></Pressable>
+        {arrow(flipped)}
+        <TextInput accessibilityLabel={`Page number, 1 to ${count}`} keyboardType="number-pad" returnKeyType="done" selectTextOnFocus value={input} onChangeText={setInput} editable={!disabled} onSubmitEditing={Keyboard.dismiss} onEndEditing={submit} maxLength={6} style={[styles.pageInput, tight && styles.tightInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
+        <ThemedText numberOfLines={1} style={[styles.pageCount, tight && styles.tightCount]}>{tight ? `/ ${count}` : `of ${count}`}</ThemedText>
+        {arrow(!flipped)}
       </>}
-      right={<>{fitRight && <FitSlotButton />}{children}{rotate && <ToolRowButton label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
+      right={<>{fitRight && <FitSlotButton />}{children}{rotate && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
       below={fitBelow ? <><FitSlotButton /><View style={styles.grow} />{below}</> : below} />
   </>;
 }
@@ -137,6 +152,9 @@ export function PdfPreviewFooter({ children }: { children: ReactNode }) {
 const styles = StyleSheet.create({
   pageInput: { width: 44, minHeight: 40, paddingHorizontal: 4, paddingVertical: 0, textAlign: 'center', borderRadius: 12, fontSize: 16 },
   pageCount: { paddingHorizontal: 2 },
+  tightIcon: { minWidth: 30 },
+  tightInput: { width: 40, paddingHorizontal: 2 },
+  tightCount: { fontSize: 14, paddingLeft: 3, paddingRight: 0 },
   icon: { minWidth: 40, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   grow: { flex: 1, minWidth: 0 }, dim: { opacity: 0.35 }, sideways: { flex: 1, flexDirection: 'row' },
   viewport: { flex: 1, minHeight: 120, overflow: 'hidden', backgroundColor: PDF_PREVIEW_BACKGROUND },

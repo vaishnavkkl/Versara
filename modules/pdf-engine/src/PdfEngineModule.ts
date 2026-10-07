@@ -17,6 +17,7 @@ declare class PdfEngine extends NativeModule<{ onConversionProgress: (event: Con
   /** `editPdfText` accepts `action: 'find_text'` for find and replace in Edit PDF. */
   readonly nativeFindReplaceVersion?: number;
   readonly nativeReaderFocusVersion?: number;
+  readonly nativeReaderLayoutVersion?: number;
   readonly nativeSearchableOcrVersion?: number;
   readonly nativeMarkupEditingVersion?: number;
   /** Markup saved as real PDF annotations; preview lists and edits existing annotations. */

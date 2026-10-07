@@ -40,7 +40,8 @@ import type { PdfToolSession } from './pdf-tool-session';
 import { PdfPagePreview, PdfPreviewBody, PdfPreviewStage, PdfPreviewToolbar, PdfPreviewFooter, PDF_PREVIEW_BACKGROUND, type PdfPreviewImage } from './pdf-preview';
 import { PdfDocumentPreview } from './pdf-document-preview';
 import { InsertPdfPreview } from './insert-pdf-preview';
-import { RecognizedTextSheet } from './recognized-text-sheet';
+import { PageTextCard, RecognizedTextSheet } from './recognized-text-sheet';
+import { usePageText } from './use-page-text';
 import { useControlHelp } from '@/components/control-help';
 import { usePdfToolLayout } from './pdf-tool-layout';
 import { annotationCommands, PageAnnotationsPanel, type AnnotationEdit, type AnnotationEdits, type PdfAnnotation } from './page-annotations';
@@ -117,7 +118,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [inputPassword, setInputPassword] = useState('');
   const [page, setPage] = useState((session.initialPage ?? 0) + 1);
   const [preview, setPreview] = useState<{ uri: string; page: number; width: number; height: number; key: string; annotations: PdfAnnotation[] }>();
-  const annotationsAvailable = markup && !!PdfEngine?.nativeAnnotationsVersion;
+  const annotationsAvailable = markup && tool !== 'sign' && !!PdfEngine?.nativeAnnotationsVersion;
   const [keepEditable, setKeepEditable] = useState(true);
   const [annotationEdits, setAnnotationEdits] = useState<AnnotationEdits>({});
   const [focused, setFocused] = useState<{ page: number; index: number }>();
@@ -244,6 +245,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       if (mounted.current) { setBusy(false); setCancellable(false); setPhase(''); setPageRendering(false); } else disposeImports(directory);
     }
   }, [source.uri, directory, markup]);
+  const textTool = tool === 'ocr' || tool === 'extract_text' ? tool : null;
+  const pageText = usePageText(source.uri, page, textTool ?? 'extract_text', !!textTool && optionsOpen && !!info && !results.length, () => secret.current);
   const inspect = useCallback(async () => {
     setInspectFailed(false);
     const result = await process({ operation: 'info' }, 'Reading document details…');
@@ -614,13 +617,14 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     ListFooterComponent={<View style={styles.field}>
       {fullText ? <ToolButton title="View and copy text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={busy} onPress={() => setTextSheet(true)} /> : !!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}
       <ToolButton title="Run again" secondary disabled={busy} onPress={() => { setResults([]); setTextPreview(''); setNotice(''); setFullText(null); setTextSheet(false); }} />
-      {fullText && <RecognizedTextSheet text={fullText.text} truncated={fullText.truncated} isPresented={textSheet} onClose={() => setTextSheet(false)} />}
+      {fullText && <RecognizedTextSheet text={fullText.text} truncated={fullText.truncated} page={page} isPresented={textSheet} onClose={() => setTextSheet(false)} />}
     </View>} />;
   if (!info && !inspectFailed) return <View style={styles.loadingScreen}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite">Opening PDF…</ThemedText><ThemedText numberOfLines={2} style={{ color: colors.secondaryLabel, textAlign: 'center' }}>{source.name}</ThemedText></View>;
   if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true, false)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;
   if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
   if (tool === 'info') return <ScrollView contentContainerStyle={styles.content}>{status}<ToolButton title="Preview PDF" secondary onPress={() => setShowSourcePreview(true)} /><ThemedText style={styles.heading}>{source.name}</ThemedText>{Object.entries({ Pages: info.pageCount, Size: formatSize(info.size), 'First page': `${Math.round(info.width)} × ${Math.round(info.height)} pt`, 'PDF version': info.version, Encrypted: info.encrypted ? 'Yes' : 'No', Title: info.title || '—', Author: info.author || '—', Subject: info.subject || '—', Creator: info.creator || '—', Producer: info.producer || '—' }).map(([key, value]) => <View key={key} style={styles.field}><ThemedText style={{ color: colors.secondaryLabel }}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView>;
   const renderSettings = (content: ReactNode) => <OptionSheet title={settingsTitles[tool] ?? 'PDF options'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={optionsOpen} keyboardInput dim={!['numbers', 'watermark'].includes(tool)} onClose={() => setOptionsOpen(false)}>
+      {textTool && !results.length && <PageTextCard page={page} ocr={textTool === 'ocr'} {...pageText} />}
       <OptionCard>{content}</OptionCard>
     </OptionSheet>;
   const settingsAction = <EditorOption label={tool === 'protect' ? 'Password' : 'Options'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} compact accessibilityLabel={tool === 'protect' ? 'Set the password' : 'Open advanced PDF options'} selected={optionsOpen} disabled={busy} onPress={() => { Keyboard.dismiss(); setOptionsOpen(value => !value); }} />;
@@ -632,8 +636,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       ]} />}
       {tool === 'shapes' && !placing && <ShapePicker iconOnly value={shape} onChange={setShape} disabled={busy} />}
       {tool !== 'add_image' && <ToolRowButton label="Style and colour" icon={{ ios: 'paintpalette', android: 'palette' }} selected={showStyle} expanded={showStyle} disabled={busy || selectedMark?.kind === 'image'} onPress={() => { setShowStyle(value => !value); setShowAnnotations(false); setFocusAnnotation(undefined); }} />}
-      {markupEditing && tool !== 'add_image' && <ToolRowButton label={erasing ? 'Stop erasing' : 'Stroke eraser'} icon={{ ios: 'eraser', android: 'auto-fix-normal' }} selected={erasing} disabled={busy} onPress={() => { setErasing(value => !value); setSelecting(false); }} />}
-      <ToolRowButton label={annotationsAvailable ? (showAnnotations ? 'Hide page annotations' : 'Edit page annotations') : 'Edit page annotations, update the app to use this'} icon={{ ios: 'text.bubble', android: 'comment' }} selected={showAnnotations} disabled={busy || !annotationsAvailable} onPress={() => { setShowAnnotations(value => !value); setShowStyle(false); setFocusAnnotation(undefined); }} />
+      {markupEditing && tool !== 'add_image' && tool !== 'sign' && <ToolRowButton label={erasing ? 'Stop erasing' : 'Stroke eraser'} icon={{ ios: 'eraser', android: 'auto-fix-normal' }} selected={erasing} disabled={busy} onPress={() => { setErasing(value => !value); setSelecting(false); }} />}
+      {tool !== 'sign' && <ToolRowButton label={annotationsAvailable ? (showAnnotations ? 'Hide page annotations' : 'Edit page annotations') : 'Edit page annotations, update the app to use this'} icon={{ ios: 'text.bubble', android: 'comment' }} selected={showAnnotations} disabled={busy || !annotationsAvailable} onPress={() => { setShowAnnotations(value => !value); setShowStyle(false); setFocusAnnotation(undefined); }} />}
     </> : settingsAction}
   </View>;
   const changePage = (target: number) => { if (numberPreview) void previewNumbers(target); else setPage(target); };
@@ -653,7 +657,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     {showAnnotations && annotationsAvailable && <PageAnnotationsPanel annotations={preview?.page === page ? preview.annotations : []} page={page} edits={annotationEdits} focus={focusAnnotation} disabled={busy} onFocus={setFocusAnnotation} onChange={changeAnnotation} />}
     <OptionSheet title={tool === 'shapes' ? 'Shape style' : 'Style and colour'} icon={{ ios: 'paintbrush', android: 'brush' }} isPresented={showStyle && !showAnnotations && selectedMark?.kind !== 'image'} dim={false} onClose={() => setShowStyle(false)}>
       {(tool === 'draw' || tool === 'sign' || tool === 'highlight' && brush) && <OptionCard title="Brush" icon={{ ios: 'paintbrush.pointed', android: 'brush' }}>
-        <BrushControls showSelectors={false} patternsAvailable={!!PdfEngine?.nativeStrokePatternsVersion} brush={brushType} pattern={pattern} disabled={busy} editingAvailable={markupEditing} opacity={inkOpacity} onOpacity={value => { setInkOpacity(value); styleSelection({ opacity: value }); }} erasing={erasing} onEraser={() => { setErasing(value => !value); setSelecting(false); }} onBrush={(value, width, opacity) => { setErasing(false); setBrushType(value); setInkWidth(width); setInkOpacity(opacity); styleSelection({ brush: value, width, opacity }); }} onPattern={value => { setPattern(value); styleSelection({ pattern: value }); }} />
+        <BrushControls showSelectors={false} patternsAvailable={!!PdfEngine?.nativeStrokePatternsVersion} brush={brushType} pattern={pattern} disabled={busy} editingAvailable={markupEditing} opacity={inkOpacity} onOpacity={value => { setInkOpacity(value); styleSelection({ opacity: value }); }} erasing={erasing} onEraser={tool === 'sign' ? undefined : () => { setErasing(value => !value); setSelecting(false); }} onBrush={(value, width, opacity) => { setErasing(false); setBrushType(value); setInkWidth(width); setInkOpacity(opacity); styleSelection({ brush: value, width, opacity }); }} onPattern={value => { setPattern(value); styleSelection({ pattern: value }); }} />
         {strokeWidth}
       </OptionCard>}
       {tool === 'shapes' && shape !== 'line' && <OptionCard title="Fill" icon={{ ios: 'drop.fill', android: 'format-color-fill' }}>
@@ -667,11 +671,11 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         <View style={styles.choices}>{['solid', 'dashed', 'dotted'].map(value => <EditorOption key={value} label={`${value[0].toUpperCase()}${value.slice(1)}`} selected={pattern === value} disabled={busy || (value !== 'solid' && !PdfEngine?.nativeStrokePatternsVersion)} onPress={() => { setPattern(value); styleSelection({ pattern: value }); }} />)}</View>
         {!PdfEngine?.nativeStrokePatternsVersion && <ThemedText style={{ fontSize: 12 }}>Update the app build to use dashed and dotted lines.</ThemedText>}
       </OptionCard>}
-      <OptionCard title="When saving" icon={{ ios: 'square.and.arrow.down', android: 'save' }}>
+      {tool !== 'sign' && <OptionCard title="When saving" icon={{ ios: 'square.and.arrow.down', android: 'save' }}>
         <EditorOption label="Keep new marks editable in other PDF apps" selected={annotationsAvailable && keepEditable} disabled={busy || !annotationsAvailable} onPress={() => setKeepEditable(value => !value)} />
         {!annotationsAvailable && <ThemedText style={{ fontSize: 12 }}>Update the app build to keep marks editable.</ThemedText>}
         {marks.some(mark => mark.kind === 'image') && <ThemedText style={{ fontSize: 12 }}>Image signatures are always added to the page so every PDF viewer shows them.</ThemedText>}
-      </OptionCard>
+      </OptionCard>}
     </OptionSheet>
     <PdfPreviewFooter>{status}
     {tool === 'add_image' && <View style={styles.choices}><EditorOption label="Choose image" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={busy || !imageSignaturesAvailable || !recovery.ready || preview?.page !== page} onPress={() => void addSignatureImage()} />{!imageSignaturesAvailable && <ThemedText>Update the native app build to add images.</ThemedText>}</View>}

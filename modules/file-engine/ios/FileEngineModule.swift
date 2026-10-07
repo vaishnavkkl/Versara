@@ -25,7 +25,7 @@ public class FileEngineModule: Module {
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 5 }
+    Constant("nativeImageListVersion") { 6 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }
@@ -62,7 +62,7 @@ public class FileEngineModule: Module {
     }
     Constant("nativeRecentPdfsVersion") { 1 }
     View(RecentImagesView.self) {
-      Events("onOpen", "onRemove", "onLongPress", "onRefresh")
+      Events("onOpen", "onRemove", "onLongPress", "onRefresh", "onBookmark")
       Prop("items") { (view: RecentImagesView, value: String) in view.setItems(value) }
       Prop("refreshing") { (view: RecentImagesView, value: Bool) in view.setRefreshing(value) }
       Prop("grid") { (view: RecentImagesView, value: Bool) in view.setGrid(value) }
@@ -92,7 +92,7 @@ public class FileEngineModule: Module {
       } }
     }
     View(ZoomableImageView.self) {
-      Events("onLoad", "onError", "onDismiss")
+      Events("onLoad", "onError", "onDismiss", "onTap")
       Prop("source") { (view: ZoomableImageView, value: String) in view.setSource(value) }
       OnViewDestroys { (view: ZoomableImageView) in view.dispose() }
     }

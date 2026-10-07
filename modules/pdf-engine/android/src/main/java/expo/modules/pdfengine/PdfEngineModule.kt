@@ -21,6 +21,7 @@ class PdfEngineModule : Module() {
     Constant("nativeReaderSearchVersion") { 1 }
     Constant("nativeFindReplaceVersion") { 1 }
     Constant("nativeReaderFocusVersion") { 1 }
+    Constant("nativeReaderLayoutVersion") { 1 }
     Constant("nativeSearchableOcrVersion") { 1 }
     Constant("nativeMarkupEditingVersion") { 1 }
     Constant("nativeAnnotationsVersion") { 1 }
@@ -70,7 +71,7 @@ class PdfEngineModule : Module() {
     OnDestroy { converter.destroy(); organizer.destroy(); textEditor.destroy(); thumbnails.destroy(); advanced.destroy() }
     // Keep the reader as the default for older JavaScript bundles.
     View(PdfEngineView::class) {
-      Events("onLoad", "onPageChange", "onZoomChange", "onError")
+      Events("onLoad", "onPageChange", "onZoomChange", "onError", "onTap")
       Prop("uri") { view: PdfEngineView, uri: String -> view.source = uri }
       Prop("password") { view: PdfEngineView, value: String -> view.password = value }
       Prop("page") { view: PdfEngineView, page: Int -> view.requestedPage = page }
@@ -81,6 +82,8 @@ class PdfEngineModule : Module() {
       Prop("dark") { view: PdfEngineView, dark: Boolean -> view.dark = dark }
       Prop("focusCurrent") { view: PdfEngineView, value: Boolean -> view.focusCurrent = value }
       Prop("searchHighlights") { view: PdfEngineView, value: String -> view.setSearchHighlights(value) }
+      Prop("twoPage") { view: PdfEngineView, value: Boolean -> view.spread = value }
+      Prop("rightToLeft") { view: PdfEngineView, value: Boolean -> view.rtl = value }
       OnViewDidUpdateProps { view: PdfEngineView -> view.applyProps() }
       OnViewDestroys { view: PdfEngineView -> view.dispose() }
     }
