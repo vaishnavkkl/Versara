@@ -37,8 +37,9 @@ import { readingLayoutAvailable, ReadingOptionsSheet } from './reading-options';
 import { useReadingPreferences } from './reading-preferences';
 import { togglePageBookmark, usePageBookmarks } from '../files/bookmarks';
 import { usePublishHeaderActions } from '@/components/header-actions';
-import { FocusChrome, focusLayout } from '@/components/focus-chrome';
+import { FocusChrome, useFocusLayout } from '@/components/focus-chrome';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { HeaderGlyph } from '@/components/app-glyph';
 
 type Document = { uri: string; name: string };
 
@@ -335,6 +336,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const toolboxSections = useMemo(() => railSections(visibleTools), [visibleTools]);
   const surrounding = ring.active;
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
+  const pageLayout = useFocusLayout(surrounding);
   // Keep every visible page readable, including several short image pages at the end.
   const surroundTools = useMemo(() => tools.filter(tool => !tool.soon && !['fit', 'orientation'].includes(tool.id)), [tools]);
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
@@ -372,7 +374,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
     {landscape && <ToolRowButton compact label={thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails'} icon={{ ios: 'square.grid.2x2', android: 'view-carousel' }} selected={thumbnails} onPress={() => performOption('thumbnails')} />}
   </PdfPreviewToolbar></FocusChrome>;
   return (
-    <Animated.View layout={focusLayout} style={styles.screen}>
+    <Animated.View layout={pageLayout} style={styles.screen}>
       {!toolLayout && <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />}
       {!isPdfEngineAvailable ? (
         <View style={styles.empty}>
@@ -385,18 +387,18 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
           {actionError && <ThemedText accessibilityRole="alert" style={[styles.message, { color: colors.label, backgroundColor: colors.accentSurface }]}>{actionError}</ThemedText>}
           {searching && <View style={[styles.searchPanel, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]}>
             <View style={styles.searchRow}>
-              <UniversalIcon ios="magnifyingglass" android="search" size={20} color={colors.systemBlue} />
+              <HeaderGlyph id="search" ios="magnifyingglass" android="search" size={38} />
               <TextInput accessibilityLabel="Search text in PDF" autoFocus value={searchQuery} onChangeText={setSearchQuery} maxLength={128} returnKeyType="search" autoCapitalize="none" autoCorrect={false} onSubmitEditing={Keyboard.dismiss} placeholder="Find in this PDF" placeholderTextColor={colors.secondaryLabel} style={[styles.searchInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
               {!!searchQuery.trim() && <ThemedText accessibilityLiveRegion="polite" accessibilityLabel={searchMessage} numberOfLines={1} style={[styles.searchCount, { color: search.error ? colors.destructive : colors.secondaryLabel }]}>{search.busy ? '…' : search.error ? '!' : search.matches.length ? `${searchIndex + 1}/${search.matches.length}${search.truncated ? '+' : ''}` : '0'}</ThemedText>}
-              <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(-1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><UniversalIcon ios="chevron.up" android="keyboard-arrow-up" size={24} color={colors.systemBlue} /></Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><UniversalIcon ios="chevron.down" android="keyboard-arrow-down" size={24} color={colors.systemBlue} /></Pressable>
-              {replaceAvailable && <Pressable accessibilityRole="button" accessibilityLabel="Find and replace this text" disabled={busy} onPress={() => { Keyboard.dismiss(); void openDocumentTool('replace_text', searchQuery.trim()); }} style={[styles.iconButton, busy && styles.disabled]}><UniversalIcon ios="text.magnifyingglass" android="find-replace" size={22} color={colors.systemBlue} /></Pressable>}
-              <Pressable accessibilityRole="button" accessibilityLabel="Close PDF search" onPress={() => { setSearchOpen(false); setSearchQuery(''); Keyboard.dismiss(); }} style={styles.iconButton}><UniversalIcon ios="xmark" android="close" size={22} color={colors.systemBlue} /></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Previous search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(-1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><HeaderGlyph id="search" ios="chevron.up" android="keyboard-arrow-up" size={38} /></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Next search result" disabled={!search.matches.length || search.busy} onPress={() => goToSearchResult(1)} style={[styles.iconButton, (!search.matches.length || search.busy) && styles.disabled]}><HeaderGlyph id="search" ios="chevron.down" android="keyboard-arrow-down" size={38} /></Pressable>
+              {replaceAvailable && <Pressable accessibilityRole="button" accessibilityLabel="Find and replace this text" disabled={busy} onPress={() => { Keyboard.dismiss(); void openDocumentTool('replace_text', searchQuery.trim()); }} style={[styles.iconButton, busy && styles.disabled]}><HeaderGlyph id="replace_text" ios="text.magnifyingglass" android="find-replace" size={38} /></Pressable>}
+              <Pressable accessibilityRole="button" accessibilityLabel="Close PDF search" onPress={() => { setSearchOpen(false); setSearchQuery(''); Keyboard.dismiss(); }} style={styles.iconButton}><HeaderGlyph id="view" ios="xmark" android="close" size={38} /></Pressable>
             </View>
             {!!searchQuery.trim() && !search.busy && (!!search.error || !search.matches.length) && <ThemedText accessibilityRole={search.error ? 'alert' : undefined} style={[styles.searchStatus, { color: search.error ? colors.destructive : colors.secondaryLabel }]}>{searchMessage}</ThemedText>}
           </View>}
           {!landscape && !searching && pageBar}
-          <Animated.View layout={focusLayout} style={styles.body2}>
+          <Animated.View layout={pageLayout} style={styles.body2}>
           <View style={[styles.body2, landscape && styles.row]}>
           {landscape && !searching && pageBar}
           {sideStrip(rightToLeft ? 1 : 0)}
@@ -471,7 +473,7 @@ const styles = StyleSheet.create({
   searchStatus: { fontSize: 12, paddingHorizontal: 28, paddingBottom: 4 },
   restore: { position: 'absolute', bottom: 16, right: 16 },
   restoreButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', opacity: 0.9 },
-  iconButton: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+  iconButton: { minWidth: 44, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   message: { ...t.caption, marginHorizontal: s.lg, padding: s.md, borderRadius: radius.sm },
   canvas: { flex: 1, minHeight: 120 },
   nativeView: { flex: 1 },

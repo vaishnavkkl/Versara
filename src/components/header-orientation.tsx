@@ -1,8 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { HelpPressable as Pressable } from './help-pressable';
-import { HEADER_ICON_SIZE, headerButtonStyle } from './header-actions';
-import { UniversalIcon } from './universal-icon';
-import { usePalette } from '@/theme/colors';
+import { headerButtonStyle } from './header-actions';
+import { HeaderGlyph } from './app-glyph';
 
 export type HeaderOrientationAction = { landscape: boolean; disabled?: boolean; onToggle: () => void };
 
@@ -22,13 +21,12 @@ export function useHeaderOrientation() {
 
 /** Rendered in a close-style header; shows nothing until a reader publishes its switch. */
 export function HeaderOrientationButton() {
-  const colors = usePalette();
   const orientation = useHeaderOrientation();
   if (!orientation) return null;
   return <Pressable accessibilityRole="button" accessibilityLabel={orientation.landscape ? 'Switch to portrait' : 'Switch to landscape'}
     accessibilityState={{ selected: orientation.landscape, disabled: orientation.disabled }} disabled={orientation.disabled} onPress={orientation.onToggle} hitSlop={2}
     style={({ pressed }) => [headerButtonStyle, { opacity: orientation.disabled ? 0.4 : pressed ? 0.6 : 1 }]}>
-    <UniversalIcon ios={orientation.landscape ? 'rectangle.portrait' : 'rectangle'} android="mdi:phone-rotate-landscape" size={HEADER_ICON_SIZE} color={colors.systemBlue} />
+    <HeaderGlyph id="orientation" ios={orientation.landscape ? 'rectangle.portrait' : 'rectangle'} android="mdi:phone-rotate-landscape" />
   </Pressable>;
 }
 

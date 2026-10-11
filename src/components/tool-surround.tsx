@@ -8,6 +8,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import type { RailTool } from '@/components/tool-rail';
 import { usePalette } from '@/theme/colors';
 import { toolColors } from '@/theme/tool-colors';
+import { AppGlyph } from './app-glyph';
 
 // Tiles carry a small two-line name under the icon.
 const TILE_WIDTH = 62;
@@ -122,7 +123,7 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
     return <Pressable key={tool.id} helpMode={naming} helpText={tool.title} helpOnLongPress accessibilityRole="button" accessibilityLabel={tool.accessibilityLabel ?? tool.title} accessibilityHint={naming ? 'Shows the tool name' : 'Long press to see the tool name'} accessibilityState={{ disabled: off }} disabled={off}
         onPress={() => onAction(tool.id)} hitSlop={3}
         style={({ pressed }) => [styles.button, { backgroundColor: tint.surface, borderColor: `${tint.ink}33`, opacity: off ? 0.4 : pressed ? 0.6 : 1, transform: [{ scale: pressed ? 0.94 : 1 }] }]}>
-        <View style={[styles.chip, tint.fill]}><UniversalIcon ios={tool.ios} android={tool.android} size={21} color={tint.glyph} /></View>
+        <AppGlyph id={tool.id} ios={tool.ios} android={tool.android} size={34} />
         <ThemedText numberOfLines={2} maxFontSizeMultiplier={1.2} style={[styles.name, { color: colors.label }]}>{tool.title}</ThemedText>
       </Pressable>;
   };

@@ -21,6 +21,7 @@ export function HelpPressable({ helpText, helpMode, helpOnLongPress = false, chi
   const closeBubble = useCallback(() => setBubble(null), []);
   if (bubble && bubble.naming !== naming) setBubble(null);
   const show = () => {
+    help?.handled();
     const label = helpText ?? props.accessibilityLabel ?? (typeof children === 'function' ? '' : textOf(children));
     button.current?.measureInWindow((x, y, width, height) => {
       if (mounted.current && width > 0 && height > 0) setBubble({ anchor: { x, y, width, height }, message: controlHelpText(label || 'Control', !!disabled), naming });

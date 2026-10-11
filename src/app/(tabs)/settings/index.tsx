@@ -11,13 +11,14 @@ import { toast } from '@/components/toast';
 import { useAppearance, usePalette } from '@/theme/colors';
 import { Host, Switch } from '@expo/ui';
 import { useReducedMotion } from 'react-native-reanimated';
-import { toolColors } from '@/theme/tool-colors';import { brandFont, spacing as s, typography as t } from '@/theme/dashboard';
+import { brandFont, spacing as s, typography as t } from '@/theme/dashboard';
 import { getFileAccessStatus, isFileEngineAvailable, requestFileAccess, type FileAccessStatus } from '@/features/files/file-access';
 import { clearRecentFiles } from '@/features/files/recent-files';
 import { formatSize } from '@/features/files/file-storage';
 import { FileEngine } from '../../../../modules/file-engine';
 import { clearUnusedThumbnails, unusedThumbnailBytes } from '@/features/files/thumbnail-cache';
 import { clearSearchHistory, hydrateSearchHistory, setSearchHistoryEnabled, useSearchHistory } from '@/features/search/search-history';
+import { AppGlyph } from '@/components/app-glyph';
 
 type Icon = React.ComponentProps<typeof UniversalIcon>;
 const VERSION = Constants.expoConfig?.version ?? '1.0.0';
@@ -140,7 +141,7 @@ export default function SettingsScreen() {
       </Section>
 
       <View style={[styles.developer, { backgroundColor: colors.catalogSurface, borderColor: colors.catalogBorder }]}>
-        <View style={[styles.devBadge, { backgroundColor: colors.imageSurface }]}><UniversalIcon ios="chevron.left.forwardslash.chevron.right" android="code" size={22} color={colors.imageInk} /></View>
+        <AppGlyph id="code" ios="chevron.left.forwardslash.chevron.right" android="code" size={44} />
         <ThemedText style={[styles.devTitle, brandFont.display, { color: colors.label }]}>Built for your files</ThemedText>
         <ThemedText style={[styles.devBody, { color: colors.secondaryLabel }]}>PDF and image tools that work on your device. No account, no uploads, and your work stays yours.</ThemedText>
         <ThemedText style={[styles.devFoot, { color: colors.secondaryLabel }]}>Versara {VERSION} · Crafted with care</ThemedText>
@@ -162,9 +163,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 type RowProps = { icon: { ios: Icon['ios']; android: Icon['android'] }; title: string; caption?: string; value?: string; trailing?: ReactNode; onPress?: () => void; disabled?: boolean; external?: boolean };
 function Row({ icon, title, caption, value, trailing, onPress, disabled, external }: RowProps) {
   const colors = usePalette();
-  const tint = toolColors(icon.android, colors);
   const content = <>
-    <View style={[styles.icon, tint.fill]}><UniversalIcon ios={icon.ios} android={icon.android} size={19} color={tint.glyph} /></View>
+    <AppGlyph id={icon.android} ios={icon.ios} android={icon.android} size={38} />
     <View style={styles.grow}>
       <ThemedText style={[styles.label, { color: colors.label }]}>{title}</ThemedText>
       {!!caption && <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>{caption}</ThemedText>}
@@ -184,12 +184,10 @@ const styles = StyleSheet.create({
   heading: { ...t.eyebrow, textTransform: 'uppercase', marginLeft: s.xs },
   group: { borderRadius: 20, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', gap: s.md, minHeight: 60, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, marginTop: -StyleSheet.hairlineWidth },
-  icon: { width: 34, height: 34, borderRadius: 10, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
   grow: { flex: 1, gap: 2 },  label: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
   caption: { ...t.caption },
   value: { fontSize: 14, fontWeight: '600' },
   developer: { borderRadius: 24, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, padding: s.xl, gap: s.sm, overflow: 'hidden' },
-  devBadge: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: s.xs },
   devTitle: { fontSize: 19, lineHeight: 25 },
   devBody: { fontSize: 14, lineHeight: 21 },
   devFoot: { fontSize: 12, lineHeight: 16, marginTop: s.xs, opacity: 0.8 },

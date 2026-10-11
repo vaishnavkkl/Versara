@@ -4,8 +4,12 @@ import { documentRoot, rememberFile } from '../files/recent-files';
 
 /** `origin` is the Versara file the tool was opened from, so edits can be saved back over it. */
 export type PdfReturnRoute = '/file-preview' | '/pdf-viewer';
-/** `initialQuery` pre-fills Find and replace when it is opened from the reader's search. */
-export type InitialSelection = { directory: Directory; files: LocalFile[]; origin?: { uri: string; name: string }; initialPage?: number; returnRoute?: PdfReturnRoute; initialQuery?: string };
+/**
+ * `initialQuery` pre-fills Find and replace when it is opened from the reader's search.
+ * `carried` marks a working copy that holds unsaved changes from earlier tools; drafts stay off for it
+ * because a recovered draft would be replayed on the original, without those changes.
+ */
+export type InitialSelection = { directory: Directory; files: LocalFile[]; origin?: { uri: string; name: string }; initialPage?: number; returnRoute?: PdfReturnRoute; initialQuery?: string; carried?: boolean };
 export const advancedPdfTools = new Set<string>(['info', 'duplicate', 'insert', 'compress', 'to_image', 'highlight', 'draw', 'shapes', 'add_image', 'sign', 'watermark', 'numbers', 'protect', 'metadata', 'flatten', 'ocr', 'extract_text', 'repair']);
 export type PdfTool = 'viewer' | 'edit_text' | 'remove_text' | 'text' | 'replace_text' | 'merge' | 'split' | 'extract' | 'delete' | 'reorder' | 'rotate' | 'from_image' | 'info' | 'duplicate' | 'insert' | 'compress' | 'to_image' | 'highlight' | 'draw' | 'shapes' | 'add_image' | 'sign' | 'watermark' | 'numbers' | 'protect' | 'metadata' | 'flatten' | 'ocr' | 'extract_text' | 'repair';
 export type PdfToolSession = InitialSelection & { tool: PdfTool; title: string };
@@ -20,8 +24,9 @@ export async function retainPdfEditingSource(file: LocalFile) {
   const copy = new File(library, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
   try {
     await new File(file.uri).copy(copy);
-    await rememberFile({ ...file, uri: copy.uri, size: copy.size }, 'pdf');
-    return { uri: copy.uri, name: file.name };
+    // Recents reuses an earlier copy of the same file and deletes this one, so keep the copy it returns.
+    const kept = await rememberFile({ ...file, uri: copy.uri, size: copy.size }, 'pdf');
+    return { uri: kept.uri, name: file.name };
   } catch (cause) { if (copy.exists) copy.delete(); throw cause; }
 }
 
@@ -52,6 +57,16 @@ export async function createPdfToolForDocument(tool: PdfTool, title: string, doc
   } catch (error) { disposeImports(directory); throw error; }
 }
 export function getPdfToolSession(id: string) { return sessions.get(id); }
+
+/**
+ * Opens `tool` on a working copy that the caller already wrote into `directory`.
+ * The session takes ownership of `directory`; it is removed on failure.
+ */
+export function createPdfToolForWorkingCopy(tool: PdfTool, title: string, directory: Directory, file: LocalFile, options: Pick<InitialSelection, 'origin' | 'initialPage' | 'returnRoute' | 'carried'>) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  sessions.set(id, { directory, tool, title, files: [file], ...options });
+  return id;
+}
 export async function createImagePdfToolForFile(source: LocalFile) {
   const directory = createImportDirectory();
   try {

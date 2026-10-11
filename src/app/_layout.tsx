@@ -10,6 +10,7 @@ import { AnimatedSplash } from '@/components/animated-splash';
 import { DialogHost } from '@/components/app-dialog';
 import { LoadingHost } from '@/components/app-loader';
 import { recoverPendingAppSaves } from '@/features/files/save-recovery';
+import { cleanStaleStorage } from '@/features/files/storage-cleanup';
 import { SaveRecoveryNotice } from '@/features/files/save-recovery-notice';
 
 // Files opened from other apps still have Home beneath them, so Back stays in Versara.
@@ -42,7 +43,7 @@ export default function RootLayout() {
     let active = true;
     void recoverPendingAppSaves().catch(cause => {
       if (active) setRecoveryError(cause instanceof Error ? cause.message : 'An interrupted save needs recovery. Its original copy has been kept.');
-    });
+    }).finally(cleanStaleStorage);
     return () => { active = false; };
   }, [hydrated, splashDone]);
   async function retryRecovery() {

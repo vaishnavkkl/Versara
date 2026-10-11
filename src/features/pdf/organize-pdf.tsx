@@ -14,6 +14,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
+import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { saveEditedOutput, savePdfResult } from '../files/save-file';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfScreen } from './open-pdf-screen';
@@ -124,6 +125,15 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
     save: { disabled: busy || (results.length ? results.length > 1 || !!results[0].location : !canRun), label: results.length && results.every(result => result.location) ? 'PDFs saved' : 'Save',
       onSave: () => results.length === 1 ? saveResult(results[0]) : results.length ? undefined : process() } });
+  usePublishPdfHandoff(!!(results.length || sources.length), {
+    changed: results.length === 1 && !results[0].location,
+    saved: results.length === 1 && results[0].location ? { uri: results[0].uri, name: results[0].name } : undefined,
+    blocked: busy ? 'Wait for the current task to finish, then choose another tool.'
+      : results.length > 1 ? 'This created several PDFs. Open one of them to continue with another tool.'
+      : !results.length && sources.length > 1 ? 'Merge these PDFs first, then choose another tool.' : undefined,
+    switched: !results.length && sources.length === 1 && sources[0].uri !== initialSelection?.files[0]?.uri ? { file: sources[0] } : undefined,
+    write: outputUri => shareTarget ? copyPdf(shareTarget.uri, outputUri) : Promise.reject(new Error('Choose a PDF first.')),
+  });
 
   async function process() {
     if (!PdfEngine?.organizePdfs || locked.current || !canRun) return;

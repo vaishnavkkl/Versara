@@ -39,7 +39,7 @@ const ToolCard = memo(function ToolCard({ id, title, subtitle, ios, android, una
   grid: boolean; tone: ModuleTone; onAction: (id: string) => void;
 }) {
   const onPress = useCallback(() => onAction(id), [id, onAction]);
-  return <ModuleCard title={title} description={subtitle} ios={ios} android={android}
+  return <ModuleCard colorId={id} title={title} description={subtitle} ios={ios} android={android}
     variant={grid ? 'tool' : 'list'} tone={tone} disabled={unavailable} detail={unavailable ? 'Coming later' : undefined} onPress={onPress} />;
 });
 

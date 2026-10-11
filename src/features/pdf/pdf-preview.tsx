@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Stack } from 'expo-router';
 import { Keyboard, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
@@ -17,6 +17,31 @@ import { PdfPageStrip } from './pdf-page-strip';
 import { usePdfScreenActive } from './use-pdf-screen-active';
 
 export const PDF_PREVIEW_BACKGROUND = '#e8eaf0';
+
+type PageSwipe = (direction: number) => void;
+let swipeSlot: PageSwipe | null = null;
+const swipeListeners = new Set<() => void>();
+const subscribeSwipe = (listener: () => void) => { swipeListeners.add(listener); return () => { swipeListeners.delete(listener); }; };
+/** The page row publishes its navigation so the page canvas below can turn pages on a swipe. */
+function usePublishPageSwipe(page: number, count: number, disabled: boolean | undefined, onPageChange: (page: number) => void) {
+  const latest = useRef({ page, count, disabled, onPageChange });
+  useEffect(() => { latest.current = { page, count, disabled, onPageChange }; });
+  useEffect(() => {
+    const swipe: PageSwipe = direction => {
+      const { page: current, count: total, disabled: off, onPageChange: go } = latest.current;
+      const target = current + (direction > 0 ? 1 : -1);
+      if (!off && target >= 1 && target <= total) go(target);
+    };
+    swipeSlot = swipe;
+    swipeListeners.forEach(listener => listener());
+    return () => { if (swipeSlot === swipe) { swipeSlot = null; swipeListeners.forEach(listener => listener()); } };
+  }, []);
+}
+/** Native `onPageSwipe` handler for page canvases; undefined when no page row is showing. */
+export function usePageSwipe() {
+  const swipe = useSyncExternalStore(subscribeSwipe, () => swipeSlot, () => null);
+  return swipe ? ({ nativeEvent }: { nativeEvent: { direction: number } }) => swipe(nativeEvent.direction) : undefined;
+}
 export type PdfPreviewImage = { uri: string; width: number; height: number; pointWidth?: number };
 
 /**
@@ -24,14 +49,14 @@ export type PdfPreviewImage = { uri: string; width: number; height: number; poin
  * Undo/redo (`history`) and `leading` sit on the left, page navigation is centred and `children` sit on the right.
  * `below` holds wider tool menus on a second line.
  */
-export function PdfPreviewToolbar({ page, count, disabled, onPageChange, children, history = false, leading, below, rotate = true, orientation, compact = false, step = 1, rightToLeft = false }: {
+export function PdfPreviewToolbar({ page, count, disabled, onPageChange, children, history = false, leading, below, rotate = true, orientation, step = 1, rightToLeft = false }: {
   page: number; count: number; disabled?: boolean; onPageChange: (page: number) => void; children?: ReactNode;
   history?: boolean; leading?: ReactNode; below?: ReactNode; rotate?: boolean;
   /** Pages per arrow press: 2 when the reader shows two-page spreads. */
   step?: number;
   /** Right-to-left reading puts "next" on the left. */
   rightToLeft?: boolean;
-  /** Keep every control on one line on narrow phones; buttons passed in should be compact too. */
+  /** Portrait rows are always one line now; kept so existing callers still type-check. */
   compact?: boolean;
   /** Screens that own their orientation (the PDF reader) pass it here instead of the toolbar setting it. */
   orientation?: { landscape: boolean; onToggle: () => void };
@@ -41,6 +66,7 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   const toolLayout = usePdfToolLayout();
   const registerPageRow = toolLayout?.registerPageRow;
   useEffect(() => registerPageRow?.(), [registerPageRow]);
+  usePublishPageSwipe(page, count, disabled, onPageChange);
   const [ownLandscape, setOwnLandscape] = useState(false);
   const landscape = orientation?.landscape ?? toolLayout?.landscape ?? ownLandscape;
   const toggleLandscape = () => { Keyboard.dismiss(); if (orientation) orientation.onToggle(); else (toolLayout?.setLandscape ?? setOwnLandscape)(value => !value); };
@@ -59,11 +85,8 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
     }
     if (target !== page) onPageChange(target);
   }
-  // Beside undo/redo, Fit would wrap the page row onto a second line; a tool menu line has room at its start.
-  const crowded = !sideways && (history || !!leading);
-  const fitBelow = crowded && !!below;
-  const fitRight = crowded && !below;
-  const tight = compact && !sideways;
+  // Portrait keeps everything on one line; Fit sits beside undo/redo so both sides balance around the page controls.
+  const tight = !sideways;
   const flipped = rightToLeft && !sideways;
   const arrow = (forward: boolean) => {
     const off = disabled || (forward ? page + step > count : page <= 1);
@@ -75,15 +98,15 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   return <>
     {!toolLayout && !orientation && <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />}
     <ToolActionRow vertical={sideways} compact={tight}
-      left={<>{!crowded && <FitSlotButton />}{history && <HeaderHistorySlot />}{leading}</>}
+      left={<><FitSlotButton />{history && <HeaderHistorySlot />}{leading}</>}
       center={<>
         {arrow(flipped)}
         <TextInput accessibilityLabel={`Page number, 1 to ${count}`} keyboardType="number-pad" returnKeyType="done" selectTextOnFocus value={input} onChangeText={setInput} editable={!disabled} onSubmitEditing={Keyboard.dismiss} onEndEditing={submit} maxLength={6} style={[styles.pageInput, tight && styles.tightInput, { color: colors.label, backgroundColor: colors.accentSurface }]} />
         <ThemedText numberOfLines={1} style={[styles.pageCount, tight && styles.tightCount]}>{tight ? `/ ${count}` : `of ${count}`}</ThemedText>
         {arrow(!flipped)}
       </>}
-      right={<>{fitRight && <FitSlotButton />}{children}{rotate && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
-      below={fitBelow ? <><FitSlotButton /><View style={styles.grow} />{below}</> : below} />
+      right={<>{children}{rotate && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
+      below={below} />
   </>;
 }
 
@@ -129,6 +152,7 @@ export function PdfPagePreview({ image, active = true, preserveViewport = false,
   const angle = ((rotation % 360) + 360) % 360;
   const sideways = angle === 90 || angle === 270;
   const key = `${preserveViewport ? 'live' : image.uri}:${fit}`;
+  const onPageSwipe = usePageSwipe();
   return <PdfPreviewStage hint={hint} onFit={active && NativeEditCanvas ? () => setFit(value => value + 1) : undefined}>
     <View style={styles.grow} onLayout={event => {
       const { width, height } = event.nativeEvent.layout;
@@ -138,7 +162,7 @@ export function PdfPagePreview({ image, active = true, preserveViewport = false,
       left: (viewport.width - viewport.height) / 2, top: (viewport.height - viewport.width) / 2,
       transform: [{ rotate: `${angle}deg` }] } : [styles.grow, { transform: [{ rotate: `${angle}deg` }] }]}>
     {active && (!sideways || viewport.width > 0) && (NativeEditCanvas
-      ? <NativeEditCanvas key={key} style={styles.grow} source={image.uri} pageLayout={JSON.stringify({ width: image.width, height: image.height, pointWidth: image.pointWidth ?? 0 })} objects="[]" selectedId={-1} adding={false} disabled={false} placement="" textBox={'{"visible":false}'} focus="" />
+      ? <NativeEditCanvas key={key} style={styles.grow} source={image.uri} pageLayout={JSON.stringify({ width: image.width, height: image.height, pointWidth: image.pointWidth ?? 0 })} objects="[]" selectedId={-1} adding={false} disabled={false} placement="" textBox={'{"visible":false}'} focus="" onPageSwipe={onPageSwipe} />
       : <PdfEditCanvas key={key} uri={image.uri} width={image.width} height={image.height} objects={[]} adding={false} disabled={false} removedIds={[]} placement={null} onSelect={() => {}} onPlace={() => {}} />)}
     </View></View>
   </PdfPreviewStage>;

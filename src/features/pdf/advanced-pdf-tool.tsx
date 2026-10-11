@@ -13,6 +13,7 @@ import { fontFile } from '@/constants/edit-fonts';
 import { EditorOption } from '@/components/editor-option';
 import { PublishHeaderHistory } from '@/components/header-history';
 import { usePublishHeaderShare } from '@/components/header-share';
+import { copyPdf, renderPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { OptionCard, OptionSheet } from '@/components/option-sheet';
 import { EditorMenu } from '@/components/editor-menu';
 import { ToolRowButton } from '@/components/tool-action-row';
@@ -207,7 +208,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [notice, setNotice] = useState('');
   const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'compress' ? 'Compress PDF' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Save text' : tool === 'to_image' ? 'Save images' : 'Save PDF';
   const toolbar = useResponsiveEditorToolbar(markup ? ['Style', 'Select', ...(tool === 'highlight' ? [brush ? 'Brush' : 'Area'] : [])] : [tool === 'protect' ? 'Password' : 'Options'], [saveTitle], markup ? 2 : 0);
-  const recovery = useEditorDraft({ id: markup && session.origin && info ? pdfDraftId(session.origin.uri, tool) : null, uri: session.origin?.uri, value: history.snapshot,
+  const recovery = useEditorDraft({ id: markup && session.origin && !session.carried && info ? pdfDraftId(session.origin.uri, tool) : null, uri: session.origin?.uri, value: history.snapshot,
     dirty: !results.length && (marks.length > 0 || history.canRedo), validate: isMarkHistorySnapshot, restore: value => { history.restoreSnapshot(value); if (value.marks.length) setPage(Math.min(info?.pageCount ?? 1, value.marks.at(-1)!.page)); } });
   useEffect(() => { onDiscardReady?.(recovery.discard); }, [onDiscardReady, recovery.discard]);
   const [savedOutputs, setSavedOutputs] = useState<ReadonlySet<string>>(() => new Set());
@@ -432,6 +433,21 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     save: { label: results.length ? 'Save remaining files' : saveTitle,
       disabled: busy || !info || (results.length ? results.every(output => savedOutputs.has(output.uri)) : !recovery.ready || (markup ? !marks.length && !annotationEditCount : tool === 'compress' && estimate?.quality !== quality)),
       onSave: () => results.length ? saveRemaining() : run() } });
+  const pdfResult = results.length === 1 && results[0].name.toLowerCase().endsWith('.pdf') ? results[0] : undefined;
+  const markupChanged = markup && !results.length && marks.length + annotationEditCount > 0;
+  usePublishPdfHandoff(true, {
+    changed: pdfResult ? !savedOutputs.has(pdfResult.uri) : markupChanged,
+    saved: pdfResult && savedOutputs.has(pdfResult.uri) ? { uri: pdfResult.uri, name: pdfResult.name } : undefined,
+    blocked: busy ? 'Wait for the current task to finish, then choose another tool.' : undefined,
+    write: async outputUri => {
+      if (pdfResult) { await copyPdf(pdfResult.uri, outputUri); return; }
+      if (!markupChanged) { await copyPdf(source.uri, outputUri); return; }
+      await renderPdf(outputUri, async staged => {
+        const response = await process({ nativeEditor: true, action: 'save', outputUri: staged, edits: markupEdits() }, 'Preparing the edited PDF...');
+        if (!response?.outputs) throw new Error('Your marks could not be added to the PDF. Try again.');
+      });
+    },
+  });
   // Without a selection, the size buttons act on the newest shape so a tiny one can grow straight after drawing.
   const resizeTarget = selectedMark ?? (tool === 'shapes' && !selecting && !erasing ? marks.findLast(mark => mark.page === page && (mark.kind === 'polygon' || mark.kind === 'line')) : undefined);
   const markupZoom = useMarkupZoom(`${page}:${previewRetry}:${preview?.uri ?? ''}`);
@@ -705,7 +721,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     <PdfPreviewBody pages={pageList} toolbar={pageControls}>
     <PdfPreviewStage hint={tool === 'add_image' ? 'Choose an image, then drag to move it and use its corners to resize. Two fingers to zoom.' : placing ? 'Pick a shape to add it. Drag a shape to move it. Drag the page to scroll, swipe to change page.' : 'Drag to mark. Select to move or resize. Two fingers to zoom.'} onFit={active && !busy ? () => setPreviewRetry(value => value + 1) : undefined}>
     {active && preview?.page === page && PdfMarkupView ? <PdfMarkupView key={`${page}:${previewRetry}:${preview.uri}`} style={{ flex: 1, backgroundColor: PDF_PREVIEW_BACKGROUND }} source={preview.uri} zoomRequest={markupZoom.request} onZoom={markupZoom.onZoom} marks={JSON.stringify(marks.filter(mark => mark.page === page))} brush={brushType} pattern={pattern} inkOpacity={markupEditing ? inkOpacity : undefined} onSelection={markupEditing ? event => selectMark(event.nativeEvent.mark) : undefined} mode={erasing ? 'erase' : selecting ? 'select' : tool === 'shapes' ? (shape === 'line' ? 'line' : 'polygon') : tool === 'highlight' && brush ? 'highlight-brush' : tool} shapePath={JSON.stringify(SHAPES.find(item => item.id === shape)?.points ?? [])} fillColor={fillColor === null ? '' : hexColor(fillColor)} inkColor={inkColor} inkWidth={inkWidth} disabled={!!controlHelp?.active || busy || !recovery.ready || (!selecting && !erasing && marks.length >= 300)} onMark={event => addMark(event.nativeEvent.mark)}
-      onPageSwipe={placing ? ({ nativeEvent }) => { const target = page + nativeEvent.direction; if (!busy && target >= 1 && target <= info.pageCount) changePage(target); } : undefined} /> : failedPreview === previewKey && !busy
+      onPageSwipe={({ nativeEvent }) => { const target = page + nativeEvent.direction; if (!busy && target >= 1 && target <= info.pageCount) changePage(target); }} /> : failedPreview === previewKey && !busy
       ? <View style={styles.loadingScreen}><ThemedText>Page preview unavailable.</ThemedText><ToolButton title="Retry preview" onPress={() => { previewAttempt.current = ''; setFailedPreview(''); setPreviewRetry(value => value + 1); }} /></View>
       : <View style={styles.loadingScreen}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite">Preparing page…</ThemedText></View>}
     {(selecting || !!resizeTarget) && active && preview?.page === page && !!PdfMarkupView && <MarkupZoomButtons showZoom={selecting} zoom={markupZoom.zoom} onZoomBy={markupZoom.zoomBy} disabled={busy} selection={resizeTarget?.points} onResize={points => { if (resizeTarget?.id) history.update(resizeTarget.id, { points }); }} />}

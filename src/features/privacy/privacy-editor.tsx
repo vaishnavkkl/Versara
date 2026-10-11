@@ -26,7 +26,7 @@ import { getRecentFile, rememberFile } from '../files/recent-files';
 import { askNewFileName, saveEditedOutput } from '../files/save-file';
 import { ZoomableImage } from '../files/zoomable-image';
 import { PdfDocumentPreview } from '../pdf/pdf-document-preview';
-import { PdfPreviewBody, PdfPreviewToolbar, PdfPagePreview, PdfPreviewFooter, PdfPreviewStage } from '../pdf/pdf-preview';
+import { PdfPreviewBody, PdfPreviewToolbar, PdfPagePreview, PdfPreviewFooter, PdfPreviewStage, usePageSwipe } from '../pdf/pdf-preview';
 import { usePdfScreenActive } from '../pdf/use-pdf-screen-active';
 
 type Mode = 'scan' | 'pdf_scan' | 'redact' | 'metadata';
@@ -102,6 +102,7 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   const [selecting, setSelecting] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [fit, setFit] = useState(0);
+  const pageSwipe = usePageSwipe();
   const [finding, setFinding] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const [findScope, setFindScope] = useState<'all' | 'page'>('all');
@@ -462,7 +463,7 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
         ]} />} hint={selecting ? 'Tap a cover to select it. Drag its handles to resize.' : 'Drag to add a solid cover. Use two fingers to zoom and pan.'} onFit={() => setFit(value => value + 1)}>
           {active && <PdfMarkupView key={fit} style={styles.grow} source={basePreview.uri} marks={marksJson} mode={selecting ? 'select' : 'polygon'}
             inkColor="#000000" fillColor="#000000" inkWidth={.001} inkOpacity={1} brush="pen" pattern="solid" shapePath={RECTANGLE}
-            disabled={busy || (!selecting && marks.length >= 300)} onMark={event => onMark(event.nativeEvent.mark)}
+            disabled={busy || (!selecting && marks.length >= 300)} onMark={event => onMark(event.nativeEvent.mark)} onPageSwipe={isPdf ? pageSwipe : undefined}
             onSelection={event => { try { setSelectedId(event.nativeEvent.mark ? (JSON.parse(event.nativeEvent.mark) as PdfMark).id : undefined); } catch { setSelectedId(undefined); } }} />}
         </PdfPreviewStage> : <PdfPagePreview image={basePreview} active={active} hint="Image preview. The exported PNG copy removes metadata." />}
       </PdfPreviewBody>

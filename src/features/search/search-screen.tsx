@@ -1,4 +1,3 @@
-import { toolColors } from '@/theme/tool-colors';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
@@ -16,6 +15,7 @@ import { SEARCH_TOOLS, SUGGESTED_TOOLS, type SearchTool } from './search-tools';
 import { clearSearchHistory, hydrateSearchHistory, recordSearch, removeSearch, useSearchHistory } from './search-history';
 import { openSearchTool } from './open-search-tool';
 import { requestFileSearch } from './file-search';
+import { AppGlyph } from '@/components/app-glyph';
 
 const QUICK_SEARCHES = [
   { label: 'PDFs', query: '.pdf', kind: 'pdf' }, { label: 'JPG photos', query: '.jpg', kind: 'image' },
@@ -97,7 +97,7 @@ export function SearchScreen() {
     accessibilityLabel={`${tool.title}, ${tool.module}. ${tool.availability === 'ready' ? 'Choose a file to begin' : tool.availability === 'build' ? 'Needs a new app build' : 'Coming soon'}`}
     accessibilityState={{ disabled: tool.availability !== 'ready' || !!opening }} disabled={tool.availability !== 'ready' || !!opening}
     onPress={() => { void openTool(tool); }} style={({ pressed }) => [styles.tool, { opacity: tool.availability !== 'ready' ? 0.55 : pressed ? 0.6 : 1 }]}>
-    <View style={[styles.toolIcon, toolColors(tool.id, colors).fill]}><UniversalIcon ios={tool.ios} android={tool.android} size={25} color={toolColors(tool.id, colors).glyph} /></View>
+    <AppGlyph id={tool.id} ios={tool.ios} android={tool.android} size={48} />
     <View style={styles.grow}><ThemedText style={styles.name}>{tool.title}</ThemedText><ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>{tool.module} · {tool.availability === 'ready' ? tool.subtitle : tool.availability === 'build' ? 'Needs a new app build' : 'Coming soon'}</ThemedText></View>
     {opening === tool.key ? <AppLoader /> : tool.availability === 'ready' && <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.muted} />}
   </Pressable>, [colors, openTool, opening]);

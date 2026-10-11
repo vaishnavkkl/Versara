@@ -20,6 +20,7 @@ class PdfEngineModule : Module() {
     Constant("nativeMarkupPanVersion") { 1 }
     Constant("nativeReaderSearchVersion") { 1 }
     Constant("nativeFindReplaceVersion") { 1 }
+    Constant("nativeParagraphEditVersion") { 1 }
     Constant("nativeReaderFocusVersion") { 1 }
     Constant("nativeReaderLayoutVersion") { 1 }
     Constant("nativeSearchableOcrVersion") { 1 }
@@ -104,7 +105,7 @@ class PdfEngineModule : Module() {
       OnViewDestroys { view: PdfMarkupView -> view.dispose() }
     }
     View(PdfEditCanvasView::class) {
-      Events("onSelectObject", "onPlace", "onTextChange", "onSubmitText")
+      Events("onSelectObject", "onPlace", "onTextChange", "onSubmitText", "onPageSwipe")
       Prop("source") { view: PdfEditCanvasView, value: String -> view.setSource(value) }
       Prop("pageLayout") { view: PdfEditCanvasView, value: String -> view.setPageLayout(value) }
       Prop("objects") { view: PdfEditCanvasView, value: String -> view.setObjects(value) }
@@ -119,6 +120,6 @@ class PdfEngineModule : Module() {
       Prop("highlight") { view: PdfEditCanvasView, value: String -> view.setHighlight(value) }
       OnViewDestroys { view: PdfEditCanvasView -> view.dispose() }
     }
-    Constant("nativeEditCanvasVersion") { 4 }
+    Constant("nativeEditCanvasVersion") { 5 }
   }
 }

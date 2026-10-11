@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler } from 'react-native';
 import { setReaderBackHandler, setReaderHelpHandler } from '@/features/pdf/reader-back';
+import { useExternalHelpMode } from '@/components/control-help';
 
 /**
  * State for the tools-around-content ring. While it shows, close and back leave name mode, then the ring;
@@ -15,6 +16,7 @@ export function useToolRing(available: boolean) {
   const finishClose = useCallback(() => { setOpen(false); setClosing(false); }, []);
   const active = available && open;
   const namingActive = active && naming;
+  useExternalHelpMode(namingActive);
   const namingRef = useRef(false);
   useEffect(() => { namingRef.current = namingActive; }, [namingActive]);
   useEffect(() => {

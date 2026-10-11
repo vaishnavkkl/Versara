@@ -1,8 +1,8 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useSyncExternalStore } from 'react';
+import { CompactRowContext } from './tool-action-row';
 import { StyleSheet, View } from 'react-native';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
-import { UniversalIcon } from './universal-icon';
-import { usePalette } from '@/theme/colors';
+import { HeaderGlyph } from './app-glyph';
 
 type Slot = { canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void };
 let slot: Slot | null = null;
@@ -22,11 +22,11 @@ export function useHeaderHistory() {
 export function HeaderHistoryButtons({ canUndo, canRedo, onUndo, onRedo, disabled = false }: {
   canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void; disabled?: boolean;
 }) {
-  const colors = usePalette();
+  const compact = useContext(CompactRowContext);
   const button = (label: string, enabled: boolean, onPress: () => void, ios: 'arrow.uturn.backward' | 'arrow.uturn.forward', android: 'undo' | 'redo') =>
     <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || !enabled} onPress={onPress} hitSlop={4}
-      style={[styles.button, (disabled || !enabled) && styles.dim]}>
-      <UniversalIcon ios={ios} android={android} size={22} color={colors.systemBlue} />
+      style={[styles.button, compact && styles.compact, (disabled || !enabled) && styles.dim]}>
+      <HeaderGlyph ios={ios} android={android} size={compact ? 38 : 40} />
     </Pressable>;
   return <View style={styles.row}>
     {button('Undo', canUndo, onUndo, 'arrow.uturn.backward', 'undo')}
@@ -62,6 +62,7 @@ export function PublishHeaderHistory({ active = true, canUndo, canRedo, onUndo, 
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center' },
-  button: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
+  button: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' },
+  compact: { width: 40 },
   dim: { opacity: 0.35 },
 });

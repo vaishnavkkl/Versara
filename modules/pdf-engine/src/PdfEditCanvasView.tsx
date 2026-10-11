@@ -27,6 +27,8 @@ export type PdfEditCanvasProps = ViewProps & {
   onPlace?: (event: { nativeEvent: { x: number; y: number } }) => void;
   onTextChange?: (event: { nativeEvent: { text: string } }) => void;
   onSubmitText?: (event: { nativeEvent: { text: string } }) => void;
+  /** Version 5+: a horizontal swipe at fit zoom; `direction` is 1 for the next page and -1 for the previous one. */
+  onPageSwipe?: (event: { nativeEvent: { direction: number } }) => void;
 };
 export const hasNativeEditCanvas = !!PdfEngineModule?.nativeEditCanvasVersion;
 const PdfEditCanvasView = hasNativeEditCanvas ? requireNativeView<PdfEditCanvasProps>('PdfEngine', 'PdfEditCanvasView') : null;

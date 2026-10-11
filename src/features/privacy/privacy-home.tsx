@@ -58,7 +58,7 @@ export function PrivacyHome() {
           <ThemedText accessibilityRole="header" style={styles.sectionTitle}>Safer sharing</ThemedText>
           {PRIVACY_TOOLS.filter((_, index) => index % columns === 0).map((first, row) => <View key={first.id} style={styles.row}>
             {PRIVACY_TOOLS.slice(row * columns, row * columns + columns).map(tool => <View key={tool.id} style={styles.cell}><ModuleCard
-              title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android}
+              colorId={tool.id} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android}
               tone="privacy" loading={opening === tool.id} disabled={opening !== null && opening !== tool.id} variant={useGrid ? 'compact' : 'list'} onPress={() => { void openTool(tool.id); }} /></View>)}
             {useGrid && !PRIVACY_TOOLS[row * columns + 1] && <View style={styles.cell} />}
           </View>)}

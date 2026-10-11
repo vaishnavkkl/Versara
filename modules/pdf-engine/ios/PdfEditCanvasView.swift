@@ -37,9 +37,16 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   let onPlace = EventDispatcher()
   let onTextChange = EventDispatcher()
   let onSubmitText = EventDispatcher()
+  let onPageSwipe = EventDispatcher()
 
   private struct Box { let id: Int; let rect: CGRect }
-  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false; var submitOnReturn = false; var fontFile = "" }
+  /**
+   * `box` (normalised; height unused) opens the field over an existing paragraph at its width; `lineHeight` is in page points.
+   * `baseline` (normalised) puts the first line on the PDF's baseline, and the sample line's page width stretches the
+   * stand-in typeface to the PDF font's width so lines wrap where the saved text will.
+   */
+  private struct Sample: Equatable { var text: String; var width: CGFloat; var size: CGFloat }
+  private struct TextBox: Equatable { var visible = false; var text = ""; var font = "Helvetica"; var size: CGFloat = 16; var color = 0x101020; var underline = false; var submitOnReturn = false; var fontFile = ""; var box: CGRect? = nil; var lineHeight: CGFloat = 0; var baseline: CGFloat? = nil; var sample: Sample? = nil }
 
   private let scroll = UIScrollView()
   private let page = UIView()
@@ -98,7 +105,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     placeholder.text = "Type here"
     placeholder.textColor = UIColor.gray.withAlphaComponent(0.6)
     field.addSubview(placeholder)
-    field.backgroundColor = UIColor(red: 0.08, green: 0.4, blue: 1, alpha: 0.1)
+    field.backgroundColor = .clear
     field.layer.borderColor = UIColor(red: 0.08, green: 0.4, blue: 1, alpha: 1).cgColor
     field.layer.borderWidth = 0.5
     field.accessibilityLabel = "Text to add to the PDF"
@@ -123,6 +130,11 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     tap.delegate = self
     scroll.addGestureRecognizer(doubleTap)
     scroll.addGestureRecognizer(tap)
+    for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+      let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:)))
+      swipe.direction = direction
+      scroll.addGestureRecognizer(swipe)
+    }
   }
 
   func setSource(_ value: String) {
@@ -210,7 +222,11 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       if visible.minX >= 16 && visible.minX < bounds.width - 16 && visible.minY >= 16 && visible.maxY <= bounds.height - 16 { return }
     } else { focusZoomStarted = Date() }
     // Readable first: the line fills about 36pt of height; long lines start at the left edge.
-    let target = keep ? scroll.zoomScale : min(max(min(36 / rh, scroll.bounds.height * 0.45 / rh), 1.5), 4)
+    var target = keep ? scroll.zoomScale : min(max(min(36 / rh, scroll.bounds.height * 0.45 / rh), 1.5), 4)
+    // A wrapping paragraph stays fully in width so the ends of its lines remain visible while typing.
+    if !keep, let frame = textBox.box, textBox.lineHeight > 0, rh > 1.6 * textBox.lineHeight * textScale() {
+      target = max(1, min(target, scroll.bounds.width * 0.94 / max(1, frame.width * base.width)))
+    }
     let size = CGSize(width: scroll.bounds.width / target, height: scroll.bounds.height / target)
     let x = rw * target > scroll.bounds.width * 0.92 ? rect.minX * base.width - size.width * 0.04 : rect.midX * base.width - size.width / 2
     scroll.zoom(to: CGRect(x: x, y: rect.midY * base.height - size.height * 0.38, width: size.width, height: size.height), animated: true)
@@ -247,12 +263,22 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       next.color = item["color"] as? Int ?? 0x101020
       next.underline = item["underline"] as? Bool ?? false
       next.submitOnReturn = item["submitOnReturn"] as? Bool ?? false
+      if let box = item["box"] as? [String: Any], let x = number(box["x"]), let y = number(box["y"]), let width = number(box["width"]),
+         width > 0, (0...1).contains(x), (0...1).contains(y) {
+        next.box = CGRect(x: x, y: y, width: width, height: 0)
+        if let baseline = number(box["baseline"]), (0...1).contains(baseline) { next.baseline = baseline }
+        if let sample = box["sample"] as? [String: Any], let text = sample["text"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty,
+           let sampleWidth = number(sample["width"]), let sampleSize = number(sample["size"]), (0.01...1).contains(sampleWidth), (1...1000).contains(sampleSize) {
+          next.sample = Sample(text: String(text.prefix(2000)), width: sampleWidth, size: sampleSize)
+        }
+      }
+      next.lineHeight = min(1000, max(0, number(item["lineHeight"]) ?? 0))
     }
     let previous = textBox
     let opening = next.visible && !previous.visible
     textBox = next
     field.returnKeyType = next.submitOnReturn ? .done : .default
-    let restyle = opening || next.color != previous.color || next.underline != previous.underline || next.font != previous.font || next.fontFile != previous.fontFile || next.size != previous.size
+    let restyle = opening || next.color != previous.color || next.underline != previous.underline || next.font != previous.font || next.fontFile != previous.fontFile || next.size != previous.size || next.lineHeight != previous.lineHeight || next.sample != previous.sample
     if restyle { styleField() }
     if field.text != next.text || restyle {
       let selection = field.selectedRange
@@ -265,7 +291,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       overlay.textVisible = next.visible
       overlay.setNeedsDisplay()
     }
-    if opening || next.size != previous.size || next.font != previous.font || next.visible != previous.visible { layoutField() } else { updateHandle() }
+    if opening || next.size != previous.size || next.font != previous.font || next.visible != previous.visible || next.box != previous.box || next.lineHeight != previous.lineHeight || next.baseline != previous.baseline || next.sample != previous.sample { layoutField() } else { updateHandle() }
     if opening { DispatchQueue.main.async { self.field.becomeFirstResponder() } }
     if !next.visible && field.isFirstResponder { field.resignFirstResponder() }
   }
@@ -318,7 +344,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   private func styleField() {
     let scale = page.bounds.width > 0 ? textScale() : 1
     fieldFont = versaraFont(textBox.font, max(1, textBox.size * scale), file: textBox.fontFile)
-    lineHeight = fieldFont.pointSize * 1.2
+    lineHeight = textBox.box != nil && textBox.lineHeight > 0 ? textBox.lineHeight * scale : fieldFont.pointSize * 1.2
     let paragraph = NSMutableParagraphStyle()
     paragraph.minimumLineHeight = lineHeight
     paragraph.maximumLineHeight = lineHeight
@@ -327,19 +353,42 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       .foregroundColor: UIColor(red: CGFloat(textBox.color >> 16 & 255) / 255, green: CGFloat(textBox.color >> 8 & 255) / 255, blue: CGFloat(textBox.color & 255) / 255, alpha: 1),
     ]
     if textBox.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+    if textBox.box != nil, let sample = textBox.sample, page.bounds.width > 0 {
+      let probe = versaraFont(textBox.font, max(1, sample.size * scale), file: textBox.fontFile)
+      let measured = (sample.text as NSString).size(withAttributes: [.font: probe]).width
+      // Far-off ratios mean the sample does not represent the text; keep the typeface's own width then.
+      let fit = measured > 0 ? sample.width * page.bounds.width / measured : 1
+      if (0.7...1.4).contains(fit) && abs(fit - 1) > 0.005 { attributes[.expansion] = log(fit) }
+    }
     field.typingAttributes = attributes
     placeholder.font = fieldFont
   }
 
   private func layoutField() {
     let width = page.bounds.width, height = page.bounds.height
-    guard let point = placement, textBox.visible, width > 0 else { updateHandle(); return }
+    guard textBox.visible, width > 0, placement != nil || textBox.box != nil else { updateHandle(); return }
     let scale = textScale()
     if abs(fieldFont.pointSize - max(1, textBox.size * scale)) > 0.01 {
       styleField()
       field.attributedText = NSAttributedString(string: field.text ?? "", attributes: field.typingAttributes)
     }
-    let pad = max(1, 2 * scale)
+    // Room between the frame and the glyphs, so the frame never cuts through letters.
+    let pad = max(3, 4 * scale)
+    if let box = textBox.box {
+      // A paragraph wraps at its own width, like the saved PDF.
+      field.textContainerInset = UIEdgeInsets(top: pad, left: pad, bottom: pad, right: pad * 3)
+      let frameWidth = box.width * width + pad * 4
+      let fitted = field.sizeThatFits(CGSize(width: frameWidth, height: .greatestFiniteMagnitude)).height
+      // Lines are `lineHeight` tall with the extra space above the glyphs, so the first baseline sits that far down.
+      let firstBaseline = lineHeight + fieldFont.descender
+      let top = textBox.baseline.map { $0 * height - firstBaseline - pad } ?? box.minY * height - pad
+      field.frame = CGRect(x: box.minX * width - pad, y: top, width: frameWidth, height: max(lineHeight + pad * 2, fitted))
+      placeholder.frame = CGRect(x: pad, y: pad + firstBaseline - fieldFont.ascender, width: frameWidth, height: fieldFont.lineHeight)
+      field.layer.borderWidth = 1 / max(1, scroll.zoomScale)
+      updateHandle()
+      return
+    }
+    guard let point = placement else { updateHandle(); return }
     let lines = (field.text?.isEmpty ?? true) ? ["Type here"] : (field.text ?? "").components(separatedBy: "\n")
     let widest = lines.map { ceil(($0 as NSString).size(withAttributes: [.font: fieldFont]).width) }.max() ?? 0
     let x = point.x * width, baseline = point.y * height
@@ -354,7 +403,8 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   }
 
   private func updateHandle() {
-    guard textBox.visible, placement != nil, !disabled else { handle.isHidden = true; return }
+    // A paragraph keeps its place on the page; only new text can be dragged.
+    guard textBox.visible, placement != nil, textBox.box == nil, !disabled else { handle.isHidden = true; return }
     let rect = page.convert(field.frame, to: self)
     handle.isHidden = false
     handle.frame = CGRect(x: rect.minX - 34, y: rect.midY - 15, width: 30, height: 30)
@@ -398,6 +448,12 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     (box.rect.contains(CGPoint(x: x, y: y)) ? 0 : 100) + abs(y - box.rect.midY) + abs(x - box.rect.midX) * 0.01
   }
 
+  /// At fit zoom the page cannot scroll sideways, so a horizontal swipe turns the page instead.
+  @objc private func swiped(_ recognizer: UISwipeGestureRecognizer) {
+    guard !disabled, scroll.zoomScale <= 1.01, handle.isHidden || !handle.frame.contains(recognizer.location(in: self)) else { return }
+    onPageSwipe(["direction": recognizer.direction == .left ? 1 : -1])
+  }
+
   @objc private func doubleTapped(_ recognizer: UITapGestureRecognizer) {
     guard !disabled else { return }
     if scroll.zoomScale > 1.1 { scroll.setZoomScale(1, animated: true); return }
@@ -423,8 +479,16 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
 
   func textViewDidChange(_ textView: UITextView) {
     placeholder.isHidden = !textView.text.isEmpty
-    onTextChange(["text": textView.text ?? ""])
+    if textBox.visible { onTextChange(["text": textView.text ?? ""]) }
     layoutField()
+    ensureCaretVisible()
+  }
+  /// Follows the caret as typing grows the box past the keyboard or the screen edge.
+  private func ensureCaretVisible() {
+    guard field.isFirstResponder, let end = field.selectedTextRange?.end else { return }
+    let caret = field.caretRect(for: end)
+    guard caret.height.isFinite, caret.height > 0 else { return }
+    scroll.scrollRectToVisible(field.convert(caret, to: scroll).insetBy(dx: -24, dy: -24), animated: false)
   }
   func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
     if textBox.submitOnReturn && text == "\n" { onSubmitText(["text": textView.text ?? ""]); textView.resignFirstResponder(); return false }
@@ -521,8 +585,15 @@ private final class EditOverlay: UIView {
           context.strokePath()
           continue
         } else if ids[index] == selectedId {
-          context.setFillColor(blue.withAlphaComponent(0.13).cgColor); context.fill(frame)
-          context.setStrokeColor(blue.cgColor); context.setLineWidth(1.5 / zoom)
+          // The line being edited keeps its text readable: a padded dashed outline, no fill. The on-page field frames itself.
+          if textVisible { continue }
+          let pad = 4 / zoom, dash = 4 / zoom
+          context.saveGState()
+          context.setStrokeColor(blue.cgColor); context.setLineWidth(1.5 / zoom); context.setLineDash(phase: 0, lengths: [dash, dash])
+          context.addPath(UIBezierPath(roundedRect: frame.insetBy(dx: -pad, dy: -pad), cornerRadius: pad).cgPath)
+          context.strokePath()
+          context.restoreGState()
+          continue
         } else {
           context.setStrokeColor(blue.withAlphaComponent(0.4).cgColor); context.setLineWidth(0.8 / zoom)
         }

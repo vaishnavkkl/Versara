@@ -96,6 +96,13 @@ export function discardEditorDraft(id: string) {
   return removeEditorDraft(id);
 }
 
+/** Stored drafts whose id starts with `prefix`, for pruning files no draft refers to. */
+export async function editorDraftPayloads(prefix: string) {
+  await writes.catch(() => {});
+  const rows = await (await database()).getAllAsync<{ id: string; payload: string }>('SELECT id,payload FROM editor_drafts WHERE substr(id,1,?) = ?', prefix.length, prefix);
+  return new Map(rows.map(row => [row.id, row.payload]));
+}
+
 export function pdfDraftId(uri: string, tool: string) {
   return `pdf:${storedUri(uri)}:${['edit_text', 'text', 'remove_text', 'replace_text'].includes(tool) ? 'text' : tool}`;
 }

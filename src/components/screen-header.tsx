@@ -3,11 +3,11 @@ import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from './themed-text';
 import { UniversalIcon } from './universal-icon';
 import { HelpPressable } from './help-pressable';
-import { AppLoader } from './app-loader';
 import { showDialog } from './app-dialog';
 import type { HeaderShareAction } from './header-share';
 import { usePalette } from '@/theme/colors';
 import { spacing as s, typography as t } from '@/theme/dashboard';
+import { HeaderGlyph } from './app-glyph';
 
 type Props = { title: string; onBack: () => void; backLabel?: string; variant?: 'back' | 'close'; children?: ReactNode;
   /** Tool screens share their current edited file from the right. `null` shows the button disabled. */
@@ -15,10 +15,12 @@ type Props = { title: string; onBack: () => void; backLabel?: string; variant?: 
   /** Tool screens save or apply their result from the right, beside share. `null` shows the button disabled. */
   save?: HeaderShareAction | null;
   /** Extra actions shown beside the close button in the close variant. */
-  trailing?: ReactNode };
+  trailing?: ReactNode;
+  /** Extra actions shown after the back button in the back variant. */
+  leading?: ReactNode };
 
 /** Screens go back from the left; file previews and sheets close from the right. The title stays centred. */
-export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing }: Props) {
+export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing, leading }: Props) {
   const colors = usePalette();
   const close = variant === 'close';
   const [sharing, setSharing] = useState(false);
@@ -47,16 +49,16 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
   const shareButton = share !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={share?.label ?? 'Share'} accessibilityState={{ disabled: shareDisabled, busy: sharing }}
     disabled={shareDisabled} onPress={() => void runShare()} hitSlop={4}
     style={({ pressed }) => [styles.back, { opacity: shareDisabled && !sharing ? 0.4 : pressed ? 0.6 : 1 }]}>
-    {sharing ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.up" android="mdi:share-variant-outline" size={22} color={colors.systemBlue} />}
+    <HeaderGlyph id="share" ios="square.and.arrow.up" android="mdi:share-variant-outline" loading={sharing} />
   </HelpPressable>;
   const saveDisabled = !save || !!save.disabled || saving;
   const saveButton = save !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={save?.label ?? 'Save'} accessibilityState={{ disabled: saveDisabled, busy: saving }}
     disabled={saveDisabled} onPress={() => void runSave()} hitSlop={4}
     style={({ pressed }) => [styles.back, { opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
-    {saving ? <AppLoader /> : <UniversalIcon ios="square.and.arrow.down" android="mdi:content-save-outline" size={22} color={colors.systemBlue} />}
+    <HeaderGlyph id="save" ios="square.and.arrow.down" android="mdi:content-save-outline" loading={saving} />
   </HelpPressable>;
   return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
-    <View style={[styles.side, styles.start]}>{close ? children : button}</View>
+    <View style={[styles.side, styles.start]}>{close ? children : <>{button}{leading}</>}</View>
     <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>
     <View style={[styles.side, styles.end]}>{close ? <>{trailing}{button}</> : <>{children}{saveButton}{shareButton}</>}</View>
   </View>;
@@ -68,7 +70,7 @@ const styles = StyleSheet.create({
   // Actions use their actual intrinsic width, including multi-button help/history groups.
   side: { flexShrink: 0, minWidth: 44, flexDirection: 'row', alignItems: 'center' },
   start: { justifyContent: 'flex-start' },
-  end: { justifyContent: 'flex-end', gap: 2 },
+  end: { justifyContent: 'flex-end' },
   back: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  title: { flex: 1, minWidth: 0, ...t.label, fontSize: 17, textAlign: 'center' },
+  title: { flex: 1, minWidth: 64, ...t.label, fontSize: 17, textAlign: 'center' },
 });

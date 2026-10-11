@@ -16,6 +16,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
+import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -132,6 +133,14 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
     save: { disabled: busy || !!result?.location || (!result && !canSave), label: result?.location ? 'PDF saved' : extracting ? 'Save PDF with selected pages' : 'Save PDF without selected pages',
       onSave: () => result ? saveResult() : save() } });
+  usePublishPdfHandoff(!!shareTarget, {
+    changed: !!result && !result.location,
+    saved: result?.location ? { uri: result.uri, name: result.name } : undefined,
+    blocked: busy ? 'Wait for the current task to finish, then choose another tool.' : undefined,
+    pending: !result && selected.size > 0 ? (extracting ? 'The pages you selected are not extracted yet. Save PDF creates the new PDF.' : 'The pages you selected are not deleted yet. Save PDF removes them.') : undefined,
+    switched: !result && source && source.uri !== initialSelection?.files[0]?.uri ? { file: source } : undefined,
+    write: outputUri => shareTarget ? copyPdf(shareTarget.uri, outputUri) : Promise.reject(new Error('Choose a PDF first.')),
+  });
   async function save() {
     if (!canSave || locked.current || !source || !PdfEngine) return;
     Keyboard.dismiss();

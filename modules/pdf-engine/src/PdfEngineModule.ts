@@ -16,6 +16,8 @@ declare class PdfEngine extends NativeModule<{ onConversionProgress: (event: Con
   readonly nativeReaderSearchVersion?: number;
   /** `editPdfText` accepts `action: 'find_text'` for find and replace in Edit PDF. */
   readonly nativeFindReplaceVersion?: number;
+  /** Text replacements reflow with `wrap`, `lineHeight` and `hang`, and the edit canvas shows a paragraph box. */
+  readonly nativeParagraphEditVersion?: number;
   readonly nativeReaderFocusVersion?: number;
   readonly nativeReaderLayoutVersion?: number;
   readonly nativeSearchableOcrVersion?: number;

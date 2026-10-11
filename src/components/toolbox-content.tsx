@@ -6,8 +6,8 @@ import { UniversalIcon } from './universal-icon';
 import type { ToolSection } from './tool-grid';
 import { useStableCallback } from '@/hooks/use-stable-callback';
 import { usePalette } from '@/theme/colors';
-import { toolColors } from '@/theme/tool-colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
+import { AppGlyph } from './app-glyph';
 
 export type ToolboxProps = {
   visible: boolean; title: string; subtitle: string; caption?: string; sections: ToolSection[]; footer: ReactElement;
@@ -76,10 +76,9 @@ export function ToolboxContent({ title, subtitle, sections, footer, onClose, onS
 
 const ToolTile = memo(function ToolTile({ id, title, subtitle, ios, android, unavailable, onSelect }: Tool & { onSelect: (id: string) => void }) {
   const colors = usePalette();
-  const tint = toolColors(id, colors);
   return <View style={styles.cell}><Pressable accessibilityRole="button" accessibilityLabel={`${title}${unavailable ? ', ' + (subtitle || 'unavailable') : ''}`} accessibilityState={{ disabled: !!unavailable }} disabled={unavailable}
     onPress={() => onSelect(id)} style={({ pressed }) => [styles.tool, { backgroundColor: pressed ? colors.catalogPressed : colors.catalogSurface, borderColor: colors.catalogBorder, opacity: unavailable ? .45 : 1 }]}>
-    <View style={[styles.toolIcon, tint.fill]}><UniversalIcon ios={ios} android={android} size={26} color={tint.glyph} /></View>
+    <AppGlyph id={id} ios={ios} android={android} size={46} />
     <ThemedText numberOfLines={2} style={styles.toolLabel}>{title.replace(/ (Image|PDF)$/, '')}</ThemedText>
   </Pressable></View>;
 });

@@ -1,4 +1,4 @@
-import { AppLoader, withLoading } from '@/components/app-loader';
+import { withLoading } from '@/components/app-loader';
 import { FileEngine } from '../../../modules/file-engine';
 import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -6,13 +6,13 @@ import { Keyboard, Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
-import { UniversalIcon } from '@/components/universal-icon';
+import { BrandGlyph } from '@/components/app-glyph';
 import { ThemedText } from '@/components/themed-text';
 import { IMAGE_SECTIONS } from '@/constants/image-methods';
-import { usePalette } from '@/theme/colors';
-import { draftSource, readEditorDraft, removeEditorDraft, writeEditorDraft } from '../editor/editor-drafts';
+import { draftSource, editorDraftPayloads, readEditorDraft, removeEditorDraft, writeEditorDraft } from '../editor/editor-drafts';
 import { getRecentFile, documentRoot, storedUri, type RecentFile } from './recent-files';
 import { ADVANCED_IMAGE_TOOLS } from './image-tools';
+import { usePalette } from '@/theme/colors';
 
 const tabs: Record<string, string> = { crop: 'crop', rotate: 'rotate', flip_h: 'rotate', flip_v: 'rotate', brightness: 'adjust', contrast: 'adjust', saturation: 'adjust', temperature: 'adjust', filters: 'filters', export: 'export' };
 type Draft = { uri: string; size: number; mimeType: string };
@@ -106,6 +106,31 @@ export function useImageWorkspace(id: string) {
   return workspace;
 }
 
+/**
+ * Removes working copies left by a closed or crashed session: folders without a saved draft,
+ * and frames the draft no longer refers to. Open workspaces and files newer than `before` are kept.
+ */
+export async function pruneImageWorkspaces(before: number) {
+  const root = new Directory(Paths.document, '.editor-workspaces');
+  if (!root.exists) return;
+  const drafts = await editorDraftPayloads('workspace:');
+  for (const folder of root.list()) {
+    if (!(folder instanceof Directory)) continue;
+    const id = decodeURIComponent(folder.name);
+    if (workspaces.has(id)) continue;
+    const kept = new Set<string>();
+    try {
+      const saved = JSON.parse(drafts.get(`workspace:${id}`) ?? 'null') as WorkspaceDraft | null;
+      for (const uri of saved ? [saved.draft?.uri, ...(saved.files ?? [])] : []) if (typeof uri === 'string') kept.add(decodeURIComponent(uri.split('/').at(-1) ?? ''));
+    } catch { /* An unreadable draft keeps nothing. */ }
+    try {
+      const files = folder.list();
+      for (const file of files) if (file instanceof File && !kept.has(file.name) && (file.modificationTime ?? 0) < before) file.delete();
+      if (!kept.size && !folder.list().length) folder.delete();
+    } catch { /* The next launch retries. */ }
+  }
+}
+
 const NEUTRAL_EDITS = { rotation: 0, flipH: false, flipV: false, brightness: 0, contrast: 1, saturation: 1, warmth: 0, filter: 'none' };
 const ENCODINGS: Record<string, { format: 'jpeg' | 'png' | 'webp'; extension: string; mimeType: string }> = {
   png: { format: 'png', extension: '.png', mimeType: 'image/png' },
@@ -142,12 +167,12 @@ export async function saveImageWorkspace(workspace: ImageWorkspace) {
 }
 
 export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: string; current: string; disabled: boolean; onApply: () => Promise<void> }) {
+  const colors = usePalette();
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState('');
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const colors = usePalette();
   const sections = useMemo(() => IMAGE_SECTIONS.map(section => ({ title: section.title, data: section.tools.filter(tool => tool.id !== current && (tool.id in tabs || ADVANCED_IMAGE_TOOLS.has(tool.id) || ['text', 'edit_text'].includes(tool.id))).map(tool => ({ ...tool, available: true })) })).filter(section => section.data.length), [current]);
   async function choose(tool: string) {
     if (switching || disabled) return;
@@ -162,7 +187,7 @@ export function ImageWorkspaceTools({ id, current, disabled, onApply }: { id: st
     finally { if (mounted.current) setSwitching(false); }
   }
   return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={switching ? 'Applying changes' : 'Switch image tool'} disabled={disabled || switching} onPress={() => setOpen(true)} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', opacity: disabled || switching ? .4 : 1 }}>{switching ? <AppLoader accessibilityLabel="Applying changes" /> : <UniversalIcon ios="square.grid.3x3" android="apps" size={24} color={colors.systemBlue} />}</Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={switching ? 'Applying changes' : 'Switch image tool'} disabled={disabled || switching} onPress={() => setOpen(true)} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', opacity: disabled || switching ? .4 : 1 }}><BrandGlyph art="tools" size={36} loading={switching} color={colors.systemBlue} /></Pressable>
     <ToolboxSheet visible={open} title="Image tools" subtitle="Changes carry into the next tool. Save once from the image preview." sections={sections} footer={<ThemedText accessibilityRole={error ? 'alert' : undefined}>{error || 'Your original image stays unchanged.'}</ThemedText>} onClose={() => setOpen(false)} onAction={tool => void choose(tool)} />
   </>;
 }

@@ -14,6 +14,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
+import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { savePdfResult } from '../files/save-file';
 import { openPdfScreen } from './open-pdf-screen';
 import { PdfPreviewBody, PdfPreviewFooter, PdfPreviewStage, PdfPreviewToolbar } from './pdf-preview';
@@ -54,6 +55,12 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     onShare: () => result && shareNamedFile({ uri: result.uri, name: result.name, size: result.size, mimeType: 'application/pdf' }),
     save: { disabled: busy || !!result?.location || (!result && (!files.length || !nativeAvailable)), label: result?.location ? 'PDF saved' : 'Save PDF',
       onSave: () => result ? saveResult() : convert() } });
+  usePublishPdfHandoff(true, {
+    changed: !!result && !result.location,
+    saved: result?.location ? { uri: result.uri, name: result.name } : undefined,
+    blocked: busy ? 'Wait for the current task to finish, then choose another tool.' : !result ? 'Create the PDF first, then choose another tool.' : undefined,
+    write: outputUri => result ? copyPdf(result.uri, outputUri) : Promise.reject(new Error('Create the PDF first.')),
+  });
   useEffect(() => {
     mounted.current = true;
     const listener = nativeAvailable ? PdfEngine?.addListener('onConversionProgress', event => {

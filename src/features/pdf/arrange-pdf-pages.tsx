@@ -16,6 +16,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
+import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { savePdfResult } from '../files/save-file';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { openPdfResult } from './open-pdf-screen';
@@ -128,6 +129,14 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
     save: { disabled: busy || !!result?.location || (!result && (!available || !changed)), label: result?.location ? 'PDF saved' : reorder ? 'Save new page order' : 'Save rotated PDF',
       onSave: () => result ? saveResult() : save() } });
+  usePublishPdfHandoff(!!shareTarget, {
+    changed: !!result && !result.location,
+    saved: result?.location ? { uri: result.uri, name: result.name } : undefined,
+    blocked: busy ? 'Wait for the current task to finish, then choose another tool.' : undefined,
+    pending: !result && changed > 0 ? (reorder ? 'The new page order is not applied yet. Save PDF applies it.' : 'The page rotations are not applied yet. Save PDF applies them.') : undefined,
+    switched: !result && source && source.uri !== initialSelection?.files[0]?.uri ? { file: source } : undefined,
+    write: outputUri => shareTarget ? copyPdf(shareTarget.uri, outputUri) : Promise.reject(new Error('Choose a PDF first.')),
+  });
   async function save() {
     if (!source || !PdfEngine || locked.current || !changed) return;
     Keyboard.dismiss(); locked.current = true; setBusy(true); setError(''); setProgress(0); setPhase('Creating your PDF…');

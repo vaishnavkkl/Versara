@@ -11,7 +11,7 @@ import { railSections } from '@/components/tool-rail';
 import { ToolSurround, ToolSurroundCloseButton } from '@/components/tool-surround';
 import { HelpButton } from '@/components/help-button';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
-import { FocusChrome, focusLayout } from '@/components/focus-chrome';
+import { FocusChrome, useFocusLayout } from '@/components/focus-chrome';
 import { useToolRing } from '@/hooks/use-tool-ring';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { MediaPreview } from './media-preview';
@@ -58,10 +58,11 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
   const surrounding = ring.active;
   const rails = !surrounding && !focused;
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
+  const imageLayout = useFocusLayout(surrounding);
   useEffect(() => { onFocusChange?.(focused); }, [focused, onFocusChange]);
   const toggleFocus = () => { if (showImage && !surrounding && !toolboxOpen && !busy) setFocused(value => !value); };
 
-  return <Animated.View layout={focusLayout} style={[styles.screen, landscape && styles.row]}>
+  return <Animated.View layout={imageLayout} style={[styles.screen, landscape && styles.row]}>
     {landscape && rails && <FocusChrome edge="side"><MediaToolbar side="left" kind="image" busy={busy} landscape onToggleLandscape={onToggleLandscape} onAction={onAction} /></FocusChrome>}
     <View style={styles.screen}>
       {!focused && <FocusChrome edge="top"><ToolActionRow left={<>
@@ -76,7 +77,7 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
         </>}
         {surrounding && <>{onSurroundChange && <HelpButton />}<ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /></>}
       </>} /></FocusChrome>}
-      <Animated.View layout={focusLayout} style={styles.screen}>
+      <Animated.View layout={imageLayout} style={styles.screen}>
         <ToolSurround active={ring.active && !ring.closing} naming={ring.naming} tools={ringTools} disabled={busy} showClose={false} onAction={perform} onClose={ring.close} onHidden={ring.finishClose}>
           {showImage ? <MediaPreview key={`${file.uri}:${revision ?? ''}:${fitRevision}`} file={file} onClose={onClose} onTap={toggleFocus} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
         </ToolSurround>

@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { ThemedText } from '@/components/themed-text';
-import { UniversalIcon } from '@/components/universal-icon';
 import { usePalette } from '@/theme/colors';
-import { toolColors } from '@/theme/tool-colors';
 import { catalog, spacing as s, typography as t } from '@/theme/dashboard';
 import { hydrateSearchHistory, useSearchHistory } from './search-history';
 import { openSearchTool } from './open-search-tool';
 import { SEARCH_TOOLS, type SearchTool } from './search-tools';
+import { AppGlyph } from '@/components/app-glyph';
 
 const LIMIT = 3;
 
@@ -34,13 +32,10 @@ export function RecentToolsRow() {
     <ThemedText accessibilityRole="header" style={styles.title}>Recently used</ThemedText>
     <View style={styles.row}>
       {tools.map(tool => {
-        const tint = toolColors(tool.id, colors);
         return <Pressable key={tool.key} accessibilityRole="button" accessibilityLabel={`${tool.title}, ${tool.module}`} accessibilityState={{ busy: opening === tool.key, disabled: !!opening }}
           disabled={!!opening} onPress={() => void open(tool)}
           style={({ pressed }) => [styles.tile, { backgroundColor: pressed ? colors.catalogPressed : colors.catalogSurface, borderColor: colors.catalogBorder, opacity: opening && opening !== tool.key ? 0.5 : 1 }]}>
-          <View style={[styles.icon, tint.fill]}>
-            {opening === tool.key ? <AppLoader color={tint.glyph} /> : <UniversalIcon ios={tool.ios} android={tool.android} size={24} color={tint.glyph} />}
-          </View>
+          <AppGlyph id={tool.id} ios={tool.ios} android={tool.android} size={46} loading={opening === tool.key} />
           <ThemedText numberOfLines={2} style={[styles.label, { color: colors.label }]}>{tool.title}</ThemedText>
         </Pressable>;
       })}

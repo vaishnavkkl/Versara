@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
@@ -51,9 +52,17 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   private val onPlace by EventDispatcher<Map<String, Any>>()
   private val onTextChange by EventDispatcher<Map<String, Any>>()
   private val onSubmitText by EventDispatcher<Map<String, Any>>()
+  private val onPageSwipe by EventDispatcher<Map<String, Any>>()
 
   private class Box(val id: Int, val rect: RectF)
-  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean, val submitOnReturn: Boolean = false, val fontFile: String = "")
+  /**
+   * `box` (normalised left, top and right) opens the field over an existing paragraph at its width; `lineHeight` is in page points.
+   * `baseline` (normalised, NaN when unknown) puts the first line on the PDF's baseline, and the sample line's page width
+   * stretches the stand-in typeface to the PDF font's width so lines wrap where the saved text will.
+   */
+  private data class Sample(val text: String, val width: Float, val size: Float)
+  private class TextBox(val visible: Boolean, val text: String, val font: String, val size: Float, val color: Int, val underline: Boolean, val submitOnReturn: Boolean = false, val fontFile: String = "", val box: RectF? = null, val lineHeight: Float = 0f,
+    val baseline: Float = Float.NaN, val sample: Sample? = null)
   private class Mark(val erase: RectF?, val left: Int, val right: Int, val lines: List<String>, val font: String, val size: Float, val color: Int, val x: Float, val y: Float, val underline: Boolean, val scaleX: Float = 1f, val fontFile: String = "")
   private var marks = emptyList<Mark>()
   private val typefaces = HashMap<String, Typeface>()
@@ -112,7 +121,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     layer.addView(image); layer.addView(outlines); layer.addView(edit)
     addView(layer); addView(handle)
     edit.apply {
-      background = GradientDrawable().apply { setColor(0x1A1565FF); setStroke(max(1, (1 * density).toInt()), 0xFF1565FF.toInt(), 4 * density, 3 * density) }
+      background = GradientDrawable().apply { setColor(Color.TRANSPARENT); cornerRadius = 3 * density; setStroke(max(1, (1 * density).toInt()), 0xFF1565FF.toInt(), 4 * density, 3 * density) }
       includeFontPadding = false
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
       setSingleLine(true)
@@ -131,8 +140,10 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         override fun afterTextChanged(s: Editable?) {
-          if (!applyingText) onTextChange(mapOf("text" to (s?.toString() ?: "")))
+          if (!applyingText && textBox.visible) onTextChange(mapOf("text" to (s?.toString() ?: "")))
           layer.requestLayout()
+          // Follow the caret as typing grows the box past the keyboard or the screen edge.
+          if (!applyingText && edit.hasFocus()) post { ensureTextVisible() }
         }
       })
       setOnFocusChangeListener { _, focused -> if (focused) post { ensureTextVisible() } }
@@ -200,16 +211,28 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   fun setTextBox(json: String) {
     val value = runCatching {
       val item = JSONObject(json)
-      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"), item.optBoolean("submitOnReturn"), item.optString("fontFile"))
+      val box = item.optJSONObject("box")?.let {
+        val x = it.optDouble("x").toFloat(); val y = it.optDouble("y").toFloat()
+        RectF(x, y, x + it.optDouble("width").toFloat(), y)
+      }?.takeIf { it.width() > 0f && it.left in 0f..1f && it.top in 0f..1f }
+      val frame = item.optJSONObject("box")
+      val baseline = frame?.optDouble("baseline", Double.NaN)?.toFloat()?.takeIf { box != null && it in 0f..1f } ?: Float.NaN
+      val sample = frame?.optJSONObject("sample")?.let { Sample(it.optString("text").take(2000), it.optDouble("width").toFloat(), it.optDouble("size").toFloat()) }
+        ?.takeIf { box != null && it.text.isNotBlank() && it.width in 0.01f..1f && it.size in 1f..1000f }
+      TextBox(item.optBoolean("visible"), item.optString("text"), item.optString("font", "Helvetica"), item.optDouble("size", 16.0).toFloat(), item.optInt("color", 0x101020), item.optBoolean("underline"), item.optBoolean("submitOnReturn"), item.optString("fontFile"),
+        box, item.optDouble("lineHeight", 0.0).toFloat().coerceIn(0f, 1000f), baseline, sample)
     }.getOrDefault(TextBox(false, "", "Helvetica", 16f, 0x101020, false))
     val previous = textBox
     val opening = value.visible && !previous.visible
     textBox = value
+    // setSingleLine and inputType re-set the field's current text, which must not reach JS as typing.
+    applyingText = true
     if (opening || value.submitOnReturn != previous.submitOnReturn) {
       edit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or (if (value.submitOnReturn) 0 else InputType.TYPE_TEXT_FLAG_MULTI_LINE)
       edit.setSingleLine(value.submitOnReturn); edit.maxLines = if (value.submitOnReturn) 1 else 50
       edit.imeOptions = if (value.submitOnReturn) EditorInfo.IME_ACTION_DONE else EditorInfo.IME_FLAG_NO_ENTER_ACTION
     }
+    applyingText = false
     // Typing echoes the same text back from JS; only restyle when something actually changed.
     if (opening || value.font != previous.font || value.fontFile != previous.fontFile) edit.typeface = typefaceFor(value.font, value.fontFile)
     if (opening || value.underline != previous.underline) edit.paintFlags = if (value.underline) edit.paintFlags or Paint.UNDERLINE_TEXT_FLAG else edit.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
@@ -225,7 +248,8 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     }
     if (opening) edit.post { edit.requestFocus(); showKeyboard() }
     if (!value.visible && edit.hasFocus()) hideKeyboard()
-    if (opening || value.size != previous.size || value.font != previous.font || value.visible != previous.visible) { styleText(); layer.requestLayout() }
+    if (opening || value.size != previous.size || value.font != previous.font || value.visible != previous.visible || value.box != previous.box || value.lineHeight != previous.lineHeight ||
+      value.baseline.compareTo(previous.baseline) != 0 || value.sample != previous.sample) { styleText(); layer.requestLayout() }
     updateHandle()
   }
   fun setAnnotations(json: String) {
@@ -283,7 +307,10 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       if (left >= margin && left < width - margin && top >= margin && bottom <= height - margin) return
     }
     // Readable first: the line fills about 36dp of height; long lines start at the left edge.
-    val target = if (keep) zoom else min(36 * density / rh, height * 0.45f / rh).coerceIn(1.5f, 4f)
+    var target = if (keep) zoom else min(36 * density / rh, height * 0.45f / rh).coerceIn(1.5f, 4f)
+    // A wrapping paragraph stays fully in width so the ends of its lines remain visible while typing.
+    val frame = textBox.box
+    if (!keep && frame != null && textBox.lineHeight > 0f && rh > 1.6f * textBox.lineHeight * textScale()) target = min(target, width * 0.94f / max(1f, frame.width() * contentWidth)).coerceAtLeast(1f)
     val endTx = if (rw * target > width * 0.92f) width * 0.04f - rect.left * contentWidth * target else width / 2f - rect.centerX() * contentWidth * target
     val endTy = height * 0.38f - rect.centerY() * contentHeight * target
     val startZoom = zoom; val startTx = tx; val startTy = ty
@@ -369,7 +396,8 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   }
   private fun updateHandle() {
     val rect = textBoxRect()
-    if (rect == null || disabled) { handle.visibility = View.GONE; return }
+    // A paragraph keeps its place on the page; only new text can be dragged.
+    if (rect == null || disabled || textBox.box != null) { handle.visibility = View.GONE; return }
     handle.visibility = View.VISIBLE
     handle.translationX = rect.left - handle.width - 4 * density
     handle.translationY = rect.centerY() - handle.height / 2f
@@ -377,10 +405,28 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   private fun ensureTextVisible() {
     val rect = textBoxRect() ?: return
     val margin = 16 * density
-    if (rect.bottom > height - margin) ty -= rect.bottom - (height - margin)
-    if (rect.top < margin) ty += margin - rect.top
-    if (rect.right > width - margin && rect.width() < width) tx -= rect.right - (width - margin)
-    if (rect.left < margin + handle.width) tx += margin + handle.width - rect.left
+    // A box taller than the view keeps the caret's line in view instead of its top.
+    val layout = edit.layout
+    var top = rect.top; var bottom = rect.bottom
+    val line = layout?.getLineForOffset(max(0, edit.selectionEnd))
+    if (layout != null && line != null && rect.height() > height - 2 * margin) {
+      top = rect.top + (edit.paddingTop + layout.getLineTop(line)) * zoom
+      bottom = rect.top + (edit.paddingTop + layout.getLineBottom(line)) * zoom
+    }
+    if (bottom > height - margin) ty -= bottom - (height - margin)
+    if (top < margin) ty += margin - top
+    val leftMargin = margin + if (handle.visibility == View.VISIBLE) handle.width else 0
+    if (rect.width() <= width - leftMargin - margin) {
+      // The whole box fits: keep it on screen without moving while it stays visible.
+      if (rect.right > width - margin) tx -= rect.right - (width - margin)
+      if (rect.left < leftMargin) tx += leftMargin - rect.left
+    } else if (layout != null && line != null) {
+      // Wider than the screen: follow the caret only when it leaves the view, with room ahead so typing
+      // does not move the page on every letter.
+      val caret = rect.left + (edit.paddingLeft + layout.getPrimaryHorizontal(max(0, edit.selectionEnd))) * zoom
+      if (caret > width - margin) tx -= caret - width * 0.6f
+      else if (caret < leftMargin) tx += leftMargin + width * 0.1f - caret
+    }
     applyTransform()
   }
   private fun showKeyboard() {
@@ -491,6 +537,11 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       val index = if (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.actionIndex == 0) 1 else 0
       lastX = event.getX(index); lastY = event.getY(index)
     } else { lastX = event.x; lastY = event.y }
+    // At fit zoom a clearly horizontal one-finger drag turns the page, matching the markup canvas.
+    if (event.actionMasked == MotionEvent.ACTION_UP && panning && !transforming && zoom <= 1.01f) {
+      val dx = event.x - downX; val dy = event.y - downY
+      if (abs(dx) > 64 * density && abs(dx) > 1.5f * abs(dy)) onPageSwipe(mapOf("direction" to if (dx < 0) 1 else -1))
+    }
     if (touchOnText && !transforming) return super.dispatchTouchEvent(event)
     if (touchOnText && !childCancelled) {
       childCancelled = true
@@ -504,18 +555,34 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     if (contentWidth <= 0) return
     val scale = textScale()
     val size = max(1f, textBox.size * scale)
-    if (edit.textSize != size) {
+    val line = if (textBox.box != null && textBox.lineHeight > 0f) textBox.lineHeight * scale else size * 1.2f
+    if (edit.textSize != size || lineStep != line) {
       edit.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
-      edit.setLineSpacing(max(0f, size * 1.2f - edit.paint.getFontMetrics(null)), 1f)
+      edit.setLineSpacing(max(0f, line - edit.paint.getFontMetrics(null)), 1f)
+      lineStep = line
     }
-    val pad = max(1, (2 * scale).toInt())
+    val sample = textBox.sample
+    val fitKey = if (sample != null && textBox.box != null) "${sample.text}|${sample.width}|${sample.size}|$contentWidth|${textBox.font}|${textBox.fontFile}" else ""
+    if (fitKey != this.fitKey) {
+      this.fitKey = fitKey
+      val measured = if (sample == null || fitKey.isEmpty()) 0f else Paint(edit.paint).apply { textScaleX = 1f; textSize = sample.size * scale }.measureText(sample.text)
+      // Far-off ratios mean the sample does not represent the text; keep the typeface's own width then.
+      val fit = if (measured > 0f) sample!!.width * contentWidth / measured else 1f
+      edit.textScaleX = if (fit in 0.7f..1.4f) fit else 1f
+    }
+    // Room between the dashed frame and the glyphs, so the frame never cuts through letters.
+    val pad = max(3, (4 * scale).toInt())
     if (edit.paddingLeft != pad) edit.setPadding(pad, pad, pad * 3, pad)
-    val minimum = max((48 * scale).toInt(), 24)
-    val maximum = max(minimum, contentWidth - ((placement?.first ?: 0f) * contentWidth).toInt() + pad)
+    val box = textBox.box
+    // A paragraph wraps at its own width, like the saved PDF.
+    val minimum = if (box != null) (box.width() * contentWidth).toInt() + pad * 4 else max((48 * scale).toInt(), 24)
+    val maximum = if (box != null) minimum else max(minimum, contentWidth - ((placement?.first ?: 0f) * contentWidth).toInt() + pad)
     if (edit.minWidth != minimum) edit.minWidth = minimum
     if (edit.maxWidth != maximum) edit.maxWidth = maximum
   }
 
+  private var lineStep = 0f
+  private var fitKey = ""
   private fun baselineOffset(): Int = edit.paddingTop - edit.paint.fontMetricsInt.ascent
 
   fun dispose() {
@@ -537,14 +604,21 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       val w = MeasureSpec.getSize(widthMeasureSpec); val h = MeasureSpec.getSize(heightMeasureSpec)
       image.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
       outlines.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
-      edit.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+      if (textBox.box != null) edit.measure(MeasureSpec.makeMeasureSpec(edit.minWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+      else edit.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
       setMeasuredDimension(w, h)
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
       image.layout(0, 0, r - l, b - t)
       outlines.layout(0, 0, r - l, b - t)
       val point = placement
-      if (point != null) {
+      val box = textBox.box
+      if (box != null && textBox.visible) {
+        val left = (box.left * (r - l)).toInt() - edit.paddingLeft
+        val baseline = textBox.baseline
+        val top = if (baseline.isNaN()) (box.top * (b - t)).toInt() - edit.paddingTop else (baseline * (b - t)).toInt() - baselineOffset()
+        edit.layout(left, top, left + edit.measuredWidth, top + edit.measuredHeight)
+      } else if (point != null) {
         val left = (point.first * (r - l)).toInt() - edit.paddingLeft
         val top = (point.second * (b - t)).toInt() - baselineOffset()
         edit.layout(left, top, left + edit.measuredWidth, top + edit.measuredHeight)
@@ -556,7 +630,6 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
   private inner class Overlay(context: Context) : View(context) {
     private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x661565FF }
     private val selected = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF1565FF.toInt() }
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x221565FF }
     private val marked = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFFE0282E.toInt() }
     private val markedFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x66FF5A5F }
     private val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE0282E.toInt() }
@@ -593,7 +666,17 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
             canvas.drawRect(scratch, markedFill); canvas.drawRect(scratch, marked)
             drawCheck(canvas, scratch.right, scratch.top)
           }
-          else if (box.id == selectedId) { canvas.drawRect(scratch, fill); canvas.drawRect(scratch, selected) } else canvas.drawRect(scratch, outline)
+          else if (box.id == selectedId) {
+            // The on-page field draws its own frame over a paragraph.
+            if (textBox.visible && textBox.box != null) continue
+            // The line being edited keeps its text readable: a padded outline of marching dashes, no fill.
+            val pad = density * 4f / zoom
+            scratch.inset(-pad, -pad)
+            val dash = density * 4f / zoom
+            selected.pathEffect = DashPathEffect(floatArrayOf(dash, dash), dashPhase * dash / 4f)
+            canvas.drawRoundRect(scratch, pad, pad, selected)
+            editing = true
+          } else canvas.drawRect(scratch, outline)
         }
       }
       highlightRect?.let {
@@ -604,7 +687,12 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       }
       val point = placement
       if (adding && point != null && !textBox.visible) canvas.drawCircle(point.first * w, point.second * h, 4 * density / zoom, marker)
+      // About 12 frames a second while a line is open; stops as soon as nothing is selected.
+      if (editing && !disposed) { dashPhase = (dashPhase + 1) % 8; postInvalidateDelayed(80) }
+      editing = false
     }
+    private var editing = false
+    private var dashPhase = 0
     fun marksChanged() { shaderWidth = 0; invalidate() }
     /** Covered lines and applied text, drawn live so edits never round-trip through image files. */
     private fun drawMarks(canvas: Canvas, w: Float, h: Float) {
