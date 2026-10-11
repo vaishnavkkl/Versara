@@ -64,23 +64,23 @@ export const HANDOFF_STAGING_PREFIX = '.handoff-';
 
 /**
  * Renders an edited PDF for the next tool. The native editor only writes inside the saved PDF folder, so it renders
- * there under a hidden name and the file then moves to `outputUri`; nothing is left in the user's folder.
+ * there under a hidden name and copies the verified output to `outputUri`; nothing is left in the user's folder.
  */
 export async function renderPdf(outputUri: string, render: (stagedUri: string) => Promise<unknown>) {
   const library = savedPdfDirectory();
   library.create({ intermediates: true, idempotent: true });
   const stagedUri = new File(library, `${HANDOFF_STAGING_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`).uri;
-  let moved = false;
   try {
     await render(stagedUri);
     const staged = new File(stagedUri);
     if (!staged.exists || !staged.size) throw new Error('The PDF could not be prepared for the next tool.');
     const target = new File(outputUri);
+    target.parentDirectory.create({ intermediates: true, idempotent: true });
     if (target.exists) target.delete();
-    staged.move(target);
-    moved = true;
+    await staged.copy(target);
+    if (!target.exists || target.size !== staged.size) throw new Error('The PDF could not be prepared for the next tool. Your edits are still open.');
   } finally {
-    if (!moved) for (const uri of [stagedUri, `${stagedUri}.partial`]) { try { const file = new File(uri); if (file.exists) file.delete(); } catch { /* Startup cleanup retries. */ } }
+    for (const uri of [stagedUri, `${stagedUri}.partial`]) { try { const file = new File(uri); if (file.exists) file.delete(); } catch { /* Startup cleanup retries. */ } }
   }
 }
 
@@ -89,6 +89,7 @@ export async function copyPdf(uri: string, outputUri: string) {
   const source = new File(uri);
   if (!source.exists) throw new Error('This PDF is no longer available. Open it again from your files.');
   const target = new File(outputUri);
+  target.parentDirectory.create({ intermediates: true, idempotent: true });
   if (target.exists) target.delete();
   await source.copy(target);
 }

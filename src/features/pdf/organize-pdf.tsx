@@ -1,3 +1,4 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { forgetRecentUri } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
@@ -25,7 +26,6 @@ import { PdfPreviewFooter } from './pdf-preview';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
 import { PdfSourceCard } from './pdf-source-card';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
-import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
 type Result = PdfResult & { name: string; part: number; location?: string };
@@ -211,17 +211,17 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
       {!merge && sources.length > 0 && <>
-        <View style={responsiveToolbarStyles.row}>{splitModes.map(item => <EditorOption key={item.id} compact label={item.label} selected={splitMode === item.id} disabled={busy} onPress={() => { setSplitMode(item.id); if (item.id !== 'each') setOptionsOpen(true); }} />)}</View>
+        <EditorActionBar >{splitModes.map(item => <EditorOption key={item.id} compact label={item.label} selected={splitMode === item.id} disabled={busy} onPress={() => { setSplitMode(item.id); if (item.id !== 'each') setOptionsOpen(true); }} />)}</EditorActionBar>
         <ThemedText accessibilityLiveRegion="polite" style={styles.body}>{rangeError || `${ranges.length} output PDFs · ${ranges.reduce((sum, range) => sum + range.end - range.start + 1, 0)} pages`}</ThemedText>
       </>}
       {busy && <><AppLoader /><ThemedText accessibilityLiveRegion="polite" style={styles.body}>{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving and verifying PDFs...' : `${phase}${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}`}</ThemedText></>}
-      <View style={responsiveToolbarStyles.row}>
+      <EditorActionBar >
         <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} disabled={busy} onPress={() => setOptionsOpen(true)} />
         <EditorOption compact label={sources.length ? merge ? 'Add PDFs' : 'Change PDF' : 'Choose PDF'} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} disabled={busy || !available || (merge && sources.length >= 30)} onPress={() => void choose()} />
-        <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}>
+
           {busy && (progress !== null || phase.startsWith('Reading PDF details')) ? <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} /> : <ToolButton title={merge ? 'Merge PDFs' : 'Split PDF'} onPress={process} disabled={!canRun} />}
-        </View>
-      </View>
+
+      </EditorActionBar>
     </PdfPreviewFooter>
   </View>;
 }

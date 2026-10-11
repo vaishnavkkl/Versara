@@ -103,11 +103,12 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     field.returnKeyType = .done
     field.autocapitalizationType = .sentences
     placeholder.text = "Type here"
-    placeholder.textColor = UIColor.gray.withAlphaComponent(0.6)
+    placeholder.textColor = UIColor(red: 0.26, green: 0.33, blue: 0.42, alpha: 1)
     field.addSubview(placeholder)
     field.backgroundColor = .clear
     field.layer.borderColor = UIColor(red: 0.08, green: 0.4, blue: 1, alpha: 1).cgColor
-    field.layer.borderWidth = 0.5
+    field.tintColor = UIColor(red: 0.08, green: 0.4, blue: 1, alpha: 1)
+    field.layer.borderWidth = 2
     field.accessibilityLabel = "Text to add to the PDF"
     page.addSubview(field)
 
@@ -384,7 +385,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
       let top = textBox.baseline.map { $0 * height - firstBaseline - pad } ?? box.minY * height - pad
       field.frame = CGRect(x: box.minX * width - pad, y: top, width: frameWidth, height: max(lineHeight + pad * 2, fitted))
       placeholder.frame = CGRect(x: pad, y: pad + firstBaseline - fieldFont.ascender, width: frameWidth, height: fieldFont.lineHeight)
-      field.layer.borderWidth = 1 / max(1, scroll.zoomScale)
+      field.layer.borderWidth = 2 / max(1, scroll.zoomScale)
       updateHandle()
       return
     }
@@ -398,7 +399,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
     field.textContainerInset = UIEdgeInsets(top: pad, left: pad, bottom: pad, right: pad * 3)
     field.frame = CGRect(x: x - pad, y: baseline - firstBaseline - pad, width: frameWidth, height: CGFloat(max(1, lines.count)) * lineHeight + pad * 2)
     placeholder.frame = CGRect(x: pad, y: pad + firstBaseline - fieldFont.ascender, width: frameWidth, height: fieldFont.lineHeight)
-    field.layer.borderWidth = 1 / max(1, scroll.zoomScale)
+    field.layer.borderWidth = 2 / max(1, scroll.zoomScale)
     updateHandle()
   }
 
@@ -424,7 +425,7 @@ final class PdfEditCanvasView: ExpoView, UIScrollViewDelegate, UITextViewDelegat
   func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
     overlay.zoom = scale
     overlay.setNeedsDisplay()
-    field.layer.borderWidth = 1 / max(1, scale)
+    field.layer.borderWidth = 2 / max(1, scale)
   }
   func scrollViewDidScroll(_ scrollView: UIScrollView) { updateHandle() }
 

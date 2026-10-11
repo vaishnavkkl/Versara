@@ -971,7 +971,6 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
         require(!lines.front().empty(), "Start the text on the first line.", "PDF_INVALID_TEXT");
         auto original = FPDFTextObj_GetFont(object);
         require(original != nullptr, "This text uses an unsupported font.", "PDF_UNSUPPORTED_TEXT");
-        const auto fallback = similarFont(original);
         const auto mark = verification.size();
         std::vector<FPDF_PAGEOBJECT> created;
         bool usable = true;
@@ -992,12 +991,7 @@ static int apply(FPDF_DOCUMENT doc, FPDF_PAGE page, int pageNumber, const Json& 
           usable = false;
         }
         if (!usable) {
-          verification.resize(mark);
-          if (std::find(created.begin(), created.end(), object) == created.end()) created.push_back(object);
-          for (auto item : created) { if (FPDFPage_RemoveObject(page, item)) FPDFPageObj_Destroy(item); }
-          const auto wrapped = flow.rest > 0 ? reflow(newText(doc, fallback, fontSize)) : lines;
-          writeLines(page, wrapped, matrix, fontSize, nullptr, [&] { return newText(doc, fallback, fontSize); }, r, g, b, a, underlined, verification, nullptr, flow);
-          ++fallbacks;
+          throw Failure("PDF_FONT_UNSUPPORTED", "The original font cannot preserve these characters. Choose a font in Formatting or edit a smaller text fragment.");
         }
       } else {
         const auto fontFile = command.value("fontFile", std::string());
@@ -1232,10 +1226,12 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
       Page page(doc, number);
       const double pageWidth = FPDF_GetPageWidthF(page.value), pageHeight = FPDF_GetPageHeightF(page.value);
       require(std::isfinite(pageWidth) && std::isfinite(pageHeight) && pageWidth > 0 && pageHeight > 0, "This page has invalid dimensions.");
-      const double scale = std::min(1440.0 / std::max(pageWidth, pageHeight), std::sqrt(1600000.0 / (pageWidth * pageHeight)));
+      const bool draft = options.value("draftPreview", false);
+      const double scale = std::min((draft ? 1080.0 : 1440.0) / std::max(pageWidth, pageHeight), std::sqrt((draft ? 900000.0 : 1600000.0) / (pageWidth * pageHeight)));
       const int width = std::max(1, int(pageWidth * scale)), height = std::max(1, int(pageHeight * scale));
       Json objects = Json::array();
       int nested = 0;
+      std::map<FPDF_FONT, int> fontIds;
       if (options.value("includeObjects", true)) { TextPage text(page.value);
         const int objectCount = FPDFPage_CountObjects(page.value);
         require(objectCount <= 20000, "This page is too complex for text editing.");
@@ -1257,7 +1253,9 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
             origin = Json{{"x", double(dx) / (width * 8)}, {"y", double(dy) / (height * 8)}};
           }
           unsigned r = 16, g = 16, b = 32, a = 255; FPDFPageObj_GetFillColor(object, &r, &g, &b, &a);
-          objects.push_back({{"font", similarFont(FPDFTextObj_GetFont(object))}, {"color", (r << 16) | (g << 8) | b}, {"id", i}, {"text", value}, {"size", size}, {"editable", editable(object)}, {"bounds", bounds(page.value, object, width, height)}, {"origin", origin}});
+          const auto sourceFont = FPDFTextObj_GetFont(object);
+          if (!fontIds.count(sourceFont)) fontIds[sourceFont] = int(fontIds.size());
+          objects.push_back({{"fontId", fontIds.at(sourceFont)}, {"font", similarFont(sourceFont)}, {"color", (r << 16) | (g << 8) | b}, {"id", i}, {"text", value}, {"size", size}, {"editable", editable(object)}, {"bounds", bounds(page.value, object, width, height)}, {"origin", origin}});
           require(objects.size() <= 2000, "This page contains too many text fragments to edit on a phone.");
         }
       }
@@ -1325,6 +1323,9 @@ std::string runEditor(const std::string& request, const std::string& cacheRoot,
   } catch (const Failure& error) {
     if (!temporary.empty()) { std::error_code ignored; fs::remove(temporary, ignored); }
     return Json{{"code", error.code}, {"error", error.what()}}.dump();
+  } catch (const fs::filesystem_error&) {
+    if (!temporary.empty()) { std::error_code ignored; fs::remove(temporary, ignored); }
+    return Json{{"code", "PDF_FILE_UNAVAILABLE"}, {"error", "The working PDF or preview folder is no longer available. Reopen the PDF and try again."}}.dump();
   } catch (const std::exception&) {
     if (!temporary.empty()) { std::error_code ignored; fs::remove(temporary, ignored); }
     return Json{{"code", "PDF_EDIT_FAILED"}, {"error", "Could not edit this PDF. Check the file and available storage."}}.dump();

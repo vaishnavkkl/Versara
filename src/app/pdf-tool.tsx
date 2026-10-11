@@ -4,7 +4,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { showDialog } from '@/components/app-dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
-import { ScreenHeader } from '@/components/screen-header';
+import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { useHeaderShare } from '@/components/header-share';
 import { PdfToolLayoutContext } from '@/features/pdf/pdf-tool-layout';
 import { ToolButton } from '@/components/tool-button';
@@ -26,9 +26,8 @@ import { PDF_SECTIONS } from '@/constants/pdf-methods';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { recordToolUse } from '@/features/search/search-history';
 import { ControlHelpProvider, useControlHelp } from '@/components/control-help';
-import { HelpButton } from '@/components/help-button';
 import { HelpPressable } from '@/components/help-pressable';
-import { BrandGlyph, HeaderGlyph } from '@/components/app-glyph';
+import { BrandGlyph } from '@/components/app-glyph';
 
 const pdfMethods = PDF_SECTIONS.flatMap(section => [...section.tools]);
 
@@ -44,21 +43,18 @@ function PdfToolContent() {
   const colors = usePalette();
   const mounted = useRef(true);
   const [focused, setFocused] = useState(false);
+  const [surrounding, setSurrounding] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
   const discardDraft = useRef<() => Promise<void>>(() => Promise.resolve());
   const registerDiscard = useCallback((action: () => Promise<void>) => { discardDraft.current = action; }, []);
   const [landscape, setLandscape] = useState(openedLandscape === '1');
-  const [pageRows, setPageRows] = useState(0);
-  const registerPageRow = useCallback(() => {
-    setPageRows(count => count + 1);
-    return () => setPageRows(count => count - 1);
-  }, []);
-  const layout = useMemo(() => ({ landscape, setLandscape, registerPageRow }), [landscape, registerPageRow]);
+  const layout = useMemo(() => ({ landscape, setLandscape }), [landscape]);
   const share = useHeaderShare();
   const help = useControlHelp();
   const handoff = usePdfHandoffState();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const switchingRef = useRef(false);
   // A carried working copy saved from this screen becomes the original for later tools.
   const [workingSaved, setWorkingSaved] = useState<{ uri: string; name: string } | null>(null);
   const carriedUnsaved = !!session?.carried && !workingSaved && !handoff?.saved;
@@ -80,6 +76,7 @@ function PdfToolContent() {
   }, [id, session]);
   function leave() { Keyboard.dismiss(); if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   function close() {
+    if (switchingRef.current) return;
     if (help?.close()) return;
     if (session?.tool === 'viewer' && handleReaderBack()) return;
     if (!leaveUnsaved) { leave(); return; }
@@ -97,7 +94,7 @@ function PdfToolContent() {
     return () => subscription.remove();
   }, [leaveUnsaved, switching]);
   function chooseTool(next: string) {
-    if (!session || switching) return;
+    if (!session || switchingRef.current) return;
     const current = currentPdfHandoff();
     if (current?.blocked) { showDialog('Continue with one PDF', current.blocked, undefined, { ios: 'square.grid.2x2', android: 'apps' }); return; }
     if (!current) { showDialog('Create the PDF first', 'Finish this tool, then continue with another tool.', undefined, { ios: 'square.grid.2x2', android: 'apps' }); return; }
@@ -113,7 +110,9 @@ function PdfToolContent() {
   async function switchTool(next: string) {
     const method = pdfMethods.find(item => item.id === next);
     const current = currentPdfHandoff();
-    if (!session || !method || !current || switching) return;
+    if (!session || !method || !current || switchingRef.current) return;
+    if (current.blocked) { showDialog('Continue with one PDF', current.blocked); return; }
+    switchingRef.current = true;
     Keyboard.dismiss();
     setSwitching(true);
     const directory = createImportDirectory();
@@ -139,7 +138,7 @@ function PdfToolContent() {
     } catch (cause) {
       disposeImports(directory);
       if (mounted.current) showDialog('Could not open the tool', (cause as Error).message || 'Please try again.', undefined, { ios: 'exclamationmark.triangle', android: 'warning' });
-    } finally { if (mounted.current) setSwitching(false); }
+    } finally { switchingRef.current = false; if (mounted.current) setSwitching(false); }
   }
   async function saveWorkingCopy() {
     if (!session) return;
@@ -155,17 +154,16 @@ function PdfToolContent() {
     } catch (cause) { if (output.exists) output.delete(); throw cause; }
   }
   // Tools without their own changes still save what earlier tools carried in.
-  const saveAction = carriedUnsaved && !handoff?.changed ? { label: 'Save PDF', onPress: saveWorkingCopy } : share?.save;
+  const saveAction = carriedUnsaved && !handoff?.changed ? { label: 'Save PDF', onPress: saveWorkingCopy } : undefined;
   const tool = session?.tool;
   const toolsButton = !!session && tool !== 'viewer' && <HelpPressable accessibilityRole="button" accessibilityLabel="All tools" accessibilityHint="Continue with this PDF in another tool" accessibilityState={{ disabled: switching, busy: switching }} disabled={switching} onPress={() => { Keyboard.dismiss(); setToolsOpen(true); }} hitSlop={4} style={({ pressed }) => [styles.orientation, { opacity: pressed ? .6 : 1 }]}><BrandGlyph art="tools" size={36} loading={switching} color={colors.systemBlue} /></HelpPressable>;
   return <PdfToolLayoutContext.Provider value={layout}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !leaveUnsaved && !switching, orientation: landscape ? 'landscape' : 'portrait' }} />
-    {!focused && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close} share={share} save={saveAction} leading={toolsButton}>
-      <HelpButton tool={session?.tool} intercept={session?.tool === 'viewer' ? handleReaderHelp : undefined} />
-      {!pageRows && <HelpPressable accessibilityRole="button" accessibilityLabel={landscape ? 'Switch to portrait' : 'Switch to landscape'} accessibilityState={{ selected: landscape }} onPress={() => { Keyboard.dismiss(); setLandscape(value => !value); }} style={({ pressed }) => [styles.orientation, { opacity: pressed ? .6 : 1 }]}><HeaderGlyph id="orientation" ios="rotate.right" android="screen-rotation" selected={landscape} /></HelpPressable>}
-    </ScreenHeader>}
+    {!focused && !surrounding && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close} share={share} save={saveAction} leading={toolsButton}
+      tool={session?.tool} helpIntercept={session?.tool === 'viewer' ? handleReaderHelp : undefined}
+      menu={[{ id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', disabled: switching, icon: { ios: 'rotate.right', android: 'screen-rotation' }, onPress: () => setLandscape(value => !value) }]} />}
     {!session ? <View style={styles.empty}><ThemedText>Select a file from the PDF tools to get started.</ThemedText><ToolButton title="Back to PDF tools" onPress={close} /></View>
-      : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} />
+      : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} onSurroundChange={setSurrounding} />
       : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' || tool === 'replace_text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : tool === 'replace_text' ? 'replace' : 'edit'} />
       : tool === 'merge' || tool === 'split' ? <OrganizePdf operation={tool} initialSelection={session} />
       : tool === 'extract' || tool === 'delete' ? <EditPdfPages operation={tool} initialSelection={session} />

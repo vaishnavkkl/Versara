@@ -12,9 +12,9 @@ import { usePalette } from '@/theme/colors';
 import { brandFont, catalog, radius, spacing as s, typography as t } from '@/theme/dashboard';
 
 const MODULES = [
-  { title: 'PDF', description: 'Read, edit & organize documents', ios: 'doc.richtext', android: 'picture-as-pdf', href: '/(modules)/documents', tone: 'pdf' },  { title: 'Image', description: 'Edit photos & create PDFs', ios: 'photo', android: 'image', href: '/(modules)/image', tone: 'image' },
-  { title: 'Edited files', description: 'Pick up where you left off', ios: 'folder', android: 'folder-open', href: '/edited-files', tone: 'files' },
-  { title: 'Privacy', description: 'Redaction & safer sharing', ios: 'lock.shield', android: 'verified-user', href: '/(modules)/privacy', tone: 'privacy' },
+  { title: 'PDF', description: 'Edit & organize PDFs', ios: 'doc.richtext', android: 'picture-as-pdf', href: '/(modules)/documents', tone: 'pdf' },  { title: 'Image', description: 'Crop & enhance photos', ios: 'photo', android: 'image', href: '/(modules)/image', tone: 'image' },
+  { title: 'Edited files', description: 'Your saved work', ios: 'folder', android: 'folder-open', href: '/edited-files', tone: 'files' },
+  { title: 'Privacy', description: 'Hide private details', ios: 'lock.shield', android: 'verified-user', href: '/(modules)/privacy', tone: 'privacy' },
 ] as const;
 function welcomePending() { try { return localStorage.getItem('versara.guide.dismissed') !== '1'; } catch { return true; } }
 
@@ -22,8 +22,15 @@ export default function HomeScreen() {
   const colors = usePalette();
   const [grid] = useLayoutPreference();
   const { width, fontScale } = useWindowDimensions();
-  const useGrid = grid && width >= 360 && fontScale < 1.4;
+  const useGrid = grid;
   const columns = useGrid ? 2 : 1;
+  const cardLayoutKey = `${width}:${fontScale}:${useGrid}`;
+  const [cardSizes, setCardSizes] = useState<{ key: string; heights: Record<string, number> }>({ key: '', heights: {} });
+  const cardHeight = cardSizes.key === cardLayoutKey ? Math.max(0, ...Object.values(cardSizes.heights)) + 2 * s.md : undefined;
+  const measureCard = (title: string, height: number) => setCardSizes(previous => {
+    const heights = previous.key === cardLayoutKey ? previous.heights : {};
+    return heights[title] === height ? previous : { key: cardLayoutKey, heights: { ...heights, [title]: height } };
+  });
   const [editedCount, setEditedCount] = useState(0);
   useEffect(() => {
     let mounted = true;
@@ -37,12 +44,11 @@ export default function HomeScreen() {
   return <ScrollView contentInsetAdjustmentBehavior="never" style={{ backgroundColor: colors.systemBackground }} contentContainerStyle={styles.scroll}>
     <View style={styles.content}>
       <View style={styles.header}>
-        <ThemedText style={styles.brandName}>Versara</ThemedText>
+        <View style={styles.grow}>
+          <ThemedText accessibilityRole="header" style={styles.brandName}>Versara</ThemedText>
+          <ThemedText style={[styles.caption, { color: colors.secondaryLabel }]}>Your everyday PDF & image tools</ThemedText>
+        </View>
         <HelpButton />
-      </View>
-      <View style={styles.intro}>
-        <ThemedText accessibilityRole="header" style={styles.title}>Your workspace</ThemedText>
-        <ThemedText style={[styles.subtitle, { color: colors.secondaryLabel }]}>PDFs, documents and images, made simple.</ThemedText>
       </View>
       <Pressable accessibilityRole="button" accessibilityLabel="Search tools and files" onPress={() => router.navigate('/(tabs)/search')}
         style={({ pressed }) => [styles.search, { backgroundColor: pressed ? colors.catalogPressed : colors.catalogSurface, borderColor: colors.catalogBorder }]}>
@@ -51,13 +57,14 @@ export default function HomeScreen() {
       </Pressable>
       <View style={styles.modules}>
         <View style={styles.sectionHeader}>
-          <ThemedText accessibilityRole="header" style={styles.sectionTitle}>Your tools</ThemedText>
-          <LayoutToggle gridAvailable={width >= 360 && fontScale < 1.4} />
+          <ThemedText accessibilityRole="header" style={styles.sectionTitle}>Browse all tools</ThemedText>
+          <LayoutToggle />
         </View>
         <View style={styles.grid}>
           {MODULES.filter((_, index) => index % columns === 0).map((first, row) => <View key={first.title} style={styles.row}>
             {MODULES.slice(row * columns, row * columns + columns).map(module => <ModuleCard key={module.title} {...module}
-              detail={module.tone === 'files' && editedCount ? `${editedCount} saved` : undefined}
+              description={module.tone === 'files' && editedCount ? `${editedCount} saved files` : module.description}
+              onContentHeight={height => measureCard(module.title, height)} style={{ minHeight: cardHeight }}
               variant={useGrid ? 'dashboard' : 'list'} onPress={() => router.navigate(module.href)} />)}
           </View>)}
         </View>
@@ -81,13 +88,11 @@ export default function HomeScreen() {
 }
 const styles = StyleSheet.create({
   scroll: { paddingHorizontal: s.xl, paddingTop: s.sm, paddingBottom: s.section },
-  content: { width: '100%', maxWidth: 720, alignSelf: 'center', gap: s.xl },
+  content: { width: '100%', maxWidth: 720, alignSelf: 'center', gap: s.lg },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: s.md },
   brandName: { ...t.heading, ...brandFont.label, letterSpacing: -0.5 },
-  intro: { gap: s.xs },
-  title: { ...t.workspaceTitle },
   subtitle: { ...t.body },
-  search: { minHeight: 56, borderRadius: radius.md, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: s.lg, flexDirection: 'row', gap: s.md, alignItems: 'center' },
+  search: { minHeight: catalog.touchTarget, borderRadius: radius.md, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: s.lg, flexDirection: 'row', gap: s.md, alignItems: 'center' },
   grow: { flex: 1, minWidth: 0 },
   modules: { gap: s.md },
   sectionHeader: { flexDirection: 'row', gap: s.sm, justifyContent: 'space-between', alignItems: 'center' },

@@ -1,3 +1,4 @@
+import 'expo-sqlite/localStorage/install';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { create } from 'zustand';
 import { UniversalIcon } from './universal-icon';
@@ -28,7 +29,7 @@ export function LayoutToggle({ gridAvailable = true }: { gridAvailable?: boolean
   const [grid, setGrid] = useLayoutPreference();
   const colors = usePalette();
   return <View style={[styles.container, { backgroundColor: colors.fieldSurface }]}>
-    {[false, true].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityLabel={value ? 'Show as grid' : 'Show as list'} accessibilityHint={value && !gridAvailable ? 'List layout keeps tools readable at this screen or text size.' : undefined} accessibilityState={{ selected: (grid && gridAvailable) === value, disabled: value && !gridAvailable }} disabled={value && !gridAvailable} onPress={() => setGrid(value)}
+    {[true, false].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityLabel={value ? 'Show as grid' : 'Show as list'} accessibilityHint={value && !gridAvailable ? 'List layout keeps files readable at this screen or text size.' : undefined} accessibilityState={{ selected: (grid && gridAvailable) === value, disabled: value && !gridAvailable }} disabled={value && !gridAvailable} onPress={() => setGrid(value)}
       style={({ pressed }) => [styles.button, { backgroundColor: (grid && gridAvailable) === value ? colors.catalogSurface : 'transparent', opacity: value && !gridAvailable ? 0.35 : pressed ? 0.65 : 1 }]}>
       <UniversalIcon ios={value ? 'square.grid.2x2' : 'list.bullet'} android={value ? 'grid-view' : 'view-list'} size={18} color={(grid && gridAvailable) === value ? colors.systemBlue : colors.secondaryLabel} />
     </Pressable>)}

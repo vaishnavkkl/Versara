@@ -8,7 +8,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { ThemedText } from '@/components/themed-text';
 import { usePalette } from '@/theme/colors';
 
-export type PdfTextObject = { id: number; text: string; editable: boolean; size: number; font?: string; color?: number; bounds: { x: number; y: number; width: number; height: number } | null;
+export type PdfTextObject = { id: number; text: string; editable: boolean; size: number; font?: string; fontId?: number; color?: number; bounds: { x: number; y: number; width: number; height: number } | null;
   /** Normalised start of the text's baseline; missing from older native builds. */
   origin?: { x: number; y: number } | null };
 type Props = {

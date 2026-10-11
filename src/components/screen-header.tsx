@@ -8,6 +8,7 @@ import type { HeaderShareAction } from './header-share';
 import { usePalette } from '@/theme/colors';
 import { spacing as s, typography as t } from '@/theme/dashboard';
 import { HeaderGlyph } from './app-glyph';
+import { EditorMenu, type EditorMenuItem } from './editor-menu';
 
 type Props = { title: string; onBack: () => void; backLabel?: string; variant?: 'back' | 'close'; children?: ReactNode;
   /** Tool screens share their current edited file from the right. `null` shows the button disabled. */
@@ -17,10 +18,11 @@ type Props = { title: string; onBack: () => void; backLabel?: string; variant?: 
   /** Extra actions shown beside the close button in the close variant. */
   trailing?: ReactNode;
   /** Extra actions shown after the back button in the back variant. */
-  leading?: ReactNode };
+  leading?: ReactNode;
+  menu?: EditorMenuItem[] };
 
 /** Screens go back from the left; file previews and sheets close from the right. The title stays centred. */
-export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing, leading }: Props) {
+export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing, leading, menu }: Props) {
   const colors = usePalette();
   const close = variant === 'close';
   const [sharing, setSharing] = useState(false);
@@ -57,10 +59,15 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
     style={({ pressed }) => [styles.back, { opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
     <HeaderGlyph id="save" ios="square.and.arrow.down" android="mdi:content-save-outline" loading={saving} />
   </HelpPressable>;
+  const overflow = menu !== undefined && <EditorMenu iconOnly label="More options" icon={{ ios: 'ellipsis', android: 'more-vert' }} items={[
+    ...(share !== undefined ? [{ id: 'share', label: share?.label ?? 'Share', disabled: shareDisabled, icon: { ios: 'square.and.arrow.up' as const, android: 'share' as const }, onPress: () => void runShare() }] : []),
+    ...(save ? [{ id: 'save', label: save.label ?? 'Save', disabled: saveDisabled, icon: { ios: 'square.and.arrow.down' as const, android: 'save' as const }, onPress: () => void runSave() }] : []),
+    ...menu,
+  ]} />;
   return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
     <View style={[styles.side, styles.start]}>{close ? children : <>{button}{leading}</>}</View>
     <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>
-    <View style={[styles.side, styles.end]}>{close ? <>{trailing}{button}</> : <>{children}{saveButton}{shareButton}</>}</View>
+    <View style={[styles.side, styles.end]}>{close ? <>{trailing}{overflow}{button}</> : <>{children}{menu !== undefined ? overflow : <>{saveButton}{shareButton}</>}</>}</View>
   </View>;
 }
 

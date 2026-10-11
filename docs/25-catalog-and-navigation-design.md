@@ -31,3 +31,33 @@ The connected Android app loaded the updated dashboard. Inspection of native acc
 Screen capture returned black and Android reported the physical display OFF, even while its activity was resumed. Visual review and touch/animation verification therefore remain unconfirmed. A native layout tree is not a substitute for a screenshot or release-build frame profiling. iOS presentation and motion also need device review.
 
 Manual acceptance: inspect both themes and grid/list, search for a tool and clear an empty result, open/dismiss a toolbox and select an action once, switch tabs rapidly and reverse mid-flight, rotate, enable Reduce Motion, and check large text. Measure frame times in a release build on the slowest supported device before claiming smoothness guarantees.
+
+## Dashboard discoverability follow-up ? October 12, 2026
+
+User feedback described Home as blank or overly spacious. Source review found a separate brand header and generic workspace introduction, tall category cards, and a recent-tools section that disappears for new users. These are discoverability and hierarchy issues to address in the interface; the feedback does not establish a user knowledge problem.
+
+Home combines the brand and purpose into one compact header, keeps search directly underneath, and opens the four main categories under Browse all tools. Quick actions were removed following user review. Recent tools remain below the categories, with no empty spacer tiles.
+
+Dashboard-only cards use a 128-point minimum instead of the general catalog's 152 points, and screen section spacing is reduced from 20 to 16 points. Text can grow; action labels are not truncated. Recents stack on narrow screens or at larger font scales. Existing dark/light palette, touch targets, Help, introduction dismissal and grid/list preference remain in use.
+
+Validation: Expo lint, TypeScript and diff whitespace checks passed. No automated tests or web builds ran. This was a source/layout review, not screenshot or on-device verification. Manual review should cover a fresh install, both themes, large text, grid/list, all four picker launches and cancellation, and returning Home after using a tool. Ask the reporting user whether the first action is now easier to find.
+
+
+## Card artwork and equal sizing follow-up
+
+The four Home category cards now measure their natural content and share the largest height. Measurements are bounded to four entries and refreshed for width, font scale and grid/list changes. Widths remain equal within each row. Edited-file counts occupy the description instead of adding a taller footer. Shared tool cards use smaller padding and a 40-point glyph to remove unused space.
+
+Following user review, the four categories use their original BrandGlyph icons again. The added ModuleArtwork illustrations were removed. Equal card sizing, compact spacing, tool destinations and file-picker behavior remain unchanged.
+
+The updated Android Highlight screen was visually inspected on the connected phone: the new settings entry, preview and save actions were visible without overlap. The active document was left in place, so Home, other tools, landscape, large text and iOS still need visual review. Expo lint, TypeScript and whitespace checks passed. No automated tests or web builds were run.
+
+
+## Grid/list selection follow-up
+
+Home and PDF/image tool catalogs now honor the selected layout at every width
+and font scale, instead of disabling Grid below 360 points or at 1.4x text.
+Cards continue to wrap text and grow vertically. Grid is the default when no
+preference exists, and the user's explicit choice persists. The toggle imports
+the Expo SQLite localStorage installer directly rather than relying on the
+theme's side effect. Grid is the first toggle option. No release APK or device
+interaction was run for this change; verify both selections on the affected phone.

@@ -163,9 +163,9 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
 /** Closing stays available in help mode instead of showing a tool-name bubble. */
 export function ToolSurroundCloseButton({ onPress, disabled = false, compact = false }: { onPress: () => void; disabled?: boolean; compact?: boolean }) {
   const colors = usePalette();
-  return <ClosePressable accessibilityRole="button" accessibilityLabel="Hide tools around the page" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [compact ? styles.compactClose : styles.closeButton, { backgroundColor: colors.accentSurface, borderColor: colors.borderHighlight, opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
+  return <ClosePressable accessibilityRole="button" accessibilityLabel="Close tools around the preview" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [compact ? styles.compactClose : styles.closeButton, { backgroundColor: colors.accentSurface, borderColor: colors.borderHighlight, opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
     <UniversalIcon ios="xmark.circle.fill" android="close" size={20} color={colors.systemBlue} />
-    {!compact && <ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>Hide tools</ThemedText>}
+    {!compact && <ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>Close</ThemedText>}
   </ClosePressable>;
 }
 

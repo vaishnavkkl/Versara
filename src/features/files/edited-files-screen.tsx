@@ -6,13 +6,14 @@ import { router } from 'expo-router';
 import { AppLoader } from '@/components/app-loader';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { ScreenHeader } from '@/components/screen-header';
+import { EditorMenu } from '@/components/editor-menu';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { promptFileName, showDialog } from '@/components/app-dialog';
 import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { editedFileExists, listEditedFiles, removeEditedFile, renameEditedFile, recordEditedFile, subscribeEditedFiles, type EditedFile } from './edited-files';
+import { editedFileExists, listEditedFiles, removeEditedFile, renameEditedFile, recordEditedFile, subscribeEditedFiles, type EditedFile, type EditedFileSort } from './edited-files';
 import { formatSize, shareNamedFile } from './file-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import { askNewFileName, saveExistingFile } from './save-file';
@@ -23,6 +24,10 @@ import { rememberFile, type FileKind } from './recent-files';
 
 type Filter = 'all' | FileKind;
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'pdf', label: 'PDFs' }, { id: 'image', label: 'Images' }];
+const SORTS: { id: EditedFileSort; label: string }[] = [
+  { id: 'recent', label: 'Recently edited' }, { id: 'oldest', label: 'Oldest edited' },
+  { id: 'name', label: 'Name (A to Z)' }, { id: 'largest', label: 'Largest first' }, { id: 'smallest', label: 'Smallest first' },
+];
 const dateLabel = (value: number) => new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
 /** Files saved from Versara's editors and tools, newest first. */
@@ -33,6 +38,7 @@ export function EditedFilesScreen() {
   const [items, setItems] = useState<EditedFile[] | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = useState<EditedFileSort>('recent');
   const [error, setError] = useState('');
   const [menu, setMenu] = useState<EditedFile | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -46,14 +52,14 @@ export function EditedFilesScreen() {
     let version = 0;
     const load = () => {
       const request = ++version;
-      void listEditedFiles(search, filter === 'all' ? undefined : filter)
+      void listEditedFiles(search, filter === 'all' ? undefined : filter, sort)
         .then(value => { if (current && request === version) { setItems(value); setError(''); } })
         .catch(() => { if (current && request === version) setError('Could not load your edited files.'); });
     };
     const timer = setTimeout(load, search ? 200 : 0);
     const unsubscribe = subscribeEditedFiles(load);
     return () => { current = false; clearTimeout(timer); unsubscribe(); };
-  }, [search, filter, active]);
+  }, [search, filter, sort, active]);
 
   async function open(file: EditedFile) {
     if (locked.current) return;
@@ -142,6 +148,11 @@ export function EditedFilesScreen() {
           <ThemedText style={[styles.chipText, { color: filter === item.id ? colors.systemBackground : colors.systemBlue }]}>{item.label}</ThemedText>
         </Pressable>)}
       </View>
+      <View style={styles.sortRow}>
+        <ThemedText style={[styles.caption, styles.sortLabel, { color: colors.secondaryLabel }]}>{SORTS.find(item => item.id === sort)?.label}</ThemedText>
+        <EditorMenu label="Sort" icon={{ ios: 'arrow.up.arrow.down', android: 'sort' }}
+          items={SORTS.map(item => ({ ...item, selected: sort === item.id, onPress: () => setSort(item.id) }))} />
+      </View>
     </View>
     {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
     {!items ? <View style={styles.center}><AppLoader size="large" /></View> : <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={items} keyExtractor={item => item.id} contentContainerStyle={styles.list}
@@ -176,7 +187,9 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   controls: { paddingHorizontal: s.lg, gap: s.sm, paddingBottom: s.sm },
   search: { ...t.body, minHeight: 44, borderRadius: radius.sm, paddingHorizontal: s.md },
-  filters: { flexDirection: 'row', gap: s.sm },
+  filters: { flexDirection: 'row', flexWrap: 'wrap', gap: s.sm },
+  sortRow: { flexDirection: 'row', alignItems: 'center', gap: s.sm },
+  sortLabel: { flex: 1, minWidth: 0 },
   chip: { minHeight: 36, borderRadius: 18, paddingHorizontal: s.lg, alignItems: 'center', justifyContent: 'center' },
   chipText: { fontSize: 13, fontWeight: '600' },
   error: { paddingHorizontal: s.lg, paddingVertical: s.xs },

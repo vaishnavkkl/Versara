@@ -121,7 +121,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     layer.addView(image); layer.addView(outlines); layer.addView(edit)
     addView(layer); addView(handle)
     edit.apply {
-      background = GradientDrawable().apply { setColor(Color.TRANSPARENT); cornerRadius = 3 * density; setStroke(max(1, (1 * density).toInt()), 0xFF1565FF.toInt(), 4 * density, 3 * density) }
+      background = GradientDrawable().apply { setColor(Color.TRANSPARENT); cornerRadius = 3 * density; setStroke(max(2, (2 * density).toInt()), 0xFF1565FF.toInt()) }
       includeFontPadding = false
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
       setSingleLine(true)
@@ -132,8 +132,12 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
       setOnEditorActionListener { _, action, _ ->
         if (action == EditorInfo.IME_ACTION_DONE) { onSubmitText(mapOf("text" to text.toString())); hideKeyboard(); true } else false
       }
+      if (android.os.Build.VERSION.SDK_INT >= 29) {
+        textCursorDrawable = GradientDrawable().apply { setColor(0xFF1565FF.toInt()); setSize(max(2, (2 * density).toInt()), (24 * density).toInt()) }
+      }
+      highlightColor = 0x551565FF
       hint = "Type here"
-      setHintTextColor(0x88606070.toInt())
+      setHintTextColor(0xFF43546B.toInt())
       visibility = View.GONE
       contentDescription = "Text to add to the PDF"
       addTextChangedListener(object : TextWatcher {
@@ -654,7 +658,7 @@ class PdfEditCanvasView(context: Context, appContext: AppContext) : ExpoView(con
     override fun onDraw(canvas: Canvas) {
       val w = width.toFloat(); val h = height.toFloat()
       if (marks.isNotEmpty()) drawMarks(canvas, w, h)
-      outline.strokeWidth = density * 0.8f / zoom; selected.strokeWidth = density * 1.5f / zoom; marked.strokeWidth = density * 2f / zoom
+      outline.strokeWidth = density * 0.8f / zoom; selected.strokeWidth = density * 2.5f / zoom; marked.strokeWidth = density * 2f / zoom
       if (!adding) {
         val count = min(boxes.size, 600)
         for (index in 0 until count) {

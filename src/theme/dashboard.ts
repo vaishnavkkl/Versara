@@ -22,7 +22,7 @@ export const typography = {
   tabLabel: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
 } as const;
 
-export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 152, touchTarget: 48 } as const;
+export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 136, dashboardMinHeight: 136, touchTarget: 48 } as const;
 export const motion = { feedback: 120, tab: { duration: 400, dampingRatio: 1 } } as const;
 export type ModuleTone = 'pdf' | 'word' | 'image' | 'files' | 'privacy' | 'default';
 export function moduleColors(colors: Palette, tone: ModuleTone) {
@@ -47,3 +47,6 @@ export const getGradients = (colors: Palette) => ({
   navigation: gradient(`linear-gradient(115deg, ${colors.navStart} 0%, ${colors.navEnd} 100%)`),
   tabSelected: gradient(`linear-gradient(135deg, ${colors.navActiveStart} 0%, ${colors.navActiveEnd} 100%)`),
 });
+
+/** Shared geometry for labelled editing actions, including primary Save/Apply. */
+export const editorActions = { minHeight: 64, minWidth: 96, gap: 8, iconSize: 22, fontSize: 13, lineHeight: 18 } as const;

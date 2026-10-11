@@ -23,15 +23,12 @@ open and close rapidly, tap a tool during the reveal, toggle help and dismiss a
 bubble, scroll each side, rotate, and try reduced motion and larger text. Profile
 the release build on a slower Android device before claiming frame-rate results.
 
-All tools closes the surround view and its name mode before the toolbox sheet is
-presented after the closing animation, in both PDF and image previews. A labelled
-48-point × Hide tools button stays above the image ring, outside help interception.
-In PDF surround mode the close action is a 44-point icon in the existing page-control
-row beside Fit and orientation, replacing the row's search shortcut while the ring
-is open. Search remains available in the ring. There is no separate PDF close row
-or duplicate close icon among the surrounding tools, leaving more height for the PDF.
-Back also dismisses it. Dismissing the sheet leaves the ordinary
-preview controls visible. Shared bottom sheets use a bounded 220 ms timing curve
+In both PDF and image surround mode, only the editing tool ring and one labelled
+48-point Close button accompany the preview. Header menus, page controls, Fit,
+All tools, Help, Save, Share, Details, Open and reading shortcuts are hidden or
+excluded. Closing restores the ordinary preview controls and unsaved-change
+actions; Android Back also dismisses the ring. Long-press tool names remain
+available. File actions remain accessible outside surround mode. Shared bottom sheets use a bounded 220 ms timing curve
 and system reduced-motion handling. The installed gorhom version treats configs
 with `duration` as timing configs; duration-based Reanimated springs must not be
 passed as spring configs to this version. PDF tool catalogs are memoized across
@@ -42,8 +39,8 @@ an extra native document resize when opening the sheet.
 The surround reader now disables native dimming/blur and keeps every visible
 page readable at its natural height, including multiple short image-to-PDF pages.
 Portrait surround mode always allows vertical scrolling, also on older builds.
-Tools still use the current page reported by the reader; page controls allow an
-explicit page selection when several pages fit. These changes are JavaScript
+Tools still use the current page reported by the reader. Swipe through pages
+in surround mode; explicit page controls return after closing the ring. These changes are JavaScript
 changes and do not depend on rebuilding the earlier native focus fix.
 
 Earlier native PDF focus changes handle short boundary pages: reaching the end of the scroll

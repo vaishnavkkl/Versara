@@ -3,7 +3,7 @@ import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { HelpButton } from './help-button';
 import { LayoutToggle, useLayoutPreference } from './layout-toggle';
 import { ModuleCard } from './module-card';
@@ -15,8 +15,7 @@ type Props = { title: string; subtitle: string; sections: readonly MethodSection
 export function MethodScreen({ title, subtitle, sections, upcomingSections = [] }: Props) {
   const colors = usePalette();
   const [grid] = useLayoutPreference();
-  const { width, fontScale } = useWindowDimensions();
-  const useGrid = grid && width >= 360 && fontScale < 1.4;
+  const useGrid = grid;
   const columns = useGrid ? 2 : 1;
   const [query, setQuery] = useState('');
   const [picking, setPicking] = useState<string | null>(null);
@@ -71,7 +70,7 @@ export function MethodScreen({ title, subtitle, sections, upcomingSections = [] 
             <Pressable accessibilityRole="button" accessibilityLabel="Back to dashboard" onPress={() => router.navigate('/(tabs)')} style={({ pressed }) => [styles.back, { opacity: pressed ? 0.6 : 1 }]}><UniversalIcon ios="chevron.left" android="arrow-back" size={20} color={colors.systemBlue} />{title !== 'PDF' && <ThemedText style={{ color: colors.systemBlue }}>Toolbox</ThemedText>}</Pressable>
             {title === 'PDF' && <ThemedText accessibilityRole="header" style={styles.compactTitle}>PDF</ThemedText>}
             <HelpButton />
-            <LayoutToggle gridAvailable={width >= 360 && fontScale < 1.4} />
+            <LayoutToggle />
           </View>
           {title !== 'PDF' && <View style={styles.heading}><ThemedText accessibilityRole="header" style={styles.title}>{title}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{subtitle}</ThemedText></View>}
 

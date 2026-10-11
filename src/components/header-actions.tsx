@@ -28,9 +28,11 @@ export function HeaderIconButton({ label, ios, android, selected, disabled, onPr
 
 /** Rendered in a close-style header; shows the buttons a reader publishes, such as bookmarks and reading options. */
 export function HeaderActions() {
-  const actions = useSyncExternalStore(subscribe, () => slot, () => EMPTY);
+  const actions = useHeaderActions();
   return actions.map(({ id, ...action }) => <HeaderIconButton key={id} {...action} />);
 }
+
+export function useHeaderActions() { return useSyncExternalStore(subscribe, () => slot, () => EMPTY); }
 
 export function usePublishHeaderActions(active: boolean, actions: HeaderAction[]) {
   const handlers = useRef(new Map<string, () => void>());

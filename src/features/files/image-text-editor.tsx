@@ -1,3 +1,6 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
+import { ToolButton } from '@/components/tool-button';
+import { ToolSettingsSummary } from '@/components/tool-settings-summary';
 import { useEditorDraft } from '../editor/use-editor-draft';
 import { ImageWorkspaceTools, useImageWorkspace } from './image-workspace';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -6,7 +9,7 @@ import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { ScreenHeader } from '@/components/screen-header';
+import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { showDialog } from '@/components/app-dialog';
 import { withLoading } from '@/components/app-loader';
@@ -270,7 +273,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
   return <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.systemBackground }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
     <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}
       share={{ onPress: shareImage, disabled: !file || !analysis || busy || !recovery.ready, label: shareEdits.length ? 'Share edited image' : 'Share image' }}
-      save={{ onPress: applyAndReturn, disabled: !edits.length || busy || !recovery.ready || boxOpen, label: 'Apply text changes and return to the image' }} />
+       />
     <ToolActionRow
       left={<HeaderHistoryButtons canUndo={history.length > 0} canRedo={future.length > 0} disabled={busy} onUndo={undo} onRedo={redo} />}
       right={<>
@@ -281,11 +284,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           disabled={busy || (addOnly && !text.trim())} onPress={() => apply()}
           style={[styles.save, getGradients(colors).module, (busy || (addOnly && !text.trim())) && styles.disabled]}>
           <UniversalIcon ios="checkmark" android="check" size={24} color={colors.moduleText} />
-        </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Apply text changes and return to the image" disabled={!edits.length || busy || !recovery.ready} onPress={() => { void applyAndReturn(); }}
-          style={[styles.save, getGradients(colors).module, (!edits.length || busy || !recovery.ready) && styles.disabled]}>
-          <UniversalIcon ios="checkmark" android="check" size={18} color={colors.moduleText} />
-          <ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Apply</ThemedText>
-        </Pressable>}
+        </Pressable> : null}
       </>} />
     {!!error && <ThemedText accessibilityRole="alert" style={styles.error}>{error || recovery.error}</ThemedText>}
     {!analysis || !preview || !file ? <View style={styles.center} /> : <View style={styles.grow}>
@@ -317,6 +316,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           <UniversalIcon ios="xmark" android="close" size={20} color={colors.secondaryLabel} />
         </Pressable>
       </View>}
+      {boxOpen && !keyboardOpen && <ToolSettingsSummary title="Font, colour and spacing" summary={`${fontName(textStyle)} · ${sizeInput} px`} disabled={busy} expanded={showFormatting} onPress={() => { Keyboard.dismiss(); setShowFormatting(true); }} />}
       <OptionSheet title="Text style" icon={{ ios: 'textformat', android: 'text-format' }} isPresented={boxOpen && showFormatting} onClose={() => setShowFormatting(false)}>
         <OptionCard title="Font" icon={{ ios: 'textformat.size', android: 'format-size' }}>
           <TextStyleControls style={textStyle} onChange={setTextStyle} size={sizeInput} onSizeChange={setSizeInput} sizeUnit="px" minSize={4} maxSize={2000} disabled={busy}
@@ -336,6 +336,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           <ThemedText style={[styles.grow, styles.note, { color: colors.secondaryLabel }]}>{edits.length ? `${edits.length} change${edits.length === 1 ? '' : 's'}` : addOnly ? 'No text added yet' : `${analysis.lines.length} text line${analysis.lines.length === 1 ? '' : 's'} found`}</ThemedText>
       </View>}
     </View>}
+    {!boxOpen && <View style={styles.dock}><EditorActionBar><ToolButton title="Apply changes" disabled={!edits.length || busy || !recovery.ready} onPress={() => { void applyAndReturn(); }} /></EditorActionBar></View>}
   </KeyboardAvoidingView>;
 }
 

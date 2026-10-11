@@ -388,12 +388,22 @@ class PdfMarkupView(context: Context, appContext: AppContext) : ExpoView(context
     val end = PointF(x, y); val start = lastErase ?: end
     for (index in marks.length() - 1 downTo 0) {
       val mark = marks.optJSONObject(index) ?: continue
-      if (mark.optString("kind") !in listOf("draw", "sign", "highlight-brush", "line")) continue
+      if (mark.optString("kind") !in listOf("draw", "sign", "highlight", "highlight-brush", "line")) continue
       val id = mark.optString("id"); if (id.isEmpty() || id in erasedInGesture) continue
       val samples = mark.optJSONArray("points") ?: continue
       val tolerance = maxOf(12 * resources.displayMetrics.density, (mark.optDouble("width", .005) * rect.width() / 2).toFloat())
       var hit = false
-      for (point in 1 until samples.length()) {
+      if (mark.optString("kind") == "highlight" && samples.length() >= 2) {
+        val a = samples.getJSONArray(0); val b = samples.getJSONArray(samples.length() - 1)
+        val x1 = rect.left + a.getDouble(0).toFloat() * rect.width(); val x2 = rect.left + b.getDouble(0).toFloat() * rect.width()
+        val y1 = rect.top + a.getDouble(1).toFloat() * rect.height(); val y2 = rect.top + b.getDouble(1).toFloat() * rect.height()
+        val box = RectF(minOf(x1, x2), minOf(y1, y2), maxOf(x1, x2), maxOf(y1, y2))
+        hit = box.contains(start.x, start.y) || box.contains(end.x, end.y) ||
+          segmentsHit(start, end, box.left, box.top, box.right, box.top, tolerance) ||
+          segmentsHit(start, end, box.right, box.top, box.right, box.bottom, tolerance) ||
+          segmentsHit(start, end, box.right, box.bottom, box.left, box.bottom, tolerance) ||
+          segmentsHit(start, end, box.left, box.bottom, box.left, box.top, tolerance)
+      } else for (point in 1 until samples.length()) {
         val a = samples.getJSONArray(point - 1); val b = samples.getJSONArray(point)
         if (segmentsHit(start, end, rect.left + a.getDouble(0).toFloat() * rect.width(), rect.top + a.getDouble(1).toFloat() * rect.height(), rect.left + b.getDouble(0).toFloat() * rect.width(), rect.top + b.getDouble(1).toFloat() * rect.height(), tolerance)) { hit = true; break }
       }

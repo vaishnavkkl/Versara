@@ -1,3 +1,6 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
+import { ToolButton } from '@/components/tool-button';
+import { ToolSettingsSummary } from '@/components/tool-settings-summary';
 import { useEditHistory } from '../editor/use-edit-history';
 import { useEditorDraft } from '../editor/use-editor-draft';
 import { EditorOption } from '@/components/editor-option';
@@ -11,13 +14,13 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { Host, Slider } from '@expo/ui';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { ScreenHeader } from '@/components/screen-header';
+import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { toolColors } from '@/theme/tool-colors';
 import { useAppearance, usePalette } from '@/theme/colors';
-import { getGradients, radius, spacing as s } from '@/theme/dashboard';
+import { radius, spacing as s } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { useSliderValue } from '@/hooks/use-slider-value';
 import ImageEditorView, { hasNativeImageEditor, type ImageCrop } from '../../../modules/file-engine/src/ImageEditorView';
@@ -337,9 +340,9 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
 
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
-    <ScreenHeader title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}
+    <ScreenHeader menu={[{ id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', icon: { ios: 'rotate.right', android: 'screen-rotation' }, disabled: busy, onPress: () => setLandscape(value => !value) }]} title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}
       share={{ onPress: shareImage, disabled: !file || busy || !draft.ready, label: changed ? 'Share edited image' : 'Share image' }}
-      save={{ onPress: () => tab === 'export' ? save() : applyAndReturn(), disabled: !file || busy || !draft.ready || compare, label: tab === 'export' ? 'Save edited image' : 'Apply changes and return to the image' }} />
+       />
     <ToolActionRow
       left={<>
         <HeaderHistoryButtons canUndo={!!file && draft.ready && history.canUndo && !busy && !compare} canRedo={!!file && draft.ready && history.canRedo && !busy && !compare} disabled={!file || busy || !draft.ready || compare} onUndo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.undo().crop); }} onRedo={() => { if (locked.current) return; setCompare(false); restoreCrop(history.redo().crop); }} />
@@ -347,14 +350,6 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
       </>}
       right={<>
         <ImageWorkspaceTools id={id} current={tab} disabled={!file || busy || !draft.ready || compare} onApply={applyToWorkspace} />
-        <ToolRowButton label={landscape ? 'Switch to portrait view' : 'Switch to landscape view'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={() => setLandscape(value => !value)} />
-        {tab === 'export'
-          ? <Pressable accessibilityRole="button" accessibilityLabel="Save edited image" disabled={!file || busy || !draft.ready || compare} onPress={() => { void save(); }} style={[styles.save, getGradients(colors).module, (!file || busy || !draft.ready || compare) && styles.disabled]}>
-            {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="square.and.arrow.down" android="save" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText></>}
-          </Pressable>
-          : <Pressable accessibilityRole="button" accessibilityLabel="Apply changes and return to the image" disabled={!file || busy || !draft.ready || compare} onPress={() => { void applyAndReturn(); }} style={[styles.save, getGradients(colors).module, (!file || busy || !draft.ready || compare) && styles.disabled]}>
-            {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="checkmark" android="check" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Apply</ThemedText></>}
-          </Pressable>}
       </>} />
     {error && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
     {!hasNativeImageEditor || !ImageEditorView ? <View style={styles.center}><ThemedText style={styles.note}>Install a new development build to edit images.</ThemedText></View>
@@ -366,22 +361,22 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
             onCropChange={({ nativeEvent }) => { if (!compare && draft.ready) setCrop(nativeEvent.width ? nativeEvent as ImageCrop : null); }} />}
         </View>
         <View style={[landscape ? [styles.side, { width: sideWidth }] : styles.bottom, { borderColor: colors.separator }]}>
-          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{tabs}</>}
+          {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{SHEET_TABS.has(tab) && <ToolSettingsSummary title={tab === 'resize' ? 'Dimensions and proportions' : 'Format and quality'} summary={tab === 'resize' ? 'Change size in pixels or percent' : 'Choose the saved image format and quality'} disabled={controlsDisabled} expanded={sheetOpen} onPress={() => { Keyboard.dismiss(); setSheetOpen(true); }} />}{tabs}</>}
         </View>
         {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} keyboardInput={tab === 'resize'} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
       </View>}
+    <View style={styles.actionFooter}><EditorActionBar><ToolButton title={tab === 'export' ? 'Save image' : 'Apply changes'} disabled={!file || busy || !draft.ready || compare} onPress={() => { void (tab === 'export' ? save() : applyAndReturn()); }} /></EditorActionBar></View>
   </KeyboardAvoidingView>;
 }
 
 const styles = StyleSheet.create({
+  actionFooter: { padding: s.sm },
   screen: { flex: 1 },
   grow: { flex: 1 },
   row: { flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: s.xl },
   error: { padding: s.md },
   headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  save: { minHeight: 40, minWidth: 68, borderRadius: 20, paddingHorizontal: s.lg, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
-  disabled: { opacity: 0.5 },
   bottom: { borderTopWidth: StyleSheet.hairlineWidth },
   side: { borderLeftWidth: StyleSheet.hairlineWidth },
   wrap: { flexWrap: 'wrap' },

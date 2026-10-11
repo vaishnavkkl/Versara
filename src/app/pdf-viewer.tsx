@@ -2,10 +2,7 @@ import { useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ScreenHeader } from '@/components/screen-header';
-import { HelpButton } from '@/components/help-button';
-import { HeaderOrientationButton } from '@/components/header-orientation';
-import { HeaderActions } from '@/components/header-actions';
+import { ReaderScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { PdfViewer } from '@/features/pdf/pdf-viewer';
 import { handleReaderBack, handleReaderHelp } from '@/features/pdf/reader-back';
 import { usePalette } from '@/theme/colors';
@@ -26,7 +23,7 @@ function PdfViewerContent() {
   function back() { if (help?.close() || handleReaderBack()) return; if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <LayoutAnimationConfig skipEntering>
-      {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} trailing={<><HeaderActions /><HeaderOrientationButton /></>}><HelpButton tool="viewer" intercept={handleReaderHelp} /></ScreenHeader></FocusChrome>}
+      {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} tool="viewer" helpIntercept={handleReaderHelp} /></FocusChrome>}
       <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} onSurroundChange={setSurrounding} />
     </LayoutAnimationConfig>
   </SafeAreaView>;

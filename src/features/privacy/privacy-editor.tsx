@@ -1,3 +1,4 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { EditorMenu } from '@/components/editor-menu';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { useStableCallback } from '@/hooks/use-stable-callback';
@@ -12,7 +13,7 @@ import PdfMarkupView, { type PdfMark, type PdfMarkChange } from '../../../module
 import { AppLoader } from '@/components/app-loader';
 import { showDialog } from '@/components/app-dialog';
 import { EditorOption } from '@/components/editor-option';
-import { ScreenHeader } from '@/components/screen-header';
+import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { ToolActionRow } from '@/components/tool-action-row';
 import { FitSlotButton } from '@/components/fit-slot';
 import { ThemedText } from '@/components/themed-text';
@@ -421,8 +422,7 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
   return <View style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <ScreenHeader title={TITLES[mode]} onBack={close} share={{ onPress: () => image && shareNamedFile(image), disabled: busy || !image,
       label: saved ? 'Share private copy' : preview ? 'Share previewed private copy' : 'Preview the private copy before sharing' }}
-      save={{ onPress: () => saved ? publishToDevice() : saveCopy(), disabled: busy || !!saved?.location || (!saved && !preview),
-        label: saved?.location ? 'Private copy saved' : preview ? 'Save private copy' : 'Preview the private copy before saving' }} />
+       />
     {!available ? <View style={styles.empty}>
       <UniversalIcon ios="lock.shield" android="security" size={36} color={colors.privacyInk} />
       <ThemedText>Update the app build to use native privacy scanning and export.</ThemedText>
@@ -497,14 +497,14 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
           {(phase === 'scanning' || phase === 'finding' || phase === 'preparing') && <ToolButton title="Cancel" secondary onPress={() => { cancelJobs(); setNotice('Cancelled. Your current covers are kept.'); }} />}
         </View> : saved ? <>
           <ThemedText style={styles.note}>{saved.name} · {formatSize(saved.size)} · PNG</ThemedText>
-          <View style={styles.row}>{!saved.location && <View style={styles.grow}><ToolButton title="Save" onPress={publishToDevice} /></View>}<ToolButton title="Share" secondary onPress={() => launch(perform('sharing', () => shareNamedFile(saved)))} /></View>
+          <EditorActionBar>{!saved.location && <ToolButton title="Save" onPress={publishToDevice} />}<ToolButton title="Share" secondary onPress={() => launch(perform('sharing', () => shareNamedFile(saved)))} /></EditorActionBar>
           <ToolButton title={isPdf ? "Choose another PDF" : "Choose another image"} secondary onPress={() => router.replace({ pathname: '/privacy-files', params: { mode } })} />
         </> : preview ? <>
           {isPdf && <ThemedText style={styles.note}>Image-based PDF copy. Text selection, links and forms are removed; the original stays unchanged.</ThemedText>}
           <ThemedText style={styles.note}>{preview.coverCount} solid covers · Source metadata removed · {formatSize(preview.size)}</ThemedText>
-          <View style={styles.row}><ToolButton title="Back to edits" secondary onPress={returnToEditing} /><View style={styles.grow}><ToolButton title="Save copy" onPress={saveCopy} /></View></View>
+          <EditorActionBar><ToolButton title="Back to edits" secondary onPress={returnToEditing} /><ToolButton title="Save copy" onPress={saveCopy} /></EditorActionBar>
         </> : <>
-          <View style={styles.row}>
+          <EditorActionBar>
             {mode !== 'metadata' && <>
               <EditorOption compact label="Cover" selected={!selecting} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setSelectedId(undefined); setReviewing(false); }} />
               <EditorOption compact label="Select & resize" selected={selecting} disabled={busy || !canSelect} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setReviewing(false); }} />
@@ -512,11 +512,9 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
             </>}
             <EditorOption label={mode === 'metadata' ? 'Metadata' : 'Review'} compact icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => { setReviewing(value => !value); setFinding(false); }} />
             {canFindText && <EditorOption label="Find text" compact icon={{ ios: 'text.magnifyingglass', android: 'mdi:text-search' }} selected={finding} disabled={busy} onPress={() => { setFinding(value => !value); setReviewing(false); }} />}
-          </View>
-          <View style={styles.row}>
             {mode !== 'metadata' && <ToolButton title={isPdf ? (scan ? 'Rescan page' : 'Scan page') : scan ? 'Scan again' : 'Scan'} secondary icon={{ ios: 'text.viewfinder', android: 'document-scanner' }} onPress={() => launch(perform('scanning', () => scanSource(isPdf ? basePreview : source)))} />}
-            <View style={styles.grow}><ToolButton title="Preview copy" icon={{ ios: 'eye', android: 'visibility' }} disabled={(mode !== 'metadata' && !PdfMarkupView) || (isPdf && !marks.length)} onPress={preparePreview} /></View>
-          </View>
+            <ToolButton title="Preview copy" icon={{ ios: 'eye', android: 'visibility' }} disabled={(mode !== 'metadata' && !PdfMarkupView) || (isPdf && !marks.length)} onPress={preparePreview} />
+          </EditorActionBar>
           <ThemedText style={[styles.note, secondaryText]}>{isPdf ? marks.length + ' covers across this PDF. The copy uses image-based pages: text selection, links and forms are removed. Original unchanged.' : mode === 'metadata' ? 'Create a PNG copy with metadata removed.' : marks.length + ' covers selected. PNG export removes source metadata; transparent areas become white.'}</ThemedText>
         </>}
       </PdfPreviewFooter>

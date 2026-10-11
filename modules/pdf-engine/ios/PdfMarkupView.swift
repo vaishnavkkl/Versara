@@ -385,16 +385,24 @@ final class PdfMarkupView: ExpoView, UIGestureRecognizerDelegate {
     let start = lastErase ?? end
     for index in marks.indices.reversed() {
       let mark = marks[index]
-      guard ["draw", "sign", "highlight-brush", "line"].contains(mark["kind"] as? String ?? ""),
+      guard ["draw", "sign", "highlight", "highlight-brush", "line"].contains(mark["kind"] as? String ?? ""),
             let id = mark["id"] as? String, !erasedInGesture.contains(id), let samples = mark["points"] as? [[Double]], samples.count >= 2 else { continue }
       let tolerance = max(12, CGFloat(mark["width"] as? Double ?? 0.005) * pageRect.width / 2)
       var hit = false
-      for point in 1..<samples.count {
-        let first = samples[point - 1], second = samples[point]
-        guard first.count == 2 && second.count == 2 else { continue }
+      if mark["kind"] as? String == "highlight", let first = samples.first, let last = samples.last, first.count == 2, last.count == 2 {
         let a = CGPoint(x: pageRect.minX + first[0] * pageRect.width, y: pageRect.minY + first[1] * pageRect.height)
-        let b = CGPoint(x: pageRect.minX + second[0] * pageRect.width, y: pageRect.minY + second[1] * pageRect.height)
-        if segmentsHit(start, end, a, b, tolerance) { hit = true; break }
+        let b = CGPoint(x: pageRect.minX + last[0] * pageRect.width, y: pageRect.minY + last[1] * pageRect.height)
+        let box = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+        let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY), CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY)]
+        hit = box.contains(start) || box.contains(end) || (0..<4).contains { segmentsHit(start, end, corners[$0], corners[($0 + 1) % 4], tolerance) }
+      } else {
+        for point in 1..<samples.count {
+          let first = samples[point - 1], second = samples[point]
+          guard first.count == 2 && second.count == 2 else { continue }
+          let a = CGPoint(x: pageRect.minX + first[0] * pageRect.width, y: pageRect.minY + first[1] * pageRect.height)
+          let b = CGPoint(x: pageRect.minX + second[0] * pageRect.width, y: pageRect.minY + second[1] * pageRect.height)
+          if segmentsHit(start, end, a, b, tolerance) { hit = true; break }
+        }
       }
       if hit { erasedInGesture.insert(id); marks.remove(at: index); cachedRect = .zero; selected = -1 }
     }

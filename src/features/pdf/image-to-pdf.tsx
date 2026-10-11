@@ -1,3 +1,4 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { forgetRecentUri } from '../files/recent-files';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
@@ -23,7 +24,6 @@ import { PdfSourceCard } from './pdf-source-card';
 import { EditorOption } from '@/components/editor-option';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
-import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSelection } = {}) {
   const colors = usePalette();
@@ -176,13 +176,13 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
         onPreview={() => setPreviewIndex(index)} onMove={offset => reorder(index, offset)} onRemove={() => setFiles(current => current.filter(file => file.uri !== item.uri))} canMoveBack={index > 0} canMoveForward={index + 1 < files.length} />} />
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      <View style={responsiveToolbarStyles.row}>{([{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }, { value: 'image', label: 'Fit image' }] as const).map(item => <EditorOption key={item.value} compact label={item.label} selected={pageSize === item.value} disabled={busy} onPress={() => setPageSize(item.value)} />)}</View>
+      <EditorActionBar >{([{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }, { value: 'image', label: 'Fit image' }] as const).map(item => <EditorOption key={item.value} compact label={item.label} selected={pageSize === item.value} disabled={busy} onPress={() => setPageSize(item.value)} />)}</EditorActionBar>
       {busy && <AppLoader />}
-      {progress !== null ? <><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving PDF...' : `Creating pages... ${Math.round(progress * 100)}%`}</ThemedText><ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} /></> : <View style={responsiveToolbarStyles.row}>
+      {progress !== null ? <><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving PDF...' : `Creating pages... ${Math.round(progress * 100)}%`}</ThemedText><ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} /></> : <EditorActionBar >
         <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
         <EditorOption compact label="Add images" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={busy || !nativeAvailable || files.length >= 30} onPress={() => void addImages()} />
-        <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title="Save PDF" disabled={!files.length || busy || !nativeAvailable} onPress={convert} /></View>
-      </View>}
+        <ToolButton title="Save PDF" disabled={!files.length || busy || !nativeAvailable} onPress={convert} />
+      </EditorActionBar>}
     </PdfPreviewFooter>
   </View>;
 }

@@ -1,7 +1,9 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
+import { ToolSettingsSummary } from '@/components/tool-settings-summary';
 import { BatchImagePreview } from './batch-image-preview';
 import { useEditHistory } from '../editor/use-edit-history';
 import { useEditorDraft } from '../editor/use-editor-draft';
-import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/responsive-editor-toolbar';
+import { useResponsiveEditorToolbar } from '../editor/responsive-editor-toolbar';
 import { EditorMenu } from '@/components/editor-menu';
 import { HeaderHistoryButtons } from '@/components/header-history';
 import { EditorOption } from '@/components/editor-option';
@@ -24,7 +26,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { FileEngine } from '../../../modules/file-engine';
 import { PdfEngine } from '../../../modules/pdf-engine';
 import PdfMarkupView, { type PdfMark, type PdfMarkChange } from '../../../modules/pdf-engine/src/PdfMarkupView';
-import { ScreenHeader } from '@/components/screen-header';
+import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { AppLoader } from '@/components/app-loader';
@@ -625,7 +627,21 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
   const cancel = () => { cancelled.current = true; jobs.current.forEach((_,job)=>FileEngine?.cancelImageJob(job)); };
   const activeBrush = BRUSHES.find(item => item.id === brushType) ?? BRUSHES[0];
   const toggleSettings = () => { Keyboard.dismiss(); setSettings(value => !value); };
-  const settingsAction = drawing
+  const settingsTitle = drawing ? 'Colour, thickness and style'
+    : sizing ? (batch ? 'Images, size and output' : 'Dimensions and fit')
+    : compressing ? 'Target size, format and quality'
+    : tool === 'watermark' ? 'Watermark text, logo and position'
+    : tool === 'perspective' ? 'Adjust perspective corners'
+    : tool === 'metadata' ? 'Output format and metadata'
+    : 'Output format and quality';
+  const settingsSummary = drawing ? `${activeBrush.label} · ${Math.round(inkOpacity * 100)}% opacity`
+    : sizing ? `${resizeMode} · Change dimensions${batch ? ` · ${1 + extra.length} images` : ''}`
+    : compressing ? `${target ? `${target} KB target` : 'No size target'} · ${format.toUpperCase()} · ${quality}% quality`
+    : tool === 'watermark' ? `${logo ? 'Image logo' : watermark.trim() ? 'Text watermark' : 'Choose text or a logo'} · ${Math.round(opacity * 100)}% opacity`
+    : tool === 'perspective' ? 'Set the four corners to straighten the image'
+    : tool === 'metadata' ? `${format.toUpperCase()} · Remove EXIF, GPS and camera tags`
+    : `${format.toUpperCase()}${['png', 'tiff'].includes(format) ? '' : ` · ${quality}% quality`}`;
+  const settingsAction = tool === 'redact' ? null : drawing
     ? <ToolRowButton label="Style and colour" icon={{ ios: 'paintpalette', android: 'palette' }} selected={settings} expanded={settings} disabled={busy} onPress={toggleSettings} />
     : docked ? null : <ToolRowButton label="Image options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={settings} expanded={settings} disabled={busy || tool === 'rename'} onPress={toggleSettings} />;
   // Drawing controls sit in one icon row, like the PDF markup tools.
@@ -638,7 +654,7 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
     {toolbar.measurements}
     <Stack.Screen options={{ gestureEnabled: false }} />
     <ScreenHeader title={title} onBack={close} share={{ onPress: shareImage, disabled: busy || picking || !!curveDraft || !file || !info, label: results.length ? 'Share saved image' : tool === 'rename' || tool === 'info' ? 'Share image' : 'Share edited image' }}
-      save={{ onPress: () => exportTool ? save() : applyAndReturn(), label: saveTitle, disabled: busy || picking || !!curveDraft || !file || !info || !available || results.length > 0 || !!issue || ((drawing || blurArea) && !PdfMarkupView) }} />
+       />
     <ToolActionRow
       left={<><FitSlotButton /><HeaderHistoryButtons disabled={busy || !!curveDraft || !recovery.ready || !!results.length} canUndo={drawing ? history.canUndo : optionHistory.canUndo} canRedo={drawing ? history.canRedo : optionHistory.canRedo} onUndo={() => edit(drawing ? () => { history.undo(); } : optionHistory.undo)} onRedo={() => edit(drawing ? () => { history.redo(); } : optionHistory.redo)} /></>}
       right={<ImageWorkspaceTools id={id} current={tool} disabled={busy || picking || !!curveDraft || !file || !info || !!results.length} onApply={applyToWorkspace} />} />
@@ -652,15 +668,16 @@ export function AdvancedImageToolScreen({ id, tool }: { id: string; tool: string
       {docked ? landscape ? <ScrollView style={styles.grow} keyboardShouldPersistTaps="handled">{panel}</ScrollView> : <View style={[styles.dockBar, { borderColor: colors.separator }]}>{panel}</View>
         : <OptionSheet title={drawing ? 'Style and colour' : `${title} options`} icon={drawing ? { ios: 'paintpalette', android: 'palette' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={settings && tool !== 'rename'} dim={false} keyboardInput={sizing} onClose={() => setSettings(false)}>{panel}</OptionSheet>}
       <PdfPreviewFooter>
-        <View onLayout={toolbar.onBottomLayout} style={responsiveToolbarStyles.row}>
+        {!docked && tool !== 'rename' && tool !== 'redact' && <ToolSettingsSummary title={settingsTitle} summary={settingsSummary} disabled={busy || picking || !!curveDraft} expanded={settings} onPress={() => { Keyboard.dismiss(); setSettings(true); }} />}
+        <EditorActionBar onLayout={toolbar.onBottomLayout} >
           {busy ? <><AppLoader /><ThemedText style={styles.grow}>{progress}</ThemedText><ToolButton title="Cancel" secondary onPress={cancel} /></> : <>
             {drawing && <>
               <EditorOption compact label={tool === 'redact' ? 'Cover' : 'Draw'} selected={!selecting && !erasing} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setErasing(false); setSelectedId(undefined); }} />
               <EditorOption compact label="Select & resize" selected={selecting} disabled={busy} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setErasing(false); }} />
             </>}
-            <View style={[responsiveToolbarStyles.primary, { minWidth: toolbar.primaryMinWidth }]}><ToolButton title={saveTitle} disabled={picking||!!curveDraft||!!issue||((drawing||blurArea)&&!PdfMarkupView)} onPress={()=>void (exportTool ? save() : applyAndReturn())} /></View>
+            <ToolButton title={saveTitle} disabled={picking||!!curveDraft||!!issue||((drawing||blurArea)&&!PdfMarkupView)} onPress={()=>void (exportTool ? save() : applyAndReturn())} />
           </>}
-        </View>
+        </EditorActionBar>
       </PdfPreviewFooter>
       </View>
     </View>}

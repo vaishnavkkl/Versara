@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BackHandler, Pressable, StyleSheet, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
-import { ScreenHeader } from '@/components/screen-header';
-import { HeaderOrientationButton } from '@/components/header-orientation';
-import { HeaderActions, HeaderIconButton } from '@/components/header-actions';
+import { ReaderScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
+import { HeaderIconButton } from '@/components/header-actions';
 import { useFileBookmarked } from '@/features/files/bookmarks';
 import { toggleFileBookmarkWithFeedback } from '@/features/files/bookmark-actions';
 import { router, Stack, useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router';
@@ -11,7 +10,6 @@ import { File } from 'expo-file-system';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { HelpButton } from '@/components/help-button';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { ToolButton } from '@/components/tool-button';
@@ -169,7 +167,7 @@ export default function FilePreviewScreen() {
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
     <LayoutAnimationConfig skipEntering>
-    {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}<HeaderActions /><HeaderOrientationButton /></>}><HelpButton tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} intercept={handleReaderHelp} /></ScreenHeader></FocusChrome>}
+    {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}</>} tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} helpIntercept={handleReaderHelp} /></FocusChrome>}
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : <>

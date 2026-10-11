@@ -15,8 +15,7 @@ import { getGradients, radius, spacing as s, typography as t } from '@/theme/das
 import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
 import { railSections, ToolRail, type RailTool } from '@/components/tool-rail';
-import { ToolSurround, ToolSurroundCloseButton } from '@/components/tool-surround';
-import { HelpButton } from '@/components/help-button';
+import { ToolSurround } from '@/components/tool-surround';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { useToolRing } from '@/hooks/use-tool-ring';
@@ -61,7 +60,7 @@ const DEFAULT_QUICK = ['edit_text', 'ocr', 'remove_text', 'text'];
 /** Longer than the native stack's push animation. */
 const RELEASE_DELAY_MS = 500;
 const SLOW_OPEN_MS = 350;
-/** `onSurroundChange` lets the screen hide its header while tools surround the page; the guide button then moves into the page row. */
+/** `onSurroundChange` hides the screen header while the tool ring supplies its own Close button. */
 export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onSurroundChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void; onSurroundChange?: (surrounding: boolean) => void } = {}) {
   const colors = usePalette();
   const screenActive = usePdfScreenActive();
@@ -337,13 +336,13 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const surrounding = ring.active;
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
   const pageLayout = useFocusLayout(surrounding);
-  // Keep every visible page readable, including several short image pages at the end.
-  const surroundTools = useMemo(() => tools.filter(tool => !tool.soon && !['fit', 'orientation'].includes(tool.id)), [tools]);
+  // Surround mode offers document operations only; file and reader actions stay in the normal view.
+  const surroundTools = editTools;
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
   const strip = showStrip && !landscape ? <FocusChrome edge="bottom"><PdfPageStrip enabled={!toolboxOpen && !gridOpen && !viewOptionsOpen} rightToLeft={rightToLeft} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
   // Landscape keeps the page full height: odd pages list on the left, even pages on the right (mirrored right to left).
   const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <FocusChrome edge="side"><PdfPageStrip enabled={!toolboxOpen && !gridOpen && !viewOptionsOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
-  const controls = ready && !focused;
+  const controls = ready && !focused && !surrounding;
   // Search takes the page row's place; closing it brings the row back.
   const searching = controls && searchOpen;
   const searchMessage = search.busy ? 'Searching on your device...' : search.error || (!searchQuery.trim() ? 'Search selectable PDF text' : search.matches.length ? `Result ${searchIndex + 1} of ${search.matches.length}${search.truncated ? '+, narrow your search' : ''}` : 'No matches. Scanned pages may need OCR.');
@@ -370,7 +369,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
       <ToolRowButton compact label="All tools" icon={{ ios: 'wrench.and.screwdriver', android: 'handyman' }} expanded={toolboxOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setToolboxOpen(true); }} />
       <ToolRowButton compact label="All pages in a grid" icon={{ ios: 'square.grid.3x3', android: 'grid-view' }} expanded={gridOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setGridOpen(true); }} />
     </>}>
-    {surrounding ? <>{onSurroundChange && <HelpButton tool="viewer" />}<ToolSurroundCloseButton compact disabled={ring.closing} onPress={ring.close} /></> : searchAvailable && <ToolRowButton compact label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
+    {searchAvailable && <ToolRowButton compact label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
     {landscape && <ToolRowButton compact label={thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails'} icon={{ ios: 'square.grid.2x2', android: 'view-carousel' }} selected={thumbnails} onPress={() => performOption('thumbnails')} />}
   </PdfPreviewToolbar></FocusChrome>;
   return (
@@ -402,7 +401,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
           <View style={[styles.body2, landscape && styles.row]}>
           {landscape && !searching && pageBar}
           {sideStrip(rightToLeft ? 1 : 0)}
-          <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} showClose={false} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
+          <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
           <View style={[styles.canvas, landscape && !surrounding && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
             {document && !error && readerMounted && <PdfEngineView
               key={document.uri}

@@ -1,3 +1,6 @@
+import { editorActions } from '@/theme/dashboard';
+import { useContext } from 'react';
+import { EditorActionContext, editorActionStyles } from './editor-action-bar';
 import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from './themed-text';
@@ -14,12 +17,13 @@ export function EditorOption({ label, selected = false, disabled = false, onPres
   label: string; selected?: boolean; disabled?: boolean; onPress: () => void; icon?: OptionIcon; compact?: boolean; accessibilityLabel?: string; style?: StyleProp<ViewStyle>;
 }) {
   const colors = usePalette();
+  const inActionBar = useContext(EditorActionContext);
   const tint = toolColors(optionColorKey(label), colors);
   const symbol = icon ?? optionIcon(label);
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
-    style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }, style]}>
-    {symbol && <UniversalIcon {...symbol} size={22} color={tint.ink} />}
-    <ThemedText style={{ fontSize: compact ? 13 : 15, lineHeight: compact ? 17 : 21, color: selected ? colors.accent : colors.label }}>{label}</ThemedText>
+    style={({ pressed }) => [styles.option, compact && styles.compact, { backgroundColor: selected ? colors.accentSurface : colors.fieldSurface, borderColor: selected ? colors.accent : colors.separator, opacity: disabled ? .4 : pressed ? .65 : 1 }, style, inActionBar && editorActionStyles.button]}>
+    {symbol && <UniversalIcon {...symbol} size={editorActions.iconSize} color={tint.ink} />}
+    <ThemedText style={[{ fontSize: compact ? 13 : 15, lineHeight: compact ? 17 : 21, color: selected ? colors.accent : colors.label }, inActionBar && editorActionStyles.label]}>{label}</ThemedText>
   </Pressable>;
 }
 const styles = StyleSheet.create({ compact: { minHeight: 48, minWidth: 56, paddingHorizontal: 10, paddingVertical: 4, flexDirection: 'column', gap: 1 }, option: { minHeight: 52, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' } });

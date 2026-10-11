@@ -55,3 +55,14 @@ landscape, keyboard dismissal, cancellation, and result actions.
 
 This change uses existing native methods and requires a JavaScript reload on a
 compatible installed build.
+
+
+## Edited files sorting
+
+Edited files opens as one list with All selected and Recently edited ordering,
+interleaving PDF and image files by their saved modification time. A visible
+Sort button offers Recently edited, Oldest edited, Name (A to Z), Largest first
+and Smallest first. The active order is displayed beside the button. Filters
+and search combine with every sort. SQLite applies a fixed allowlist of sort
+clauses before the 200-row limit, with stable ties; stale/off-screen loads remain
+ignored. Sorting does not change modification timestamps or group by file type.

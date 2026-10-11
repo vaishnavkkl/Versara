@@ -8,6 +8,14 @@ export type EditedFile = {
   deviceUri: string; location: string; created: number; modified: number;
 };
 export const EDITED_LIMIT = 200;
+const SORT_ORDER = {
+  recent: 'modified DESC, id DESC',
+  oldest: 'modified ASC, id ASC',
+  name: 'name COLLATE NOCASE ASC, modified DESC, id DESC',
+  largest: 'size DESC, modified DESC, id DESC',
+  smallest: 'size ASC, modified DESC, id DESC',
+} as const;
+export type EditedFileSort = keyof typeof SORT_ORDER;
 
 let ready: Promise<SQLiteDatabase> | undefined;
 function db() {
@@ -25,11 +33,13 @@ const listeners = new Set<Listener>();
 export function subscribeEditedFiles(listener: Listener) { listeners.add(listener); return () => { listeners.delete(listener); }; }
 const notify = () => { for (const listener of listeners) listener(); };
 
-export async function listEditedFiles(search = '', kind?: FileKind) {
+export async function listEditedFiles(search = '', kind?: FileKind, sort: EditedFileSort = 'recent') {
   const database = await db();
+  // Apply the selected ordering before the limit; PDF and image rows stay interleaved.
+  const order = SORT_ORDER[sort] ?? SORT_ORDER.recent;
   const rows = kind
-    ? await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY modified DESC LIMIT ${EDITED_LIMIT}`, kind, search.trim())
-    : await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind != 'document' AND instr(lower(name), lower(?)) > 0 ORDER BY modified DESC LIMIT ${EDITED_LIMIT}`, search.trim());
+    ? await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind = ? AND instr(lower(name), lower(?)) > 0 ORDER BY ${order} LIMIT ${EDITED_LIMIT}`, kind, search.trim())
+    : await database.getAllAsync<EditedFile>(`SELECT * FROM edited_files WHERE kind != 'document' AND instr(lower(name), lower(?)) > 0 ORDER BY ${order} LIMIT ${EDITED_LIMIT}`, search.trim());
   return rows.map(restored);
 }
 export async function countEditedFiles() {

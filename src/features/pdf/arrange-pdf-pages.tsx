@@ -1,3 +1,4 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { EditorOption } from '@/components/editor-option';
 import { PdfPreviewFooter } from './pdf-preview';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
@@ -23,7 +24,6 @@ import { openPdfResult } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
 import { ReorderPageGrid } from './reorder-page-grid';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
-import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string; location?: string };
@@ -228,14 +228,14 @@ export function ArrangePdfPages({ operation, initialSelection }: { operation: 'r
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
       {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving your PDF...' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{(progress !== null || phase.startsWith('Reading pages')) && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
         {source && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{changed ? `${changed} pages in a new position - all ${pages.length} pages kept` : 'Move a page to get started.'}</ThemedText>}
-        <View style={responsiveToolbarStyles.row}>
+        <EditorActionBar >
           <EditorOption label="Options" compact selected={fileOptions} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} onPress={() => setFileOptions(true)} />
           {source ? <>
             <EditorOption label="Reverse" compact icon={{ ios: 'arrow.up.arrow.down', android: 'swap-vert' }} disabled={pages.length < 2} onPress={() => setPages(current => [...current].reverse())} />
             <EditorOption label="Reset" compact disabled={!changed} onPress={() => { setPages(originalPages(source.pageCount)); setError(''); }} />
           </> : <EditorOption label="Choose PDF" compact disabled={!available} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} onPress={() => void choose()} />}
-          <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title="Save PDF" disabled={!available || !changed} onPress={save} /></View>
-        </View>
+          <ToolButton title="Save PDF" disabled={!available || !changed} onPress={save} />
+        </EditorActionBar>
       </>}
     </PdfPreviewFooter>
   </View>;

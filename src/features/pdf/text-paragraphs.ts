@@ -33,6 +33,12 @@ const median = (values: number[]) => { const sorted = [...values].sort((a, b) =>
 const separator = (before: string, after: string, gap: number, size: number) =>
   /\s$/.test(before) || /^\s/.test(after) || gap <= size * 0.12 ? '' : ' ';
 
+// Reflow uses one font resource. Keep distinct styles in separately editable blocks.
+function sameStyle(a: PdfTextObject, b: PdfTextObject) {
+  return a.fontId !== undefined && a.fontId === b.fontId
+    && a.color === b.color && Math.abs(a.size - b.size) < 0.05;
+}
+
 function lineOf(items: Item[]): Line {
   const l = Math.min(...items.map(item => item.l)), r = Math.max(...items.map(item => item.r));
   const t = Math.min(...items.map(item => item.t)), b = Math.max(...items.map(item => item.b));
@@ -64,7 +70,7 @@ function linesOf(items: Item[]) {
     let current: Item[] = [];
     for (const item of row) {
       const previous = current.at(-1);
-      if (previous && item.l - previous.r > 2.5 * Math.max(previous.size, item.size)) { lines.push(lineOf(current)); current = []; }
+      if (previous && (!sameStyle(previous.object, item.object) || item.l - previous.r > 2.5 * Math.max(previous.size, item.size))) { lines.push(lineOf(current)); current = []; }
       current.push(item);
     }
     if (current.length) lines.push(lineOf(current));
@@ -75,6 +81,7 @@ function linesOf(items: Item[]) {
 /** Whether `line` continues `paragraph`: same style, regular spacing, aligned edges, and no list marker or short line in between. */
 function continues(paragraph: Line[], line: Line) {
   const first = paragraph[0], last = paragraph.at(-1)!;
+  if (!sameStyle(first.items[0].object, line.items[0].object)) return false;
   const size = first.size;
   const ratio = line.size / size;
   if (ratio < 0.85 || ratio > 1.18) return false;

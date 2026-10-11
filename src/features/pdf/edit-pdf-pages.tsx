@@ -1,3 +1,4 @@
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
 import { toast } from '@/components/toast';
 import type { InitialSelection } from './pdf-tool-session';
@@ -25,7 +26,6 @@ import { PdfDocumentPreview } from './pdf-document-preview';
 import { PdfPreviewFooter } from './pdf-preview';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
 import { EditorOption } from '@/components/editor-option';
-import { responsiveToolbarStyles } from '../editor/responsive-editor-toolbar';
 
 type Source = LocalFile & { pageCount: number };
 type Output = PdfResult & { name: string; location?: string };
@@ -210,12 +210,12 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
       {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving your PDF...' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{progress !== null && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
         {source && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{selected.size === 0 ? 'Select a page to get started.' : outputCount === 0 ? 'Keep at least one page.' : `${selected.size} ${extracting ? 'selected' : 'to remove'} - ${outputCount} pages in the new PDF`}</ThemedText>}
-        <View style={responsiveToolbarStyles.row}>
+        <EditorActionBar >
           <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
           {source ? <EditorOption compact label={selected.size === source.pageCount ? 'Clear' : 'Select all'} icon={{ ios: 'checkmark.circle', android: 'select-all' }} onPress={() => setSelected(selected.size === source.pageCount ? new Set() : new Set(pages))} />
             : <EditorOption compact label="Choose PDF" disabled={!available} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} onPress={() => void choose()} />}
-          <View style={[responsiveToolbarStyles.primary, { minWidth: 120 }]}><ToolButton title={extracting ? 'Extract pages' : 'Delete pages'} disabled={!canSave} onPress={save} /></View>
-        </View>
+          <ToolButton title={extracting ? 'Extract pages' : 'Delete pages'} disabled={!canSave} onPress={save} />
+        </EditorActionBar>
       </>}
     </PdfPreviewFooter>
   </View>;

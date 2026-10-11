@@ -64,8 +64,6 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   const colors = usePalette();
   const sideways = useSideways();
   const toolLayout = usePdfToolLayout();
-  const registerPageRow = toolLayout?.registerPageRow;
-  useEffect(() => registerPageRow?.(), [registerPageRow]);
   usePublishPageSwipe(page, count, disabled, onPageChange);
   const [ownLandscape, setOwnLandscape] = useState(false);
   const landscape = orientation?.landscape ?? toolLayout?.landscape ?? ownLandscape;
@@ -105,7 +103,7 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
         <ThemedText numberOfLines={1} style={[styles.pageCount, tight && styles.tightCount]}>{tight ? `/ ${count}` : `of ${count}`}</ThemedText>
         {arrow(!flipped)}
       </>}
-      right={<>{children}{rotate && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
+      right={<>{children}{rotate && !toolLayout && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
       below={below} />
   </>;
 }

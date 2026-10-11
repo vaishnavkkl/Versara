@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { editorActions } from '@/theme/dashboard';
+import { EditorActionContext, editorActionStyles } from './editor-action-bar';
+import { useContext, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { MenuView } from '@expo/ui/community/menu';
@@ -30,12 +32,13 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
   const [open, setOpen] = useState(false);
   const help = useControlHelp();
   const colors = usePalette();
+  const inActionBar = useContext(EditorActionContext);
   const mode = useAppearance(state => state.mode);
   const { width: windowWidth } = useWindowDimensions();
   // Pixel widths: percentages inside the sheet's scroll content can collapse to one column.
   const tileWidth = grid ? Math.floor((Math.min(windowWidth, 640) - GRID_PADDING * 2 - GRID_GAP * (grid - 1)) / grid) - 1 : 0;
   const triggerIcon = icon ?? iconFor(label);
-  const sheet = help?.active || !!grid || iconOnly || tintedItems || items.length > SHEET_AFTER || Platform.OS !== 'ios';
+  const sheet = inActionBar || help?.active || !!grid || iconOnly || tintedItems || items.length > SHEET_AFTER || Platform.OS !== 'ios';
   const triggerTint = tintedItems ? toolColors(colorKey ?? optionColorKey(label), colors).ink : colors.systemBlue;
   const choose = (item: EditorMenuItem) => {
     setOpen(false);
@@ -45,10 +48,10 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
     style={({ pressed }) => [styles.iconTrigger, { backgroundColor: open ? colors.accentSurface : 'transparent', borderColor: open ? colors.accent : 'transparent', opacity: disabled ? .35 : pressed ? .6 : 1 }]}>
     {triggerIcon && <UniversalIcon {...triggerIcon} size={22} color={triggerTint} />}
   </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)}
-    style={[styles.trigger, compact && styles.compact, { backgroundColor: colors.fieldSurface, borderColor: colors.separator, opacity: disabled ? .4 : 1 }]}>
-    {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={triggerTint} />}
-    <ThemedText numberOfLines={1} style={[styles.triggerLabel, compact && styles.compactLabel]}>{label}</ThemedText>
-    <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />
+    style={[styles.trigger, compact && styles.compact, { backgroundColor: colors.fieldSurface, borderColor: colors.separator, opacity: disabled ? .4 : 1 }, inActionBar && editorActionStyles.button]}>
+    {triggerIcon && <UniversalIcon {...triggerIcon} size={inActionBar ? editorActions.iconSize : 20} color={triggerTint} />}
+    <ThemedText numberOfLines={inActionBar ? undefined : 1} style={[styles.triggerLabel, compact && styles.compactLabel, inActionBar && editorActionStyles.label]}>{label}</ThemedText>
+    {!inActionBar && <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />}
   </Pressable>;
   const rows = items.map(item => {
     const rowIcon = iconFor(item.label, item.icon);
@@ -67,7 +70,7 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
       {item.selected && <UniversalIcon ios="checkmark" android="check" size={18} color={tint?.ink ?? colors.systemBlue} />}
     </Pressable>;
   });
-  if (Platform.OS === 'web' || sheet) return <View style={styles.anchor}>
+  if (Platform.OS === 'web' || sheet) return <View style={[styles.anchor, inActionBar && editorActionStyles.anchor]}>
     {trigger}
     {Platform.OS !== 'web' && <AppBottomSheet visible={open} onClose={() => setOpen(false)} title={label} icon={triggerIcon} maxHeight={0.75} contentStyle={grid ? undefined : styles.list}>{grid ? <View style={styles.grid}>{rows}</View> : rows}</AppBottomSheet>}
     {Platform.OS === 'web' && open && <ScrollView style={[styles.webList, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]} keyboardShouldPersistTaps="handled">{rows}</ScrollView>}
@@ -77,9 +80,9 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
       onPressAction={({ nativeEvent }) => { const item = items.find(entry => entry.id === nativeEvent.event); if (item) choose(item); }}>
       <View accessible accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ disabled }}
         style={[styles.trigger, compact && styles.compact, { backgroundColor: colors.fieldSurface, borderColor: colors.separator }]}>
-        {triggerIcon && <UniversalIcon {...triggerIcon} size={20} color={triggerTint} />}
-        <ThemedText numberOfLines={1} style={[styles.triggerLabel, compact && styles.compactLabel]}>{label}</ThemedText>
-        <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />
+        {triggerIcon && <UniversalIcon {...triggerIcon} size={inActionBar ? editorActions.iconSize : 20} color={triggerTint} />}
+        <ThemedText numberOfLines={inActionBar ? undefined : 1} style={[styles.triggerLabel, compact && styles.compactLabel, inActionBar && editorActionStyles.label]}>{label}</ThemedText>
+        {!inActionBar && <UniversalIcon ios="chevron.down" android="expand-more" size={18} color={colors.secondaryLabel} />}
       </View>
     </MenuView>
   </View>;
