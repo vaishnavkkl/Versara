@@ -11,7 +11,7 @@ import { usePalette } from '@/theme/colors';
 import { getGradients, gradient, spacing as s, typography as t } from '@/theme/dashboard';
 import { FileEngine, type DirectoryListing, type ExplorerEntry, type StorageRoot } from '../../../modules/file-engine';
 import { ExplorerRow } from './explorer-row';
-import { explorerAvailable, openExplorerEntry } from './explorer';
+import { explorerAvailable, isSupportedEntry, openExplorerEntry } from './explorer';
 import { RecentFilesSection } from './recent-files-section';
 import { compareFiles, FileSortMenu, useFileSort } from './file-sort-menu';
 import { LayoutToggle } from '@/components/layout-toggle';
@@ -124,7 +124,7 @@ export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } 
   const getItemLayout = useCallback((_: unknown, index: number) => ({ length: rowHeight, offset: rowHeight * index, index }), [rowHeight]);
 
   const pickerKind = picker?.kind;
-  const items = useMemo(() => listing?.path === path ? listing.items.filter(item => !pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind) : [], [listing, path, pickerKind]);
+  const items = useMemo(() => listing?.path === path ? listing.items.filter(item => isSupportedEntry(item) && (!pickerKind || item.directory || pickerKind === 'any' || item.kind === pickerKind)) : [], [listing, path, pickerKind]);
   const sortedItems = useMemo(() => [...items].sort((a, b) => compareFiles(a, b, sort)), [items, sort]);
 
   if (!path) {
@@ -208,7 +208,7 @@ export function FileExplorerScreen({ picker }: { picker?: FilePickerSelection } 
           windowSize={9}
           removeClippedSubviews={Platform.OS === 'android'}
           refreshControl={<RefreshControl refreshing={loading && items.length > 0} onRefresh={() => { setLoading(true); setReload(value => value + 1); }} />}
-          ListEmptyComponent={<ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>{picker ? 'No matching files in this folder.' : 'This folder is empty.'}</ThemedText>}
+          ListEmptyComponent={<ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>{picker ? 'No matching files in this folder.' : 'No folders, PDFs or images here.'}</ThemedText>}
           ListFooterComponent={listing?.truncated ? <ThemedText style={[styles.empty, { color: colors.secondaryLabel }]}>Showing the first 4,000 items.</ThemedText> : null}
         />
       )}

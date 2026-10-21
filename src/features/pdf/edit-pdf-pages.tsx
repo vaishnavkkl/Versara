@@ -10,6 +10,7 @@ import { HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-te
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
+import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -21,7 +22,7 @@ import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { savePdfResult } from '../files/save-file';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { openPdfResult } from './open-pdf-screen';
+import { openPdfResult, showSavedPdf } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
 import { PdfPreviewFooter } from './pdf-preview';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
@@ -50,6 +51,8 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState<Output | null>(null);
+  // The saved PDF opens by itself; until then the result screen stays hidden.
+  const [leaving, setLeaving] = useState(false);
 
   const pageCount = source?.pageCount ?? 0;
   const pages = useMemo(() => Array.from({ length: pageCount }, (_, index) => index + 1), [pageCount]);
@@ -150,18 +153,21 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     const filename = `${name.trim().replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 80) || 'Edited PDF'}-${id}.pdf`;
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: [source.uri], outputUris: [new File(savedPdfDirectory(), filename).uri], ranges: [], pages: [...selected].sort((a, b) => a - b) });
-      if (mounted.current) setResult({ ...outputs[0], name: filename });
-      const saved = await savePdfResult({ ...outputs[0], name: filename }, initialSelection?.origin, initialSelection?.origin ? undefined : { mode: 'new', name: filename });
-      if (saved && mounted.current) setResult({ ...outputs[0], uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
-      if (saved) toast('PDF saved');
-    } catch (cause) { fail(cause); }
+      if (mounted.current) { setResult({ ...outputs[0], name: filename }); setLeaving(true); }
+      const saved = await savePdfResult({ ...outputs[0], name: filename }, initialSelection?.origin, initialSelection?.origin ? undefined : { mode: 'new', name: filename }, false);
+      if (saved) toast(`Saved to ${saved.device.location}`);
+      if (saved && mounted.current && showSavedPdf(saved.file, initialSelection?.returnRoute)) return;
+      if (mounted.current) { setLeaving(false); if (saved) setResult({ ...outputs[0], uri: saved.file.uri, name: saved.file.name, location: saved.device.location }); }
+    } catch (cause) { if (mounted.current) setLeaving(false); fail(cause); }
     finally { finish(); }
   }
   async function saveResult() {
     if (!result || locked.current) return;
     locked.current = true; setBusy(true); setError('');
     try {
-      const saved = await savePdfResult(result, initialSelection?.origin);
+      const saved = await savePdfResult(result, initialSelection?.origin, undefined, false);
+      if (saved) toast(`Saved to ${saved.device.location}`);
+      if (saved && mounted.current && showSavedPdf(saved.file, initialSelection?.returnRoute)) { setLeaving(true); return; }
       if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { fail(cause); }
     finally { finish(); }
@@ -175,6 +181,7 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   }
   if (source && previewPage !== null) return <PdfDocumentPreview uri={source.uri} count={source.pageCount} initialPage={previewPage} onClose={() => setPreviewPage(null)} />;
 
+  if (leaving) return <HandoffScreen label="Saving and opening your PDF…" />;
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>

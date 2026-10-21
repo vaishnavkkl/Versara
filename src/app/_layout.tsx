@@ -8,7 +8,9 @@ import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { FileAccessPrompt } from '@/components/file-access-prompt';
 import { AnimatedSplash } from '@/components/animated-splash';
 import { DialogHost } from '@/components/app-dialog';
+import { ActionSheetHost } from '@/components/action-sheet';
 import { LoadingHost } from '@/components/app-loader';
+import { shouldSkipIntroSplash } from '@/features/files/external-launch';
 import { recoverPendingAppSaves } from '@/features/files/save-recovery';
 import { cleanStaleStorage } from '@/features/files/storage-cleanup';
 import { SaveRecoveryNotice } from '@/features/files/save-recovery-notice';
@@ -25,8 +27,10 @@ export default function RootLayout() {
   const mode = useAppearance(state => state.mode);
   const hydrated = useAppearance(state => state.hydrated);
   const hydrate = useAppearance(state => state.hydrate);
-  const [splashDone, setSplashDone] = useState(false);
-  const [splashReady, setSplashReady] = useState(false);
+  // Opening a PDF or image from another app skips the two-second introduction.
+  const skipIntro = shouldSkipIntroSplash();
+  const [splashDone, setSplashDone] = useState(skipIntro);
+  const [splashReady, setSplashReady] = useState(skipIntro);
   const [recoveryError, setRecoveryError] = useState('');
   const [recovering, setRecovering] = useState(false);
   const revealingSplash = useRef(false);
@@ -73,14 +77,15 @@ export default function RootLayout() {
           <Stack.Screen name="guide" options={{ headerShown: false }} />
           <Stack.Screen name="file-preview" options={{ headerShown: false, animation: 'slide_from_right' }} />
           <Stack.Screen name="pdf-viewer" options={{ headerShown: false, animation: 'none' }} />
-          <Stack.Screen name="image-editor" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
-          <Stack.Screen name="image-tool" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
+          <Stack.Screen name="image-editor" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
+          <Stack.Screen name="image-tool" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
           <Stack.Screen name="file-picker" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
-          <Stack.Screen name="privacy-tool" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
-          <Stack.Screen name="image-text" options={{ headerShown: false, animation: 'slide_from_right', gestureEnabled: false }} />
+          <Stack.Screen name="privacy-tool" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
+          <Stack.Screen name="image-text" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
           <Stack.Screen name="edited-files" options={{ headerShown: false, animation: 'slide_from_right' }} />
           <Stack.Screen name="open-file" options={{ headerShown: false, animation: 'none', gestureEnabled: false }} />
         </Stack>
+        <ActionSheetHost />
         </BottomSheetModalProvider>
         <FileAccessPrompt ready={splashDone} />
         <DialogHost />

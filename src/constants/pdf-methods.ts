@@ -30,7 +30,7 @@ const SECTIONS = [
     { id: 'from_image', title: 'Image to PDF', subtitle: 'Combine JPG, PNG or HEIC', ios: 'photo.stack', android: 'mdi:image-multiple-outline' },
   ] },
   { title: 'Edit & annotate', tools: [
-    { id: 'edit_text', title: 'Edit PDF', subtitle: 'Change existing PDF text', ios: 'pencil.line', android: 'mdi:file-edit-outline' },
+    { id: 'edit_text', title: 'Edit PDF', subtitle: 'Change existing PDF text', ios: 'square.and.pencil', android: 'mdi:file-document-edit-outline' },
     { id: 'remove_text', title: 'Remove Text', subtitle: 'Delete selected PDF text', ios: 'eraser', android: 'mdi:eraser' },
     { id: 'text', title: 'Add Text', subtitle: 'Place text on a page', ios: 'textformat', android: 'mdi:format-text' },
     { id: 'add_image', title: 'Add Image', subtitle: 'Place a photo or logo on a page', ios: 'photo.badge.plus', android: 'mdi:image-plus-outline' },

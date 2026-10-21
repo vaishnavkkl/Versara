@@ -1,10 +1,12 @@
 import 'expo-sqlite/localStorage/install';
+import { Appearance, AppState } from 'react-native';
 import { create } from 'zustand';
 
 export const palettes = {
   dark: {
     destructive: '#FF6961',
-    label: '#FFFFFF', secondaryLabel: '#A1A1A6', separator: '#262626',
+    // Primary copy is white; secondary stays light enough to read on black cards and buttons.
+    label: '#FFFFFF', secondaryLabel: '#D1D1D6', separator: '#262626',
     systemBackground: '#000000', secondarySystemBackground: '#111111',
     systemBlue: '#FFFFFF', accent: '#2C2C2E', accentSurface: '#1C1C1E',
     helpOutline: '#8EB4FF', helpOutlineBacking: '#101114',
@@ -53,31 +55,41 @@ export const palettes = {
 } as const;
 export type Palette = { [Key in keyof typeof palettes.dark]: string };
 export type ThemeMode = keyof typeof palettes;
-const THEME_STORAGE_KEY = 'versara.appearance.mode';
+/** `system` follows the device's light or dark setting, including changes while the app is open. */
+export type ThemePreference = ThemeMode | 'system';
+const THEME_STORAGE_KEY = 'versara.appearance.preference';
+const systemMode = (): ThemeMode => Appearance.getColorScheme() === 'light' ? 'light' : 'dark';
 type AppearanceState = {
+  /** The palette in use. */
   mode: ThemeMode;
+  preference: ThemePreference;
   hydrated: boolean;
   hydrate: () => void;
-  setMode: (mode: ThemeMode) => void;
+  setPreference: (preference: ThemePreference) => void;
 };
 export const useAppearance = create<AppearanceState>((set, get) => ({
-  mode: 'dark',
+  mode: systemMode(),
+  preference: 'system',
   hydrated: false,
   hydrate: () => {
     if (get().hydrated) return;
-    let mode: ThemeMode = 'dark';
+    let preference: ThemePreference = 'system';
     try {
       const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === 'light' || stored === 'dark') mode = stored;
+      if (stored === 'light' || stored === 'dark') preference = stored;
     } catch (error) {
       console.warn('Could not restore appearance preference.', error);
     }
-    set({ mode, hydrated: true });
+    set({ preference, mode: preference === 'system' ? systemMode() : preference, hydrated: true });
+    const follow = () => { if (get().preference === 'system' && get().mode !== systemMode()) set({ mode: systemMode() }); };
+    Appearance.addChangeListener(follow);
+    // Android can change the theme while Versara is in the background without notifying it.
+    AppState.addEventListener('change', state => { if (state === 'active') follow(); });
   },
-  setMode: mode => {
-    set({ mode });
+  setPreference: preference => {
+    set({ preference, mode: preference === 'system' ? systemMode() : preference });
     try {
-      localStorage.setItem(THEME_STORAGE_KEY, mode);
+      localStorage.setItem(THEME_STORAGE_KEY, preference);
     } catch (error) {
       console.warn('Could not save appearance preference.', error);
     }

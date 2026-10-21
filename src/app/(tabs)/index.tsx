@@ -4,7 +4,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { countEditedFiles, subscribeEditedFiles } from '@/features/files/edited-files';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
-import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
+import { DashboardHero } from '@/components/dashboard-hero';
 import { ModuleCard } from '@/components/module-card';
 import { HelpButton } from '@/components/help-button';
 import { RecentToolsRow } from '@/features/search/recent-tools-row';
@@ -20,9 +20,9 @@ function welcomePending() { try { return localStorage.getItem('versara.guide.dis
 
 export default function HomeScreen() {
   const colors = usePalette();
-  const [grid] = useLayoutPreference();
   const { width, fontScale } = useWindowDimensions();
-  const useGrid = grid;
+  // Two big cards per row; very narrow screens and very large text get one full-width card per row.
+  const useGrid = width >= 340 && fontScale <= 1.6;
   const columns = useGrid ? 2 : 1;
   const cardLayoutKey = `${width}:${fontScale}:${useGrid}`;
   const [cardSizes, setCardSizes] = useState<{ key: string; heights: Record<string, number> }>({ key: '', heights: {} });
@@ -55,11 +55,9 @@ export default function HomeScreen() {
         <UniversalIcon ios="magnifyingglass" android="search" size={22} color={colors.secondaryLabel} />
         <ThemedText style={[styles.subtitle, styles.grow, { color: colors.secondaryLabel }]}>Find a tool or file</ThemedText>
       </Pressable>
+      <DashboardHero />
       <View style={styles.modules}>
-        <View style={styles.sectionHeader}>
-          <ThemedText accessibilityRole="header" style={styles.sectionTitle}>Browse all tools</ThemedText>
-          <LayoutToggle />
-        </View>
+        <ThemedText accessibilityRole="header" style={styles.sectionTitle}>Browse all tools</ThemedText>
         <View style={styles.grid}>
           {MODULES.filter((_, index) => index % columns === 0).map((first, row) => <View key={first.title} style={styles.row}>
             {MODULES.slice(row * columns, row * columns + columns).map(module => <ModuleCard key={module.title} {...module}
@@ -95,7 +93,6 @@ const styles = StyleSheet.create({
   search: { minHeight: catalog.touchTarget, borderRadius: radius.md, borderCurve: 'continuous', borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: s.lg, flexDirection: 'row', gap: s.md, alignItems: 'center' },
   grow: { flex: 1, minWidth: 0 },
   modules: { gap: s.md },
-  sectionHeader: { flexDirection: 'row', gap: s.sm, justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { ...t.catalogTitle },
   offline: { flexDirection: 'row', gap: s.sm, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' },
   caption: { ...t.caption },

@@ -295,12 +295,15 @@ internal class ImageTools {
       canvas.drawPath(path, paint)
     }
     r.optJSONObject("watermark")?.let { mark ->
-      val x = mark.optDouble("x", .5).coerceIn(0.0, 1.0).toFloat()*w; val y = mark.optDouble("y", .5).coerceIn(0.0, 1.0).toFloat()*h
+      val fx = mark.optDouble("x", .5).coerceIn(0.0, 1.0).toFloat(); val fy = mark.optDouble("y", .5).coerceIn(0.0, 1.0).toFloat()
+      val margin = minOf(w, h) * .04f
+      // The mark's centre follows x and y, but the whole mark stays inside the image with a small margin.
+      fun place(fraction: Float, extent: Float, length: Float) = if (extent + 2 * margin >= length) length / 2 else (fraction * length).coerceIn(margin + extent / 2, length - margin - extent / 2)
       val size = mark.optDouble("size", .06).coerceIn(.01,.3).toFloat()*w
       val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { color = color(mark.optString("color", "#FFFFFF")); alpha = (mark.optDouble("opacity", .5).coerceIn(.05,1.0)*255).roundToInt(); textSize = size; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif", Typeface.BOLD) }
       val imageUri = mark.optString("imageUri")
-      if (imageUri.isNotEmpty()) { val file = local(context,imageUri); val logo = ImageProcessing.decode(context,Uri.fromFile(file),1024); try { val lw = w * mark.optDouble("imageScale", .25).coerceIn(.05,.8).toFloat(); val lh = lw*logo.height/logo.width; canvas.drawBitmap(logo,null,RectF(x-lw/2,y-lh/2,x+lw/2,y+lh/2),paint) } finally { logo.recycle() } }
-      else { val text = mark.optString("text"); require(text.length <= 200) { "Keep the watermark under 200 characters." }; canvas.drawText(text,x,y-(paint.ascent()+paint.descent())/2,paint) }
+      if (imageUri.isNotEmpty()) { val file = local(context,imageUri); val logo = ImageProcessing.decode(context,Uri.fromFile(file),1024); try { val lw = w * mark.optDouble("imageScale", .25).coerceIn(.05,.8).toFloat(); val lh = lw*logo.height/logo.width; val x = place(fx, lw, w.toFloat()); val y = place(fy, lh, h.toFloat()); canvas.drawBitmap(logo,null,RectF(x-lw/2,y-lh/2,x+lw/2,y+lh/2),paint) } finally { logo.recycle() } }
+      else { val text = mark.optString("text"); require(text.length <= 200) { "Keep the watermark under 200 characters." }; val x = place(fx, paint.measureText(text), w.toFloat()); val y = place(fy, paint.descent() - paint.ascent(), h.toFloat()); canvas.drawText(text,x,y-(paint.ascent()+paint.descent())/2,paint) }
     }
   }
   private fun effects(source: Bitmap, radius: Int, sharp: Float, check: () -> Unit): Bitmap {

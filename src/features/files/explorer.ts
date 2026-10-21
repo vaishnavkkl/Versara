@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { router } from 'expo-router';
 import { FileEngine, type ExplorerEntry, type ExplorerKind } from '../../../modules/file-engine';
 import { openPdfScreen } from '@/features/pdf/open-pdf-screen';
@@ -20,6 +21,18 @@ export const KIND_GLYPHS: Record<ExplorerKind, Glyph> = {
   app: { ios: 'app.badge', android: 'android', tint: ['#34A853', '#8BD99B'] },
   other: { ios: 'doc.fill', android: 'insert-drive-file', tint: ['#6B7280', '#A1A1AA'] },
 };
+
+// Formats the platform image decoder opens; Android cannot decode TIFF.
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif', ...(Platform.OS === 'ios' ? ['tif', 'tiff'] : [])]);
+
+/** The file manager lists folders, PDFs and images Versara can open; everything else stays hidden. */
+export function isSupportedEntry(entry: ExplorerEntry) {
+  if (entry.directory) return !entry.name.startsWith('.');
+  if (entry.kind === 'pdf') return true;
+  if (entry.kind !== 'image') return false;
+  const extension = /\.([a-z0-9]+)$/i.exec(entry.name)?.[1]?.toLowerCase();
+  return extension ? IMAGE_EXTENSIONS.has(extension) : entry.mimeType.startsWith('image/');
+}
 
 let opening = false;
 /** Routes a device file to the matching Versara viewer; other types show that they aren't supported. */

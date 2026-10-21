@@ -8,24 +8,29 @@ import type { FileKind } from '@/features/files/recent-files';
 import { getFileRevision, useLibraryRevision } from '@/features/files/library-revision';
 
 const icons = { pdf: ['doc.richtext', 'picture-as-pdf'], image: ['photo', 'image'], video: ['play.rectangle', 'smart-display'], audio: ['waveform', 'graphic-eq'] } as const;
-export const FileThumbnail = memo(function FileThumbnail({ uri, kind, page = 0, revision = '', active = true }: { uri: string; kind: FileKind; page?: number; revision?: string; active?: boolean }) {
+export const FileThumbnail = memo(function FileThumbnail({ uri, kind, page = 0, revision = '', active = true, protected: locked = false }: { uri: string; kind: FileKind; page?: number; revision?: string; active?: boolean; protected?: boolean }) {
   const colors = usePalette();
   useLibraryRevision();
   const contentRevision = `${revision}:${getFileRevision(uri)}`;
-  const identity = `${uri}|${kind}|${page}|${contentRevision}`;
+  const identity = `${uri}|${kind}|${page}|${contentRevision}|${locked ? 'lock' : ''}`;
   const [thumbnail, setThumbnail] = useState<{ identity: string; uri: string } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
-    if (!active || kind === 'image') return;
+    if (!active || kind === 'image' || locked) return;
     let current = true;
     const request = requestThumbnail(uri, kind, page, contentRevision);
     void request.promise.then(result => { if (current && result) setThumbnail({ identity, uri: result }); });
     return () => { current = false; request.release(); };
-  }, [uri, kind, page, contentRevision, identity, active]);
-  const image = kind === 'image' ? uri : thumbnail?.identity === identity ? thumbnail.uri : null;
+  }, [uri, kind, page, contentRevision, identity, active, locked]);
+  const image = !locked && kind === 'image' ? uri : !locked && thumbnail?.identity === identity ? thumbnail.uri : null;
   const imageKey = `${identity}|${image}`;
+  const glyph = locked && kind === 'pdf' ? (['lock.doc', 'lock'] as const) : icons[kind];
   return <View style={[styles.box, { backgroundColor: colors.accentSurface }]}>
-    {active && image && failed !== imageKey ? <Image key={imageKey} source={{ uri: image }} cachePolicy="none" recyclingKey={imageKey} contentFit={kind === 'pdf' ? 'contain' : 'cover'} style={StyleSheet.absoluteFill} onError={() => setFailed(imageKey)} /> : <UniversalIcon ios={icons[kind][0]} android={icons[kind][1]} size={26} color={colors.systemBlue} />}
+    {active && image && failed !== imageKey ? <Image key={imageKey} source={{ uri: image }} cachePolicy="none" recyclingKey={imageKey} contentFit={kind === 'pdf' ? 'contain' : 'cover'} style={StyleSheet.absoluteFill} onError={() => setFailed(imageKey)} /> : <UniversalIcon ios={glyph[0]} android={glyph[1]} size={26} color={colors.systemBlue} />}
+    {locked && kind === 'pdf' && image ? <View style={[styles.lockBadge, { backgroundColor: colors.systemBackground }]}><UniversalIcon ios="lock.fill" android="lock" size={12} color={colors.systemBlue} /></View> : null}
   </View>;
 });
-const styles = StyleSheet.create({ box: { flex: 1, width: '100%', height: '100%', borderRadius: 8, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({
+  box: { flex: 1, width: '100%', height: '100%', borderRadius: 8, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  lockBadge: { position: 'absolute', right: 4, bottom: 4, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+});

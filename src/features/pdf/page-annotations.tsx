@@ -57,7 +57,7 @@ export const PageAnnotationsPanel = memo(function PageAnnotationsPanel({ annotat
         <Pressable accessibilityRole="button" accessibilityLabel={`${focused ? 'Stop outlining' : 'Outline'} ${LABELS[item.subtype] ?? 'annotation'}`} disabled={disabled} onPress={() => onFocus(focused ? undefined : item.index)} style={styles.summary}>
           <ThemedText style={[styles.title, edit?.remove && styles.removed]}>{LABELS[item.subtype] ?? 'Annotation'}</ThemedText>
           {!!detail && <ThemedText numberOfLines={2} style={{ color: colors.secondaryLabel }}>{detail}</ThemedText>}
-          {!!status && <ThemedText style={{ color: edit ? colors.accent : colors.secondaryLabel, fontSize: 13 }}>{status}</ThemedText>}
+          {!!status && <ThemedText style={{ color: edit ? colors.systemBlue : colors.secondaryLabel, fontSize: 13 }}>{status}</ThemedText>}
         </Pressable>
         <View style={styles.actions}>
           {item.deletable && <EditorOption compact label={edit?.remove ? 'Restore' : 'Delete'} disabled={disabled} onPress={() => edit?.remove ? onChange(key, undefined) : onChange(key, { subtype: item.subtype, remove: true })} />}

@@ -15,6 +15,8 @@ private struct RecentImage: Decodable {
   let revision: String?
   let bookmarkable: Bool?
   let bookmarked: Bool?
+  /// JSON key `protected` — password-locked PDF from Protect PDF.
+  let `protected`: Bool?
 }
 
 final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
@@ -165,6 +167,8 @@ final class RecentImagesView: ExpoView, UICollectionViewDataSource, UICollection
 
   private func load(_ item: RecentImage, into cell: RecentImageCell) {
     guard active else { return }
+    // Password-protected PDFs cannot be thumbnailed; keep the lock glyph from configure.
+    if item.protected == true, item.kind == "pdf" { return }
     let size = grid ? gridPixels : listPixels
     let key = "\(item.uri)|\(item.kind ?? "image")|\(item.revision ?? "")|\(size)" as NSString
     if let image = cache.object(forKey: key) { cell.image.image = image; return }
@@ -288,8 +292,9 @@ private final class RecentImageCell: UICollectionViewCell {
     contentView.backgroundColor = surface
     name.text = item.name; name.textColor = label
     detail.text = item.detail; detail.textColor = secondary
-    let symbol = item.kind == "pdf" ? "doc.richtext" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
-    image.image = UIImage(systemName: symbol); image.tintColor = secondary
+    let locked = item.protected == true && item.kind == "pdf"
+    let symbol = locked ? "lock.doc" : item.kind == "pdf" ? "doc.richtext" : item.kind == "video" ? "play.rectangle" : item.kind == "audio" ? "waveform" : "photo"
+    image.image = UIImage(systemName: symbol); image.tintColor = locked ? accent : secondary
     remove.tintColor = grid ? .white : secondary.withAlphaComponent(0.55)
     remove.layer.shadowOpacity = grid ? 0.45 : 0
     remove.layer.shadowRadius = 3

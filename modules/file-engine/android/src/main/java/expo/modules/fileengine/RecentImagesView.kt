@@ -3,6 +3,7 @@ package expo.modules.fileengine
 import android.app.ActivityManager
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -131,7 +132,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   private val onBookmark by EventDispatcher()
   private val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(context)
   fun setRefreshing(value: Boolean) { if (swipe.isRefreshing != value) swipe.isRefreshing = value }
-  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String, val revision: String, val bookmarkable: Boolean, val bookmarked: Boolean)
+  private data class Item(val id: String, val uri: String, val name: String, val detail: String, val removable: Boolean, val kind: String, val revision: String, val bookmarkable: Boolean, val bookmarked: Boolean, val locked: Boolean)
   private var items = emptyList<Item>()
   private var itemsJson = ""
   private var paletteJson = ""
@@ -231,7 +232,7 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
     val array = JSONArray(json)
     items = (0 until min(array.length(), 160)).map { index ->
       val item = array.getJSONObject(index)
-      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"), item.optString("revision"), item.optBoolean("bookmarkable"), item.optBoolean("bookmarked"))
+      Item(item.getString("id"), item.getString("uri"), item.getString("name"), item.getString("detail"), item.optBoolean("removable"), item.optString("kind", "image"), item.optString("revision"), item.optBoolean("bookmarkable"), item.optBoolean("bookmarked"), item.optBoolean("protected"))
     }
     refresh()
   }
@@ -254,10 +255,11 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
   }
   private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
-  private fun placeholder(kind: String) = when (kind) {
-    "video" -> android.R.drawable.ic_media_play
-    "audio" -> android.R.drawable.ic_lock_silent_mode_off
-    "pdf" -> android.R.drawable.ic_menu_agenda
+  private fun placeholder(kind: String, locked: Boolean = false) = when {
+    locked && kind == "pdf" -> android.R.drawable.ic_lock_lock
+    kind == "video" -> android.R.drawable.ic_media_play
+    kind == "audio" -> android.R.drawable.ic_lock_silent_mode_off
+    kind == "pdf" -> android.R.drawable.ic_menu_agenda
     else -> android.R.drawable.ic_menu_gallery
   }
 
@@ -369,13 +371,23 @@ class RecentImagesView(context: Context, appContext: AppContext) : ExpoView(cont
       remove.visibility = if (next.removable) VISIBLE else GONE
       remove.contentDescription = "Remove ${next.name} from Recents"
       contentDescription = "Open ${next.name}. ${next.detail}"
+      // Password-protected PDFs always keep the lock glyph — never a cached page thumbnail.
+      if (next.locked && next.kind == "pdf") {
+        wanted = null
+        loaded = null
+        image.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        image.imageTintList = ColorStateList.valueOf(accent)
+        image.setImageResource(placeholder(next.kind, true))
+        return
+      }
+      image.imageTintList = null
       val size = if (gridCell) gridPixels else listPixels
       val key = "${next.uri}|${next.kind}|${next.revision}|$size"
       wanted = key
       val cached = cache.get(key)
       if (cached != null) { show(cached, key); return }
       image.scaleType = ImageView.ScaleType.CENTER_INSIDE
-      image.setImageResource(placeholder(next.kind))
+      image.setImageResource(placeholder(next.kind, false))
       if (!flinging) load()
     }
 

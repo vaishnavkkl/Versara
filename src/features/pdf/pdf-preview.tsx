@@ -89,7 +89,7 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
   const arrow = (forward: boolean) => {
     const off = disabled || (forward ? page + step > count : page <= 1);
     const pointsLeft = forward === flipped;
-    return <Pressable accessibilityRole="button" accessibilityLabel={forward ? 'Next page' : 'Previous page'} disabled={off} onPress={() => onPageChange(Math.max(1, Math.min(count, page + (forward ? step : -step))))} style={[styles.icon, tight && styles.tightIcon, off && styles.dim]}>
+    return <Pressable accessibilityRole="button" accessibilityLabel={forward ? 'Next page' : 'Previous page'} disabled={off} helpOnLongPress onPress={() => onPageChange(Math.max(1, Math.min(count, page + (forward ? step : -step))))} style={[styles.icon, tight && styles.tightIcon, off && styles.dim]}>
       <UniversalIcon ios={sideways ? forward ? 'chevron.down' : 'chevron.up' : pointsLeft ? 'chevron.left' : 'chevron.right'} android={sideways ? forward ? 'keyboard-arrow-down' : 'keyboard-arrow-up' : pointsLeft ? 'chevron-left' : 'chevron-right'} size={22} color={colors.systemBlue} />
     </Pressable>;
   };
@@ -134,12 +134,12 @@ export function PdfPreviewStage({ children, hint, status, onFit: fitPage, action
     <View style={styles.viewport}>
       {children}
       {actions && <View pointerEvents="box-none" style={{ position: 'absolute', right: 10, top: 10, maxWidth: '85%', alignItems: 'flex-end', gap: 8 }}>{actions}</View>}
-      {onFit && <Pressable accessibilityRole="button" accessibilityLabel="Fit PDF page" onPress={onFit} style={[styles.fit, actions ? { top: undefined, bottom: 10 } : undefined, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fit-screen" size={21} color={colors.systemBlue} /></Pressable>}
+      {onFit && <Pressable accessibilityRole="button" accessibilityLabel="Fit PDF page" helpOnLongPress onPress={onFit} style={[styles.fit, actions ? { top: undefined, bottom: 10 } : undefined, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fit-screen" size={21} color={colors.systemBlue} /></Pressable>}
     </View>
-    <View style={styles.caption}>
+    {(!!hint || !!status) && <View style={styles.caption}>
       <ThemedText numberOfLines={2} style={[styles.hint, styles.grow, { color: colors.secondaryLabel }]}>{hint}</ThemedText>
       {!!status && <ThemedText style={[styles.hint, { color: colors.systemBlue }]}>{status}</ThemedText>}
-    </View>
+    </View>}
   </>;
 }
 

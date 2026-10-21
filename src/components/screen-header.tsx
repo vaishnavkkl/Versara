@@ -15,14 +15,16 @@ type Props = { title: string; onBack: () => void; backLabel?: string; variant?: 
   share?: HeaderShareAction | null;
   /** Tool screens save or apply their result from the right, beside share. `null` shows the button disabled. */
   save?: HeaderShareAction | null;
-  /** Extra actions shown beside the close button in the close variant. */
+  /** Extra actions on the right, before the More menu (and before the close button in the close variant). */
   trailing?: ReactNode;
   /** Extra actions shown after the back button in the back variant. */
   leading?: ReactNode;
+  /** The file a tool works on, under the tool name, so the tool reads as part of the same document. */
+  subtitle?: string;
   menu?: EditorMenuItem[] };
 
 /** Screens go back from the left; file previews and sheets close from the right. The title stays centred. */
-export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing, leading, menu }: Props) {
+export function ScreenHeader({ title, onBack, backLabel, variant = 'back', children, share, save, trailing, leading, subtitle, menu }: Props) {
   const colors = usePalette();
   const close = variant === 'close';
   const [sharing, setSharing] = useState(false);
@@ -49,13 +51,13 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
   </Pressable>;
   const shareDisabled = !share || !!share.disabled || sharing;
   const shareButton = share !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={share?.label ?? 'Share'} accessibilityState={{ disabled: shareDisabled, busy: sharing }}
-    disabled={shareDisabled} onPress={() => void runShare()} hitSlop={4}
+    disabled={shareDisabled} onPress={() => void runShare()} helpOnLongPress hitSlop={4}
     style={({ pressed }) => [styles.back, { opacity: shareDisabled && !sharing ? 0.4 : pressed ? 0.6 : 1 }]}>
     <HeaderGlyph id="share" ios="square.and.arrow.up" android="mdi:share-variant-outline" loading={sharing} />
   </HelpPressable>;
   const saveDisabled = !save || !!save.disabled || saving;
   const saveButton = save !== undefined && <HelpPressable accessibilityRole="button" accessibilityLabel={save?.label ?? 'Save'} accessibilityState={{ disabled: saveDisabled, busy: saving }}
-    disabled={saveDisabled} onPress={() => void runSave()} hitSlop={4}
+    disabled={saveDisabled} onPress={() => void runSave()} helpOnLongPress hitSlop={4}
     style={({ pressed }) => [styles.back, { opacity: saveDisabled && !saving ? 0.4 : pressed ? 0.6 : 1 }]}>
     <HeaderGlyph id="save" ios="square.and.arrow.down" android="mdi:content-save-outline" loading={saving} />
   </HelpPressable>;
@@ -66,8 +68,11 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
   ]} />;
   return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
     <View style={[styles.side, styles.start]}>{close ? children : <>{button}{leading}</>}</View>
-    <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>
-    <View style={[styles.side, styles.end]}>{close ? <>{trailing}{overflow}{button}</> : <>{children}{menu !== undefined ? overflow : <>{saveButton}{shareButton}</>}</>}</View>
+    {subtitle ? <View style={styles.titles}>
+      <ThemedText accessibilityRole="header" numberOfLines={1} style={[styles.title, styles.stacked]}>{title}</ThemedText>
+      <ThemedText numberOfLines={1} ellipsizeMode="middle" style={[styles.subtitle, { color: colors.secondaryLabel }]}>{subtitle}</ThemedText>
+    </View> : <ThemedText accessibilityRole="header" numberOfLines={1} style={styles.title}>{title}</ThemedText>}
+    <View style={[styles.side, styles.end]}>{close ? <>{trailing}{overflow}{button}</> : <>{children}{trailing}{menu !== undefined ? overflow : <>{saveButton}{shareButton}</>}</>}</View>
   </View>;
 }
 
@@ -80,4 +85,7 @@ const styles = StyleSheet.create({
   end: { justifyContent: 'flex-end' },
   back: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, minWidth: 64, ...t.label, fontSize: 17, textAlign: 'center' },
+  titles: { flex: 1, minWidth: 64, alignItems: 'stretch' },
+  stacked: { flex: 0, lineHeight: 21 },
+  subtitle: { fontSize: 12, lineHeight: 15, textAlign: 'center' },
 });

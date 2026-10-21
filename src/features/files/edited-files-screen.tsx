@@ -21,6 +21,7 @@ import { createPdfToolForDocument, discardPdfToolSession } from '../pdf/pdf-tool
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { toast } from '@/components/toast';
 import { rememberFile, type FileKind } from './recent-files';
+import { isProtectedPdf } from './protected-pdfs';
 
 type Filter = 'all' | FileKind;
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'pdf', label: 'PDFs' }, { id: 'image', label: 'Images' }];
@@ -173,7 +174,7 @@ const EditedFileRow = memo(function EditedFileRow({ item, active, busy, onOpen, 
   const colors = usePalette();
   return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void onOpen(item); }}
         style={({ pressed }) => [styles.row, { backgroundColor: colors.catalogSurface, borderColor: colors.separator, opacity: pressed ? 0.7 : 1 }]}>
-        <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.modified}:${item.size}`} active={active} /></View>
+        <View style={styles.thumbnail}><FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.modified}:${item.size}`} active={active} protected={item.kind === 'pdf' && isProtectedPdf(item.uri)} /></View>
         <View style={styles.meta}>
           <ThemedText numberOfLines={2} style={styles.name}>{item.name}</ThemedText>
           <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{dateLabel(item.modified)} · {formatSize(item.size)}</ThemedText>

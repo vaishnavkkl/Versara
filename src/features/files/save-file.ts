@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { router } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { promptFileName, showDialog } from '@/components/app-dialog';
 import { withLoading } from '@/components/app-loader';
@@ -97,6 +98,11 @@ export async function saveExistingFile(file: { uri: string; name: string; mimeTy
     }
     return saveEditedOutput({ output, mimeType, kind: file.kind, origin: file, mode: choice.mode, name: choice.name });
   });
+}
+
+/** After a save, the tool gives way to the saved image's preview, which has Share and every tool. */
+export function showSavedImage(recentId: string) {
+  router.replace({ pathname: '/file-preview', params: { id: recentId, revision: String(Date.now()) } });
 }
 
 /** Save button for PDF tool results. Asks Save / Save as new when the tool was opened from a Versara file. */

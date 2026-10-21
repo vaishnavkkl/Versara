@@ -49,7 +49,7 @@ export function ToolRowButton({ label, icon, onPress, selected = false, disabled
   const colors = usePalette();
   const inCompactRow = useContext(CompactRowContext);
   if (inCompactRow) { compact = true; caption = false; }
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled, expanded }} disabled={disabled} onPress={onPress} hitSlop={compact ? { top: 2, bottom: 2 } : 2}
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled, expanded }} disabled={disabled} onPress={onPress} helpOnLongPress={!caption} hitSlop={compact ? { top: 2, bottom: 2 } : 2}
     style={({ pressed }) => [styles.button, compact && styles.compactButton, caption && styles.captioned, { opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
     <HeaderGlyph {...icon} size={compact ? 38 : 40} selected={selected} />
     {caption && <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.systemBlue }]}>{label}</ThemedText>}

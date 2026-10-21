@@ -34,11 +34,12 @@ export const ModuleCard = memo(function ModuleCard({ title, description, ios, an
   const reduced = useReducedMotion();
   const [pressed, setPressed] = useState(false);
   const list = variant === 'list';
+  const dashboard = variant === 'dashboard';
+  const iconSize = dashboard ? 60 : 40;
   const blocked = disabled || loading;
-  const toolCard = variant !== 'dashboard';
-  const brand = !toolCard && BRAND_ART.includes(tone as Exclude<BrandArt, 'tools'>) ? tone as Exclude<BrandArt, 'tools'> : null;
-  const icon = brand ? <BrandGlyph art={brand} size={40} loading={loading} />
-    : <AppGlyph id={colorId ?? title} ios={ios} android={android} size={40} loading={loading} />;
+  const brand = !colorId && BRAND_ART.includes(tone as Exclude<BrandArt, 'tools'>) ? tone as Exclude<BrandArt, 'tools'> : null;
+  const icon = brand ? <BrandGlyph art={brand} size={iconSize} loading={loading} />
+    : <AppGlyph id={colorId ?? title} ios={ios} android={android} size={iconSize} loading={loading} />;
   const disclosure = !blocked && <View style={[styles.arrow, { backgroundColor: colors.accentSurface }]}>
     <UniversalIcon ios="arrow.right" android="mdi:arrow-right" size={18} color={colors.systemBlue} />
   </View>;
@@ -55,7 +56,7 @@ export const ModuleCard = memo(function ModuleCard({ title, description, ios, an
     <View style={[styles.cardContent, list && styles.listContent]} onLayout={onContentHeight ? event => onContentHeight(event.nativeEvent.layout.height) : undefined}>
     {list ? icon : <View style={styles.top}>{icon}{disclosure}</View>}
     <View style={[styles.text, list && styles.grow]}>
-      <ThemedText style={[styles.title, { color: colors.label }]}>{title}</ThemedText>
+      <ThemedText style={[styles.title, dashboard && styles.dashboardTitle, { color: colors.label }]}>{title}</ThemedText>
       <ThemedText style={[styles.description, !list && { minHeight: t.catalogDescription.lineHeight * 2 * fontScale }, { color: colors.secondaryLabel }]}>{loading ? 'Opening files...' : description}</ThemedText>
       {!!detail && <ThemedText style={[styles.detail, { color: colors.secondaryLabel }]}>{detail}</ThemedText>}
     </View>
@@ -69,7 +70,8 @@ const styles = StyleSheet.create({
   cardContent: { gap: s.sm },
   listContent: { flexDirection: 'row', alignItems: 'center', gap: s.md },
   grid: { minHeight: catalog.gridMinHeight },
-  dashboard: { minHeight: catalog.dashboardMinHeight, gap: s.sm },
+  dashboard: { minHeight: catalog.dashboardMinHeight, padding: s.lg, gap: s.sm },
+  dashboardTitle: { fontSize: 18, lineHeight: 24 },
   list: { minHeight: 80, justifyContent: 'center' },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: s.sm },
   arrow: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },

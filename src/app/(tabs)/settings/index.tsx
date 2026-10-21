@@ -32,6 +32,7 @@ function cacheBytes() {
 export default function SettingsScreen() {
   const colors = usePalette();
   const mode = useAppearance(state => state.mode);
+  const preference = useAppearance(state => state.preference);
   const reducedMotion = useReducedMotion();
   const [media, setMedia] = useState<FileAccessStatus>('unavailable');
   const [allFiles, setAllFiles] = useState<boolean | null>(null);
@@ -79,6 +80,17 @@ export default function SettingsScreen() {
     ], { ios: 'clock.arrow.circlepath', android: 'history' });
   }
 
+  // Once the system stops asking, the permission can only be changed in system settings.
+  async function allowMedia() {
+    const wasDenied = media === 'denied';
+    const status = await requestFileAccess();
+    setMedia(status);
+    if (status === 'denied' && wasDenied) {
+      toast('Allow photo access in system settings');
+      void Linking.openSettings().catch(() => toast('Could not open system settings'));
+    }
+  }
+
   function showTips() {
     try { localStorage.removeItem('versara.guide.dismissed'); } catch { /* Optional preference. */ }
     toast('The welcome tip will show on Home');
@@ -107,9 +119,10 @@ export default function SettingsScreen() {
       <View style={{ gap: s.sm }}><ThemedText accessibilityRole="header" style={[styles.title, { color: colors.label }]}>Settings</ThemedText><ThemedText style={{ color: colors.secondaryLabel }}>Make Versara feel right for you.</ThemedText></View>
 
       <Section title="Appearance">
-        <Row icon={{ ios: 'circle.lefthalf.filled', android: 'contrast' }} title="Theme" trailing={<AppearanceButtons compact />} />
+        <Row icon={{ ios: 'circle.lefthalf.filled', android: 'contrast' }} title="Theme" caption={preference === 'system' ? `Matches your device · ${mode === 'dark' ? 'Dark' : 'Light'}` : preference === 'dark' ? 'Dark' : 'Light'} trailing={<AppearanceButtons compact />} />
         <Row icon={{ ios: 'square.grid.2x2', android: 'grid-view' }} title="Home layout" caption="Grid or list" trailing={<LayoutToggle />} />
-        <Row icon={{ ios: 'figure.walk', android: 'animation' }} title="Motion" caption="Follows your device accessibility preference" value={reducedMotion ? 'Reduced' : 'Standard'} />
+        <Row icon={{ ios: 'figure.walk', android: 'animation' }} title="Motion" caption={Platform.OS === 'android' ? 'Follows your device. Tap to change “Remove animations”' : 'Follows Reduce Motion in iOS Accessibility settings'} value={reducedMotion ? 'Reduced' : 'Standard'}
+          onPress={Platform.OS === 'android' ? () => { void Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS').catch(() => toast('Could not open accessibility settings')); } : undefined} external />
       </Section>
 
       <Section title="Search & history">
@@ -119,7 +132,7 @@ export default function SettingsScreen() {
 
       <Section title="Files & storage">
         <Row icon={{ ios: 'square.and.pencil', android: 'edit-note' }} title="Edited files" caption="Open, rename, duplicate and export your work" onPress={() => router.push('/edited-files')} />
-        <Row icon={{ ios: 'photo.on.rectangle', android: 'perm-media' }} title="Photo library" caption={mediaLabel} disabled={!isFileEngineAvailable() || media === 'granted'} onPress={() => { void requestFileAccess().then(setMedia); }} value={media === 'granted' || !isFileEngineAvailable() ? undefined : 'Allow'} />
+        <Row icon={{ ios: 'photo.on.rectangle', android: 'perm-media' }} title="Photo library" caption={mediaLabel} disabled={!isFileEngineAvailable() || media === 'granted'} onPress={allowMedia} value={media === 'granted' || !isFileEngineAvailable() ? undefined : 'Allow'} />
         {Platform.OS === 'android' && allFiles !== null && (
           <Row icon={{ ios: 'folder', android: 'folder-shared' }} title="All files access" caption={allFiles ? 'Allowed — Files and Search can browse storage' : 'Needed for Files and Search'} disabled={allFiles} onPress={() => { void FileEngine?.requestPdfAccessAsync().then(result => setAllFiles(result.granted)).catch(() => toast('Could not open permission settings')); }} value={allFiles ? undefined : 'Allow'} />
         )}

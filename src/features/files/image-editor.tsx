@@ -26,8 +26,8 @@ import { useSliderValue } from '@/hooks/use-slider-value';
 import ImageEditorView, { hasNativeImageEditor, type ImageCrop } from '../../../modules/file-engine/src/ImageEditorView';
 import { FileEngine } from '../../../modules/file-engine';
 import { type RecentFile } from './recent-files';
-import { askSaveOptions, newFileName, saveEditedOutput } from './save-file';
-import { formatSize, shareFile, shareNamedFile, shareRenderedFile } from './file-storage';
+import { askSaveOptions, newFileName, saveEditedOutput, showSavedImage } from './save-file';
+import { formatSize, shareNamedFile, shareRenderedFile } from './file-storage';
 import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { OptionSheet } from '@/components/option-sheet';
 
@@ -241,17 +241,14 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
       const { result, saved } = await withLoading('Saving your image…', async () => {
         const rendered = await engine.editImage(JSON.stringify({ uri: file.uri, outputUri: output.uri, edits: snapshot.edits, crop: snapshot.crop, ...dimensions, format: snapshot.format, quality: snapshot.quality }));
         const stored = await saveEditedOutput({ output: rendered.uri, mimeType: rendered.mimeType, kind: 'image', mode, origin: workspace.origin ?? file, name: options.name });
+        await draft.clear(); await workspace.discard();
         return { result: rendered, saved: stored };
       });
-      await draft.clear(); await workspace.discard();
       toast(`Saved to ${saved.device.location}`);
       if (!mounted.current) return;
-      if (mode === 'replace' && saved.recent) { router.replace({ pathname: '/file-preview', params: { id: saved.recent.id } }); return; }
-      showDialog('Image saved', `${saved.file.name}\n${result.width} × ${result.height} · ${formatSize(result.size)}\nSaved to ${saved.device.location}`, [
-        { text: 'Keep editing', style: 'cancel' },
-        { text: 'Share', onPress: () => { void shareFile({ uri: saved.file.uri, mimeType: result.mimeType }).catch(() => {}); } },
-        ...(saved.recent ? [{ text: 'Open', onPress: () => router.replace({ pathname: '/file-preview', params: { id: saved.recent!.id } }) }] : []),
-      ], { ios: 'checkmark.circle', android: 'check-circle' });
+      // The saved image opens straight away; its preview has Share and every tool.
+      if (saved.recent) { showSavedImage(saved.recent.id); return; }
+      showDialog('Image saved', `${saved.file.name}\n${result.width} × ${result.height} · ${formatSize(result.size)}\nSaved to ${saved.device.location}`, undefined, { ios: 'checkmark.circle', android: 'check-circle' });
     } catch (cause) {
       if (mounted.current) setError((cause as Error).message || 'Could not save the edited image.');
     } finally {
@@ -340,7 +337,7 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
 
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />
-    <ScreenHeader menu={[{ id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', icon: { ios: 'rotate.right', android: 'screen-rotation' }, disabled: busy, onPress: () => setLandscape(value => !value) }]} title={file ? 'Edit image' : 'Image editor'} onBack={requestClose}
+    <ScreenHeader menu={[{ id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', icon: { ios: 'rotate.right', android: 'screen-rotation' }, disabled: busy, onPress: () => setLandscape(value => !value) }]} title={file ? 'Edit image' : 'Image editor'} subtitle={file?.name} onBack={requestClose}
       share={{ onPress: shareImage, disabled: !file || busy || !draft.ready, label: changed ? 'Share edited image' : 'Share image' }}
        />
     <ToolActionRow

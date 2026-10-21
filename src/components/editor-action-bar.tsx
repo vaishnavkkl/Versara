@@ -1,11 +1,16 @@
 import { editorActions as metrics } from '@/theme/dashboard';
-import { Children, createContext, Fragment, isValidElement, useState, type ReactNode } from 'react';
+import { Children, cloneElement, createContext, Fragment, isValidElement, useState, type ReactNode } from 'react';
 import { StyleSheet, View, useWindowDimensions, type ViewProps } from 'react-native';
 
 export const EditorActionContext = createContext(false);
 
-function actions(children: ReactNode): ReactNode[] {
-  return Children.toArray(children).flatMap(child => isValidElement<{ children?: ReactNode }>(child) && child.type === Fragment ? actions(child.props.children) : [child]);
+/** Flattens fragments; nested keys carry their fragment's key, since `Children.toArray` restarts at `.0` inside each one. */
+function actions(children: ReactNode, prefix = ''): ReactNode[] {
+  return Children.toArray(children).flatMap(child => {
+    if (!isValidElement<{ children?: ReactNode }>(child)) return [child];
+    if (child.type === Fragment) return actions(child.props.children, `${prefix}${child.key}/`);
+    return [prefix ? cloneElement(child, { key: `${prefix}${child.key}` }) : child];
+  });
 }
 
 /** Equal action cells. Long labels and accessibility text grow the entire row together. */

@@ -2,7 +2,10 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { showDialog } from '@/components/app-dialog';
 import { toast } from '@/components/toast';
 import { FileEngine } from '../../../modules/file-engine';
-import { shareFile, shareNamedFile } from './file-storage';
+import { showActionSheet } from '@/components/action-sheet';
+import { formatSize, shareFile, shareNamedFile } from './file-storage';
+import { isFileBookmarked, useBookmarks } from './bookmarks';
+import { toggleFileBookmarkWithFeedback } from './bookmark-actions';
 import { removeRecentFile, type RecentListItem } from './recent-files';
 
 /** "12 Mar 2026, 4:05 PM" in the device locale. */
@@ -52,11 +55,19 @@ function confirmDelete(item: RecentListItem, onChanged: () => void) {
     ], { ios: 'trash', android: 'delete-outline' });
 }
 
-/** Long-press menu for recent files: Share and Delete. `onChanged` refreshes the list after a delete. */
-export function showRecentFileActions(item: RecentListItem, onChanged: () => void) {
-  showDialog(item.name, `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatWhen(item.opened)}`, [
-    { text: 'Cancel', style: 'cancel' },
-    { text: 'Delete', style: 'destructive', onPress: () => confirmDelete(item, onChanged) },
-    { text: 'Share', onPress: () => { void share(item); } },
-  ], { ios: 'ellipsis.circle', android: 'more-horiz' });
+/**
+ * A recent file's More menu, opened by long press or its More button: open, share, bookmark, details, then delete last.
+ * `onChanged` refreshes the list after a delete.
+ */
+export function showRecentFileActions(item: RecentListItem, onChanged: () => void, onOpen?: () => void) {
+  const location = item.source === 'device' ? 'On this device' : 'In Versara';
+  const bookmarked = isFileBookmarked(useBookmarks.getState().items, item);
+  const pdf = item.kind === 'pdf';
+  showActionSheet(item.name, [
+    ...(onOpen ? [{ id: 'open', label: pdf ? 'Open PDF' : 'Open image', icon: { ios: 'arrow.up.forward.app' as const, android: 'open-in-new' as const }, onPress: onOpen }] : []),
+    { id: 'share', label: 'Share', icon: { ios: 'square.and.arrow.up', android: 'share' }, onPress: () => { void share(item); } },
+    ...(pdf || item.kind === 'image' ? [{ id: 'bookmark', label: bookmarked ? 'Remove bookmark' : 'Bookmark', icon: bookmarked ? { ios: 'bookmark.fill' as const, android: 'bookmark' as const } : { ios: 'bookmark' as const, android: 'bookmark-border' as const }, onPress: () => toggleFileBookmarkWithFeedback(item) }] : []),
+    { id: 'details', label: 'File details', icon: { ios: 'info.circle', android: 'info-outline' }, onPress: () => showDialog('File details', `${item.name}\n${formatSize(item.size)} · ${pdf ? 'PDF' : item.mimeType}\n${location}\n${formatWhen(item.opened)}`, undefined, { ios: 'info.circle', android: 'info-outline' }) },
+    { id: 'delete', label: item.source === 'device' ? 'Delete from device' : 'Delete from Versara', destructive: true, icon: { ios: 'trash', android: 'delete-outline' }, onPress: () => confirmDelete(item, onChanged) },
+  ], { subtitle: `${location} · ${formatSize(item.size)}`, icon: pdf ? { ios: 'doc.richtext', android: 'picture-as-pdf' } : { ios: 'photo', android: 'image' } });
 }

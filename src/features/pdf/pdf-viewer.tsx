@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { BackHandler, Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
@@ -14,6 +14,7 @@ import { useAppearance, usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
+import { markProtectedPdf } from '../files/protected-pdfs';
 import { railSections, ToolRail, type RailTool } from '@/components/tool-rail';
 import { ToolSurround } from '@/components/tool-surround';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
@@ -32,11 +33,13 @@ import { ToolRowButton } from '@/components/tool-action-row';
 import { PdfPreviewToolbar } from './pdf-preview';
 import { usePdfSearch } from './use-pdf-search';
 import { PdfPageGrid } from './pdf-page-grid';
-import { readingLayoutAvailable, ReadingOptionsSheet } from './reading-options';
+import { readingLayoutAvailable, ReadingOptionsPanel } from './reading-options';
+import { PdfDetailsSheet } from './pdf-details-sheet';
+import { setReaderBackHandler } from './reader-back';
 import { useReadingPreferences } from './reading-preferences';
 import { togglePageBookmark, usePageBookmarks } from '../files/bookmarks';
 import { usePublishHeaderActions } from '@/components/header-actions';
-import { FocusChrome, useFocusLayout } from '@/components/focus-chrome';
+import { aboveChrome, FocusChrome, useFocusLayout } from '@/components/focus-chrome';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { HeaderGlyph } from '@/components/app-glyph';
 
@@ -75,6 +78,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const spread = layoutAvailable && reading.layout === 'double';
   const rightToLeft = layoutAvailable && reading.direction === 'rtl';
   const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [thumbnails, setThumbnails] = useState(true);
   const [stripReady, setStripReady] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -101,9 +105,10 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   // Protected PDFs: the password lives only in memory and is handed to the native reader.
   const [password, setPassword] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [locked, setLocked] = useState<{ message: string; incorrect: boolean } | null>(null);
   const [lockedUri, setLockedUri] = useState(document?.uri);
-  if (lockedUri !== document?.uri) { setLockedUri(document?.uri); setPassword(''); setPasswordDraft(''); setLocked(null); }
+  if (lockedUri !== document?.uri) { setLockedUri(document?.uri); setPassword(''); setPasswordDraft(''); setShowPassword(false); setLocked(null); }
   const search = usePdfSearch(document?.uri, searchQuery, screenActive && searchOpen && !openingEditor && !loading, password);
   const searchMatch = search.query === searchQuery.trim() ? search.matches[searchIndex] : undefined;
   const [busyLabel, setBusyLabel] = useState('Preparing PDF...');
@@ -282,7 +287,10 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   function performOption(id: string) {
     if (actionLock.current) return;
     Keyboard.dismiss();
-    if (id === 'search') { if (searchAvailable) { setSearchOpen(true); setFocused(false); } return; }
+    if (id === 'search') { if (searchAvailable) { setSearchOpen(true); setViewOptionsOpen(false); setFocused(false); } return; }
+    if (id === 'info') { ring.close(); setDetailsOpen(true); return; }
+    if (id === 'tools') { ring.close(); setToolboxOpen(true); return; }
+    if (id === 'reading') { ring.close(); setSearchOpen(false); setSearchQuery(''); setViewOptionsOpen(true); return; }
     if (id === 'previous') { goToPage(page - 1); return; }
     if (id === 'next') { goToPage(page + 1); return; }
     if (id === 'orientation') { setLandscapeRequested(value => !value); return; }
@@ -339,9 +347,9 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   // Surround mode offers document operations only; file and reader actions stay in the normal view.
   const surroundTools = editTools;
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
-  const strip = showStrip && !landscape ? <FocusChrome edge="bottom"><PdfPageStrip enabled={!toolboxOpen && !gridOpen && !viewOptionsOpen} rightToLeft={rightToLeft} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
+  const strip = showStrip && !landscape ? <FocusChrome edge="bottom"><PdfPageStrip enabled={!toolboxOpen && !gridOpen} rightToLeft={rightToLeft} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
   // Landscape keeps the page full height: odd pages list on the left, even pages on the right (mirrored right to left).
-  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <FocusChrome edge="side"><PdfPageStrip enabled={!toolboxOpen && !gridOpen && !viewOptionsOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
+  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <FocusChrome edge="side"><PdfPageStrip enabled={!toolboxOpen && !gridOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
   const controls = ready && !focused && !surrounding;
   // Search takes the page row's place; closing it brings the row back.
   const searching = controls && searchOpen;
@@ -356,24 +364,39 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
     const on = togglePageBookmark(document, page);
     toast(on ? `Page ${page + 1} bookmarked · see All pages` : `Bookmark on page ${page + 1} removed`);
   }
-  // The reading choices and bookmarks sit in the header, apart from the editing tools.
-  usePublishHeaderActions(controls && !toolLayout && !!document, [
+  // The header's More menu holds the tools first, then file actions, then reading choices. Inside a tool screen,
+  // that screen's header already offers share and save.
+  usePublishHeaderActions(controls && !!document, [
+    { id: 'tools', label: 'All tools', ios: 'wrench.and.screwdriver', android: 'mdi:toolbox-outline', selected: toolboxOpen, disabled: busy || loading, onPress: () => performOption('tools') },
+    ...(toolLayout ? [] : [
+      { id: 'share', label: 'Share PDF', ios: 'square.and.arrow.up' as const, android: 'mdi:share-variant-outline' as const, disabled: busy || loading, onPress: () => performOption('share') },
+      { id: 'save', label: 'Save a copy to device', ios: 'square.and.arrow.down' as const, android: 'mdi:content-save-outline' as const, disabled: busy || loading, onPress: () => performOption('save') },
+    ]),
+    { id: 'info', label: 'File details', ios: 'info.circle', android: 'mdi:information-outline', selected: detailsOpen, disabled: busy || loading, onPress: () => performOption('info') },
     { id: 'bookmark', label: pageBookmarked ? `Remove bookmark from page ${page + 1}` : `Bookmark page ${page + 1}`, ios: pageBookmarked ? 'bookmark.fill' : 'bookmark', android: pageBookmarked ? 'mdi:bookmark' : 'mdi:bookmark-outline', selected: pageBookmarked, disabled: busy || loading, onPress: toggleBookmark },
-    { id: 'reading', label: 'Reading options: scrolling, page layout, direction and thumbnails', ios: 'book', android: 'mdi:book-open-page-variant-outline', selected: viewOptionsOpen, disabled: busy || loading, onPress: () => { Keyboard.dismiss(); ring.close(); setViewOptionsOpen(true); } },
+    { id: 'reading', label: 'Reading options', ios: 'book', android: 'mdi:book-open-page-variant-outline', selected: viewOptionsOpen, disabled: busy || loading, onPress: () => { Keyboard.dismiss(); performOption('reading'); } },
   ]);
+  const readingOpen = controls && viewOptionsOpen;
+  // Back and the header's back button close the reading panel before the screen.
+  useEffect(() => {
+    if (!readingOpen) return;
+    const close = () => { setViewOptionsOpen(false); return true; };
+    const release = setReaderBackHandler(close);
+    const back = BackHandler.addEventListener('hardwareBackPress', close);
+    return () => { release(); back.remove(); };
+  }, [readingOpen]);
   // Tapping the page toggles focus mode whenever no panel or tool is using the page.
   const canToggleFocus = ready && !locked && !surrounding && !searchOpen && !toolboxOpen && !gridOpen && !viewOptionsOpen && !busy && !openingEditor;
   const pageBar = controls && <FocusChrome edge={landscape ? 'side' : 'top'}><PdfPreviewToolbar compact step={spread ? 2 : 1} rightToLeft={rightToLeft} page={page + 1} count={pageCount} disabled={busy || loading} onPageChange={target => goToPage(target - 1)} orientation={toolLayout ? undefined : orientation} rotate={!landscape || !!toolLayout}
     leading={<>
       <ToolRowButton compact label="Fit page" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={busy || loading} onPress={() => performOption('fit')} />
-      <ToolRowButton compact label="All tools" icon={{ ios: 'wrench.and.screwdriver', android: 'handyman' }} expanded={toolboxOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setToolboxOpen(true); }} />
       <ToolRowButton compact label="All pages in a grid" icon={{ ios: 'square.grid.3x3', android: 'grid-view' }} expanded={gridOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setGridOpen(true); }} />
     </>}>
     {searchAvailable && <ToolRowButton compact label="Search PDF" icon={{ ios: 'magnifyingglass', android: 'search' }} selected={searchOpen} disabled={busy || loading} onPress={() => performOption('search')} />}
     {landscape && <ToolRowButton compact label={thumbnails ? 'Hide page thumbnails' : 'Show page thumbnails'} icon={{ ios: 'square.grid.2x2', android: 'view-carousel' }} selected={thumbnails} onPress={() => performOption('thumbnails')} />}
   </PdfPreviewToolbar></FocusChrome>;
   return (
-    <Animated.View layout={pageLayout} style={styles.screen}>
+    <Animated.View layout={pageLayout} style={[styles.screen, surrounding && aboveChrome]}>
       {!toolLayout && <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />}
       {!isPdfEngineAvailable ? (
         <View style={styles.empty}>
@@ -396,10 +419,11 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
             </View>
             {!!searchQuery.trim() && !search.busy && (!!search.error || !search.matches.length) && <ThemedText accessibilityRole={search.error ? 'alert' : undefined} style={[styles.searchStatus, { color: search.error ? colors.destructive : colors.secondaryLabel }]}>{searchMessage}</ThemedText>}
           </View>}
-          {!landscape && !searching && pageBar}
-          <Animated.View layout={pageLayout} style={styles.body2}>
+          {readingOpen && <ReadingOptionsPanel landscape={landscape} thumbnails={{ visible: thumbnails, onChange: setThumbnails }} onClose={() => setViewOptionsOpen(false)} />}
+          {!landscape && !searching && !readingOpen && pageBar}
+          <Animated.View layout={pageLayout} style={[styles.body2, surrounding && aboveChrome]}>
           <View style={[styles.body2, landscape && styles.row]}>
-          {landscape && !searching && pageBar}
+          {landscape && !searching && !readingOpen && pageBar}
           {sideStrip(rightToLeft ? 1 : 0)}
           <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
           <View style={[styles.canvas, landscape && !surrounding && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
@@ -419,12 +443,14 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
               onLoad={({ nativeEvent }) => { setPageCount(nativeEvent.pageCount); setLoading(false); }}
               onPageChange={({ nativeEvent }) => { setPage(nativeEvent.page); setLoading(false); }}
               onZoomChange={() => {}}
-              onTap={() => { if (canToggleFocus) setFocused(value => !value); }}
+              onTap={() => { if (readingOpen) setViewOptionsOpen(false); else if (canToggleFocus) setFocused(value => !value); }}
               password={password}
               onError={({ nativeEvent }) => {
                 setLoading(false);
-                if (nativeEvent.code === 'PDF_PASSWORD_REQUIRED' || nativeEvent.code === 'PDF_PASSWORD_INCORRECT') setLocked({ message: nativeEvent.message, incorrect: nativeEvent.code === 'PDF_PASSWORD_INCORRECT' });
-                else setError(nativeEvent.message);
+                if (nativeEvent.code === 'PDF_PASSWORD_REQUIRED' || nativeEvent.code === 'PDF_PASSWORD_INCORRECT') {
+                  if (document?.uri) markProtectedPdf(document.uri);
+                  setLocked({ message: nativeEvent.message, incorrect: nativeEvent.code === 'PDF_PASSWORD_INCORRECT' });
+                } else setError(nativeEvent.message);
               }}
             />}
             {((busy && (!openingEditor || openingSlow)) || (loading && !error && screenActive)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
@@ -433,9 +459,14 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
                 <UniversalIcon ios="lock.doc" android="lock" size={36} color={colors.systemBlue} />
                 <ThemedText style={styles.heading}>Password protected</ThemedText>
                 <ThemedText numberOfLines={1} style={[styles.body, { color: colors.secondaryLabel }]}>{document.name}</ThemedText>
-                <TextInput accessibilityLabel="PDF password" autoFocus secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="password" importantForAutofill="no"
-                  value={passwordDraft} onChangeText={value => { setPasswordDraft(value); if (locked.incorrect) setLocked({ ...locked, incorrect: false }); }} maxLength={128} returnKeyType="go" onSubmitEditing={unlock}
-                  placeholder="Enter password" placeholderTextColor={colors.secondaryLabel} style={[styles.passwordInput, { color: colors.label, backgroundColor: colors.accentSurface, borderColor: locked.incorrect ? colors.destructive : 'transparent' }]} />
+                <View style={styles.passwordRow}>
+                  <TextInput accessibilityLabel="PDF password" autoFocus secureTextEntry={!showPassword} autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="password" importantForAutofill="no"
+                    value={passwordDraft} onChangeText={value => { setPasswordDraft(value); if (locked.incorrect) setLocked({ ...locked, incorrect: false }); }} maxLength={128} returnKeyType="go" onSubmitEditing={unlock}
+                    placeholder="Enter password" placeholderTextColor={colors.secondaryLabel} style={[styles.passwordInput, { color: colors.label, backgroundColor: colors.accentSurface, borderColor: locked.incorrect ? colors.destructive : 'transparent', paddingRight: 48 }]} />
+                  <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={() => setShowPassword(value => !value)} style={styles.passwordEye} hitSlop={8}>
+                    <UniversalIcon ios={showPassword ? 'eye.slash' : 'eye'} android={showPassword ? 'visibility-off' : 'visibility'} size={20} color={colors.secondaryLabel} />
+                  </Pressable>
+                </View>
                 <ThemedText accessibilityLiveRegion="polite" accessibilityRole={locked.incorrect ? 'alert' : undefined} style={[styles.body, { color: locked.incorrect ? colors.destructive : colors.secondaryLabel }]}>{locked.incorrect ? 'That password is not correct. Try again.' : 'Enter the password to read this PDF. It is used only on this device and is not saved.'}</ThemedText>
                 <ToolButton title="Open PDF" disabled={!passwordDraft} onPress={unlock} />
               </View>
@@ -452,7 +483,7 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
           {ready && !focused && !surrounding && <FocusChrome edge={landscape ? 'side' : 'bottom'}><ToolRail tools={visibleTools} quickIds={quickIds} disabled={busy || loading} landscape={landscape} onAction={performOption}
             toolsButton={{ label: 'Tools', accessibilityLabel: 'Show all tools around the page', onPress: () => performOption('surround') }} /></FocusChrome>}
           {ready && document && <PdfPageGrid visible={gridOpen && !surrounding && screenActive} uri={document.uri} name={document.name} count={pageCount} page={page} rightToLeft={rightToLeft} bookmarks={bookmarkedPages} onSelect={goToPage} onClose={() => setGridOpen(false)} />}
-          {ready && <ReadingOptionsSheet visible={viewOptionsOpen && !surrounding && screenActive} landscape={landscape} thumbnails={{ visible: thumbnails, onChange: setThumbnails }} onClose={() => setViewOptionsOpen(false)} />}
+          {ready && document && <PdfDetailsSheet visible={detailsOpen && !surrounding && screenActive} uri={document.uri} name={document.name} pageCount={pageCount} password={password} onClose={() => setDetailsOpen(false)} />}
           {ready && <ToolboxSheet visible={toolboxOpen && !surrounding && screenActive} title="All tools" subtitle={document?.name ?? 'PDF'} sections={toolboxSections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={performOption} />}
           </View>
           </Animated.View>
@@ -480,7 +511,9 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: s.lg, padding: s.xxl },
   locked: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', padding: s.lg, paddingTop: s.xxl },
   lockCard: { width: '100%', maxWidth: 420, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, padding: s.lg, gap: s.md, alignItems: 'center' },
+  passwordRow: { alignSelf: 'stretch', position: 'relative' },
   passwordInput: { alignSelf: 'stretch', minHeight: 48, borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, fontSize: 16 },
+  passwordEye: { position: 'absolute', right: 4, top: 0, bottom: 0, width: 44, alignItems: 'center', justifyContent: 'center' },
   heading: { ...t.heading, textAlign: 'center' },
   body: { ...t.body, textAlign: 'center' },
   loading: { ...StyleSheet.absoluteFill, justifyContent: 'center', alignItems: 'center' },

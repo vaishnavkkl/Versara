@@ -44,7 +44,7 @@ export function EditorMenu({ label, items, disabled = false, compact = false, ic
     setOpen(false);
     if (!disabled && !item.disabled) item.onPress();
   };
-  const trigger = iconOnly ? <Pressable accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)} hitSlop={2}
+  const trigger = iconOnly ? <Pressable accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)} helpOnLongPress helpText={label} hitSlop={2}
     style={({ pressed }) => [styles.iconTrigger, { backgroundColor: open ? colors.accentSurface : 'transparent', borderColor: open ? colors.accent : 'transparent', opacity: disabled ? .35 : pressed ? .6 : 1 }]}>
     {triggerIcon && <UniversalIcon {...triggerIcon} size={22} color={triggerTint} />}
   </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`${label}, show options`} accessibilityState={{ expanded: open, disabled }} disabled={disabled} onPress={() => setOpen(value => !value)}

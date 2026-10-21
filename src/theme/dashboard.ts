@@ -22,7 +22,7 @@ export const typography = {
   tabLabel: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
 } as const;
 
-export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 136, dashboardMinHeight: 136, touchTarget: 48 } as const;
+export const catalog = { cardRadius: 20, iconSize: 44, iconRadius: 14, gridMinHeight: 136, dashboardMinHeight: 172, touchTarget: 48 } as const;
 export const motion = { feedback: 120, tab: { duration: 400, dampingRatio: 1 } } as const;
 export type ModuleTone = 'pdf' | 'word' | 'image' | 'files' | 'privacy' | 'default';
 export function moduleColors(colors: Palette, tone: ModuleTone) {

@@ -23,5 +23,8 @@ export const hasNativeListRefresh = (FileEngine?.nativeImageListVersion ?? 0) >=
 /** Version 5 separates cached thumbnails by file revision. */
 export const hasNativeThumbnailRevisions = (FileEngine?.nativeImageListVersion ?? 0) >= 5;
 /** Version 2 adds video frames and audio artwork. */
-export const hasNativeMediaList = (FileEngine?.nativeImageListVersion ?? 0) >= 2;const RecentImagesView = hasNativeImageList ? requireNativeView<RecentImagesProps>('FileEngine') : null;
+export const hasNativeMediaList = (FileEngine?.nativeImageListVersion ?? 0) >= 2;
+/** Version 7+: `protected` items use a lock glyph (v8 never replaces it with a cached page thumb). */
+export const hasNativeProtectedBadge = (FileEngine?.nativeImageListVersion ?? 0) >= 7;
+const RecentImagesView = hasNativeImageList ? requireNativeView<RecentImagesProps>('FileEngine') : null;
 export default RecentImagesView;

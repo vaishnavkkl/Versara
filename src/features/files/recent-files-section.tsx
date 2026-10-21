@@ -23,6 +23,7 @@ import type { FilePickerSelection } from './file-picker-session';
 import { compareFiles, FileSortMenu, useFileSort } from './file-sort-menu';
 import { isFileBookmarked, useBookmarks } from './bookmarks';
 import { toggleFileBookmarkWithFeedback } from './bookmark-actions';
+import { isProtectedPdf } from './protected-pdfs';
 
 type Filter = 'all' | 'pdf' | 'image' | 'bookmarked';
 const FILTERS: { id: Filter; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'pdf', label: 'PDF' }, { id: 'image', label: 'Images' }, { id: 'bookmarked', label: 'Bookmarked' }];
@@ -114,7 +115,7 @@ export function RecentFilesSection({ picker, header }: { picker?: FilePickerSele
       for (const [key, value] of cache) cache.set(key, { ...value, items: remove(value.items) });
       setLibrary(remove);
       refresh();
-    });
+    }, () => press(item));
   });
   const selecting = !!picker;
   const renderItem = useCallback(({ item }: { item: RecentListItem }) => <RecentFileRow item={item} grid={grid} active={active && visibleKeys.has(item.id)} checked={selectedUris.has(item.uri)} selecting={selecting} disabled={!!opening} opening={opening === item.id}
@@ -137,7 +138,7 @@ export function RecentFilesSection({ picker, header }: { picker?: FilePickerSele
         {(!pickerKind || pickerKind === 'any') ? <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.grow} contentContainerStyle={styles.chips} accessibilityRole="tablist">
           {FILTERS.map(option => <Pressable key={option.id} accessibilityRole="tab" accessibilityState={{ selected: option.id === filter }} onPress={() => setFilter(option.id)}
             style={[styles.chip, { backgroundColor: option.id === filter ? colors.systemBlue : colors.tileSurface, borderColor: option.id === filter ? colors.systemBlue : colors.tileBorder }]}>
-            <ThemedText style={[styles.chipText, { color: option.id === filter ? '#FFFFFF' : colors.label }]}>{option.label}</ThemedText>
+            <ThemedText style={[styles.chipText, { color: option.id === filter ? colors.systemBackground : colors.label }]}>{option.label}</ThemedText>
           </Pressable>)}
         </ScrollView> : <View style={styles.grow} />}
         <FileSortMenu sort={sort} onChange={setSort} />
@@ -156,7 +157,7 @@ const RecentFileRow = memo(function RecentFileRow({ item, grid, active, checked,
   return <Pressable accessibilityRole={selecting ? 'checkbox' : 'button'} accessibilityState={selecting ? { checked, disabled } : { disabled }} accessibilityLabel={`${selecting ? 'Select' : 'Open'} ${item.name}`} disabled={disabled}
     onPress={() => onPress(item)} onLongPress={selecting ? undefined : () => onActions(item)}
     style={({ pressed }) => [styles.row, grid && styles.gridCell, { backgroundColor: colors.tileSurface, borderColor: checked ? colors.systemBlue : colors.tileBorder, opacity: pressed ? 0.8 : 1 }]}>
-    <View style={[styles.thumb, grid && styles.gridThumb]}><FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.opened}:${item.size}`} active={active} /></View>
+    <View style={[styles.thumb, grid && styles.gridThumb]}><FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.opened}:${item.size}`} active={active} protected={item.kind === 'pdf' && isProtectedPdf(item.uri)} /></View>
     <View style={grid ? styles.gridMeta : styles.grow}>
       <ThemedText numberOfLines={grid ? 2 : 1} style={styles.name}>{item.name}</ThemedText>
       <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.secondaryLabel }]}>{formatSize(item.size)} · {formatWhen(item.opened)}</ThemedText>
@@ -166,7 +167,9 @@ const RecentFileRow = memo(function RecentFileRow({ item, grid, active, checked,
       <UniversalIcon ios={bookmarked ? 'bookmark.fill' : 'bookmark'} android={bookmarked ? 'bookmark' : 'bookmark-border'} size={20} color={grid ? '#FFFFFF' : bookmarked ? colors.systemBlue : colors.secondaryLabel} />
     </Pressable>}
     <View style={grid ? styles.corner : undefined}>{selecting ? <UniversalIcon ios={checked ? 'checkmark.circle.fill' : 'circle'} android={checked ? 'check-circle' : 'radio-button-unchecked'} size={22} color={colors.systemBlue} />
-      : opening ? <AppLoader size="small" /> : !grid && <UniversalIcon ios="chevron.right" android="chevron-right" size={18} color={colors.muted} />}</View>
+      : opening ? <AppLoader size="small" /> : <Pressable accessibilityRole="button" accessibilityLabel={`More options for ${item.name}`} disabled={disabled} onPress={() => onActions(item)} hitSlop={4} style={[styles.bookmark, grid && styles.moreCorner]}>
+        <UniversalIcon ios="ellipsis" android="more-vert" size={20} color={grid ? '#FFFFFF' : colors.secondaryLabel} />
+      </Pressable>}</View>
   </Pressable>;
 });
 
@@ -179,5 +182,6 @@ const styles = StyleSheet.create({
   thumb: { width: 40, height: 48, borderRadius: 8, overflow: 'hidden' }, gridCell: { width: '48%', flexDirection: 'column', alignItems: 'stretch' }, gridThumb: { width: '100%', height: undefined, aspectRatio: 1 },
   bookmark: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   bookmarkCorner: { position: 'absolute', top: 8, left: 8, borderRadius: 20, backgroundColor: '#00000059' },
-  gridMeta: { gap: 2 }, corner: { position: 'absolute', top: 12, right: 12 }, grow: { flex: 1, gap: 2 }, name: { fontSize: 15, lineHeight: 20, fontWeight: '600' }, caption: { ...t.caption }, empty: { paddingVertical: s.lg, textAlign: 'center', alignItems: 'center' },
+  moreCorner: { borderRadius: 20, backgroundColor: '#00000059' },
+  gridMeta: { gap: 2 }, corner: { position: 'absolute', top: 8, right: 8 }, grow: { flex: 1, gap: 2 }, name: { fontSize: 15, lineHeight: 20, fontWeight: '600' }, caption: { ...t.caption }, empty: { paddingVertical: s.lg, textAlign: 'center', alignItems: 'center' },
 });

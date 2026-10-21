@@ -8,6 +8,7 @@ import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { Image } from 'expo-image';
 import { PdfEngine, type ImagePdfOptions, type PdfResult } from '../../../modules/pdf-engine';
+import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -17,7 +18,7 @@ import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPd
 import { usePublishHeaderShare } from '@/components/header-share';
 import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { savePdfResult } from '../files/save-file';
-import { openPdfScreen } from './open-pdf-screen';
+import { openPdfScreen, showSavedPdf } from './open-pdf-screen';
 import { PdfPreviewBody, PdfPreviewFooter, PdfPreviewStage, PdfPreviewToolbar } from './pdf-preview';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
 import { PdfSourceCard } from './pdf-source-card';
@@ -46,6 +47,8 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState<(PdfResult & { name: string; location?: string }) | null>(null);
+  // The saved PDF opens by itself; until then the result screen stays hidden.
+  const [leaving, setLeaving] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -104,12 +107,14 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     try {
       const output = new File(savedPdfDirectory(), outputName);
       const created = await PdfEngine.imagesToPdf({ jobId: id, uris: files.map(file => file.uri), outputUri: output.uri, pageSize });
-      if (mounted.current) setResult({ ...created, name: outputName });
-      const saved = await savePdfResult({ ...created, name: outputName }, undefined, { mode: 'new', name: outputName });
-      if (saved && mounted.current) setResult({ ...created, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
-      toast('PDF created and saved');
-      // Preserve completed PDFs in app storage if the sheet closes at completion.
+      if (mounted.current) { setResult({ ...created, name: outputName }); setLeaving(true); }
+      const saved = await savePdfResult({ ...created, name: outputName }, undefined, { mode: 'new', name: outputName }, false);
+      toast(saved ? `Saved to ${saved.device.location}` : 'PDF created');
+      if (saved && mounted.current && showSavedPdf(saved.file)) return;
+      // Preserve completed PDFs in app storage if the save does not finish.
+      if (mounted.current) { setLeaving(false); if (saved) setResult({ ...created, uri: saved.file.uri, name: saved.file.name, location: saved.device.location }); }
     } catch (cause) {
+      if (mounted.current) setLeaving(false);
       const failure = cause as { code?: string; message?: string };
       if (mounted.current) setError(failure.code === 'PDF_CANCELLED' ? 'Conversion cancelled. Your images are ready to try again.' : failure.message ?? 'Could not create the PDF.');
     } finally {
@@ -122,7 +127,9 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
     if (!result || locked.current) return;
     locked.current = true; setBusy(true); setError('');
     try {
-      const saved = await savePdfResult(result);
+      const saved = await savePdfResult(result, undefined, undefined, false);
+      if (saved) toast(`Saved to ${saved.device.location}`);
+      if (saved && mounted.current && showSavedPdf(saved.file)) { setLeaving(true); return; }
       if (saved && mounted.current) setResult(current => current && { ...current, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { if (mounted.current) setError(cause instanceof Error ? cause.message : 'Could not save the PDF.'); }
     finally { locked.current = false; if (mounted.current) setBusy(false); else disposeImports(directory); }
@@ -137,6 +144,7 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   }
 
 
+  if (leaving) return <HandoffScreen label="Saving and opening your PDF…" />;
   if (result) return <ScrollView contentContainerStyle={styles.result}>
     <UniversalIcon ios="checkmark.circle.fill" android="check-circle" size={48} color={colors.systemBlue} />
     <ThemedText style={styles.heading}>Your PDF is ready</ThemedText>

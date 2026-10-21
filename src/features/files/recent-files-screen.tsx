@@ -8,7 +8,7 @@ import { UniversalIcon } from '@/components/universal-icon';
 import { FileThumbnail } from '@/components/file-thumbnail';
 import { HelpButton } from '@/components/help-button';
 import { LayoutToggle, useLayoutPreference } from '@/components/layout-toggle';
-import RecentImagesView, { hasNativeListBookmarks, hasNativeImageList, hasNativeListRefresh, hasNativeMediaList, hasNativeThumbnailRevisions } from '../../../modules/file-engine/src/RecentImagesView';
+import RecentImagesView, { hasNativeListBookmarks, hasNativeImageList, hasNativeListRefresh, hasNativeMediaList, hasNativeProtectedBadge, hasNativeThumbnailRevisions } from '../../../modules/file-engine/src/RecentImagesView';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing, typography } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
@@ -35,6 +35,7 @@ import { formatWhen, showRecentFileActions } from './recent-file-actions';
 import { getFileRevision, useLibraryRevision } from './library-revision';
 import { isFileBookmarked, useBookmarks } from './bookmarks';
 import { toggleFileBookmarkWithFeedback } from './bookmark-actions';
+import { isProtectedPdf } from './protected-pdfs';
 
 const emptyCopy: Record<FileKind, { title: string; body: string }> = {
   pdf: { title: 'Your PDFs start here', body: 'Open a PDF once and it stays in Recents for quick access next time.' },
@@ -133,7 +134,18 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
         if (!opened) { navigating.current = false; if (focused.current) setBusy(false); }
         return;
       }
-      if (file.kind === 'pdf') { openPdfScreen(file); return; }
+      if (file.kind === 'pdf') {
+        // Missing files must clear the busy lock; otherwise Open stays spun forever on this screen.
+        if (!openPdfScreen(file)) {
+          navigating.current = false;
+          if (focused.current) setBusy(false);
+          void removeRecentFile(file).then(() => {
+            toast('Removed missing PDF from Recents');
+            if (focused.current) setRevision(value => value + 1);
+          }).catch(() => undefined);
+        }
+        return;
+      }
       stagePreviewFile(file);
       router.push({ pathname: '/file-preview', params: { id: file.id } });
     } catch (cause) {
@@ -218,13 +230,23 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
   const article = kind === 'image' || kind === 'audio' ? 'an' : 'a';
   const bookmarks = useBookmarks(state => state.items);
   const canBookmark = (item: RecentListItem) => !onSelect && (item.kind === 'pdf' || item.kind === 'image');
-  const nativeItems = JSON.stringify(files.map(item => ({
-    bookmarkable: hasNativeListBookmarks && canBookmark(item), bookmarked: isFileBookmarked(bookmarks, item),
-    id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
-    revision: `${item.opened}:${item.size}:${getFileRevision(item.uri)}`,
-    detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${formatWhen(item.opened)}`,
-  })));
+  const nativeItems = JSON.stringify(files.map(item => {
+    const locked = item.kind === 'pdf' && isProtectedPdf(item.uri);
+    return {
+      bookmarkable: hasNativeListBookmarks && canBookmark(item), bookmarked: isFileBookmarked(bookmarks, item),
+      id: item.id, uri: item.uri, name: item.name, kind: item.kind, removable: !onSelect && item.source === 'library',
+      revision: `${item.opened}:${item.size}:${getFileRevision(item.uri)}:${locked ? 'L' : ''}`,
+      protected: locked,
+      detail: `${item.source === 'device' ? 'On this device' : 'In Versara'} · ${formatSize(item.size)} · ${formatWhen(item.opened)}`,
+    };
+  }));
   const nativePalette = JSON.stringify({ label: colors.label, secondary: colors.secondaryLabel, surface: colors.secondarySystemBackground, accent: colors.systemBlue });
+  // Without a native lock badge, use the JS list so protected PDFs can show a lock icon.
+  const useNativeList = !!RecentImagesView && Platform.OS !== 'web' && files.length > 0 && (
+    kind === 'image'
+    || ((kind === 'video' || kind === 'audio') && hasNativeMediaList)
+    || (kind === 'pdf' && (hasNativeProtectedBadge || !files.some(file => file.kind === 'pdf' && isProtectedPdf(file.uri))))
+  );
 
   return (
     <View style={[styles.screen, getGradients(colors).page]}>
@@ -295,7 +317,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
           <AppLoader />
           <ThemedText style={{ color: colors.secondaryLabel }}>Loading recent files...</ThemedText>
         </View>
-      ) : (kind === 'image' || kind === 'pdf' || ((kind === 'video' || kind === 'audio') && hasNativeMediaList)) && RecentImagesView && Platform.OS !== 'web' && files.length > 0 ? (
+      ) : useNativeList && RecentImagesView ? (
         <RecentImagesView
           key={hasNativeThumbnailRevisions ? 'recent-files' : libraryRevision}
           style={styles.nativeList}
@@ -303,7 +325,7 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
           refreshing={pulling} onRefresh={hasNativeListRefresh ? pullToRefresh : undefined}
           onOpen={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item) void openItem(item); }}
           onRemove={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (!onSelect && item?.source === 'library' && !busy) remove(item); }}
-          onLongPress={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && !busy) showRecentFileActions(item, refreshAll); }}
+          onLongPress={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && !busy) showRecentFileActions(item, refreshAll, () => void openItem(item)); }}
           onBookmark={({ nativeEvent }) => { const item = files.find(file => file.id === nativeEvent.id); if (item && canBookmark(item)) toggleFileBookmarkWithFeedback(item); }}
         />
       ) : (
@@ -321,13 +343,14 @@ export function RecentFilesScreen({ kind, onSelect, selectionTitle, includePdfs 
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             const fromDevice = item.source === 'device';
+            const locked = item.kind === 'pdf' && isProtectedPdf(item.uri);
             return (
               <View style={[styles.row, grid && styles.gridCell, { borderColor: colors.separator, backgroundColor: colors.secondarySystemBackground }]}>
-                <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} onLongPress={() => { if (!busy) showRecentFileActions(item, refreshAll); }} style={[styles.file, grid && styles.gridFile]}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.name}`} disabled={busy} onPress={() => { void openItem(item); }} onLongPress={() => { if (!busy) showRecentFileActions(item, refreshAll, () => void openItem(item)); }} style={[styles.file, grid && styles.gridFile]}>
                   <View style={[styles.thumbnail, grid && styles.gridThumbnail]}>
                     {!fromDevice || (item.kind === 'image' && item.uri.startsWith('content://'))
-                      ? <FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.opened}:${item.size}`} active={active && !busy} />
-                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : 'doc.richtext'} android={item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
+                      ? <FileThumbnail uri={item.uri} kind={item.kind} revision={`${item.opened}:${item.size}`} active={active && !busy} protected={locked} />
+                      : <View style={[styles.deviceThumb, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios={locked ? 'lock.doc' : item.kind === 'video' ? 'play.rectangle' : item.kind === 'audio' ? 'waveform' : item.kind === 'image' ? 'photo' : 'doc.richtext'} android={locked ? 'lock' : item.kind === 'video' ? 'smart-display' : item.kind === 'audio' ? 'graphic-eq' : item.kind === 'image' ? 'image' : 'picture-as-pdf'} size={22} color={colors.systemBlue} /></View>}
                   </View>
                   <View style={styles.grow}>
                     <ThemedText numberOfLines={2} style={[styles.name, { color: colors.label }]}>{item.name}</ThemedText>

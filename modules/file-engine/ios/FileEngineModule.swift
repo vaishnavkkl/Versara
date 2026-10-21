@@ -25,7 +25,7 @@ public class FileEngineModule: Module {
     Constant("nativeImageResizeVersion") { 1 }
     AsyncFunction("processImage") { (id: String, request: String, promise: Promise) in self.imageTools.run(id, request: request, promise: promise) }
     Function("cancelImageJob") { (id: String) in self.imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 6 }
+    Constant("nativeImageListVersion") { 8 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }

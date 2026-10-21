@@ -38,3 +38,9 @@ export function FocusChrome({ edge, style, children }: { edge: 'top' | 'bottom' 
 
 // Side rails keep stretching to the full height of the row they sit in.
 const styles = StyleSheet.create({ chrome: { zIndex: 1 }, side: { flexDirection: 'row' } });
+
+/**
+ * For each view between the screen and the tool ring while the ring is shown. Leaving chrome can linger
+ * invisibly on Android; drawing the ring above it keeps every tile tappable.
+ */
+export const aboveChrome = { zIndex: 2 } as const;

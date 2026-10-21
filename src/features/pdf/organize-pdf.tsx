@@ -9,6 +9,7 @@ import { HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-te
 import { AppLoader } from '@/components/app-loader';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfRange, type PdfResult } from '../../../modules/pdf-engine';
+import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { usePalette } from '@/theme/colors';
@@ -18,7 +19,7 @@ import { usePublishHeaderShare } from '@/components/header-share';
 import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
 import { saveEditedOutput, savePdfResult } from '../files/save-file';
 import { useScreenActive } from '@/hooks/use-screen-active';
-import { openPdfScreen } from './open-pdf-screen';
+import { openPdfScreen, showSavedPdf } from './open-pdf-screen';
 import { PdfDocumentPreview } from './pdf-document-preview';
 import { splitRanges, type SplitMode } from './pdf-ranges';
 import { EditorOption } from '@/components/editor-option';
@@ -26,6 +27,8 @@ import { PdfPreviewFooter } from './pdf-preview';
 import { PdfFileOptionsSheet } from './pdf-file-options-sheet';
 import { PdfSourceCard } from './pdf-source-card';
 import { useVisibleListItems } from '@/hooks/use-visible-list-items';
+import { useStableCallback } from '@/hooks/use-stable-callback';
+import { SortableGrid } from '@/components/sortable-grid';
 
 type Source = LocalFile & { pageCount: number };
 type Result = PdfResult & { name: string; part: number; location?: string };
@@ -41,6 +44,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   const [directory] = useState(() => initialSelection?.directory ?? createImportDirectory());
   const [sources, setSources] = useState<Source[]>([]);
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
+  const [card, setCard] = useState<{ width: number; height: number } | null>(null);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const { visibleKeys, onViewableItemsChanged, viewabilityConfig } = useVisibleListItems();
   const [name, setName] = useState(merge ? 'Merged document' : 'Split document');
@@ -53,6 +57,8 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState<Result[]>([]);
+  // The saved PDF opens by itself; until then the result screen stays hidden.
+  const [leaving, setLeaving] = useState(false);
 
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -145,14 +151,19 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     const names = merge ? [`${safeName}-${stamp}.pdf`] : ranges.map((range, index) => `${safeName}-${stamp}-part-${index + 1}-pages-${range.start}-${range.end}.pdf`);
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: sources.map(source => source.uri), outputUris: names.map(filename => new File(savedPdfDirectory(), filename).uri), ranges: merge ? [] : ranges });
-      if (mounted.current) setResults(outputs.map((output, index) => ({ ...output, name: names[index], part: index + 1 })));
+      if (mounted.current) { setLeaving(merge && outputs.length === 1); setResults(outputs.map((output, index) => ({ ...output, name: names[index], part: index + 1 }))); }
+      let merged: { uri: string; name: string } | undefined;
       for (let index = 0; index < outputs.length; index++) {
         setPhase(`Saving ${index + 1} of ${outputs.length}…`);
         const saved = await saveEditedOutput({ output: outputs[index].uri, name: names[index], mimeType: 'application/pdf', kind: 'pdf', mode: 'new' });
         if (mounted.current) setResults(current => current.map(item => item.part === index + 1 ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item));
+        merged = saved.file;
       }
       toast(merge ? 'Merged PDF saved' : `Split into ${outputs.length} PDFs`);
-    } catch (cause) { fail(cause); }
+      // A merged PDF opens straight away; split parts stay listed so each can be opened.
+      if (merge && merged && outputs.length === 1 && mounted.current && showSavedPdf(merged)) return;
+      if (mounted.current) setLeaving(false);
+    } catch (cause) { if (mounted.current) setLeaving(false); fail(cause); }
     finally { finish(); }
   }
   async function saveResult(result: Result) {
@@ -173,10 +184,19 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   }
   function removeSource(index: number) { setSources(current => current.filter((_, i) => i !== index)); }
   function move(index: number, direction: number) { setSources(current => { const next = [...current]; [next[index], next[index + direction]] = [next[index + direction], next[index]]; return next; }); }
+  const reorder = useStableCallback((from: number, to: number) => setSources(current => {
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    if (moved) next.splice(to, 0, moved);
+    return next;
+  }));
+  // Cards share one size; 12 is the card's bottom margin.
+  const geometry = card ? { columns, itemWidth: card.width, itemHeight: card.height, rowGap: 12 + s.md, padX: s.lg, top: s.lg + s.md } : null;
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.accentSurface }];
 
   if (previewSource) return <PdfDocumentPreview uri={previewSource.uri} count={previewSource.pageCount} onClose={() => setPreviewSource(null)} />;
 
+  if (leaving) return <HandoffScreen label="Saving and opening your PDF…" />;
   if (results.length) return <View style={styles.screen}>
     <FlatList data={results} keyExtractor={result => result.uri} contentContainerStyle={styles.list} ListHeaderComponent={<View style={styles.form}><ThemedText style={styles.heading}>{merge ? 'Your merged PDF is ready' : `${results.length} PDFs are ready`}</ThemedText><ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{results.every(result => result.location) ? `Saved to ${results[0].location}` : 'Saving your PDFs. Any unfinished save can be retried below.'}</ThemedText>{!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}</View>} renderItem={({ item, index }) => <View style={[styles.resultCard, { backgroundColor: colors.accentSurface }]}>
       <ThemedText numberOfLines={2} style={styles.label}>{merge ? 'Merged document' : `Part ${item.part}`}</ThemedText>
@@ -193,21 +213,25 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   ];
   return <View style={styles.screen}>
     <PdfFileOptionsSheet visible={optionsOpen} onClose={() => setOptionsOpen(false)} name={name} onName={setName} disabled={busy}
-      description={merge ? 'Choose 2 to 30 PDFs and arrange their order. Up to 2,000 pages per merge. Tap a card to preview its pages.' : 'Split into individual pages, equal groups, or custom ranges. Up to 100 output PDFs per operation.'}>
+      description={merge ? 'Choose 2 to 30 PDFs, then long-press and drag the cards to arrange their order. Up to 2,000 pages per merge. Tap a card to preview its pages.' : 'Split into individual pages, equal groups, or custom ranges. Up to 100 output PDFs per operation.'}>
       {!merge && splitMode === 'groups' && <><ThemedText>Pages per PDF</ThemedText><BottomSheetTextInput accessibilityLabel="Pages per PDF" keyboardType="number-pad" value={groupSize} onChangeText={setGroupSize} editable={!busy} maxLength={4} style={inputStyle} /></>}
       {!merge && splitMode === 'ranges' && <><ThemedText>Each range creates a PDF. Example: 1-3, 4, 5-8. Unlisted pages are excluded.</ThemedText><BottomSheetTextInput accessibilityLabel="Page ranges" placeholder="1-3, 4-8" placeholderTextColor={colors.secondaryLabel} value={customRanges} onChangeText={setCustomRanges} editable={!busy} maxLength={1400} style={inputStyle} /></>}
       {!merge && !!rangeError && <ThemedText accessibilityRole="alert">{rangeError}</ThemedText>}
     </PdfFileOptionsSheet>
     {!merge && sources[0] ? <PdfDocumentPreview key={sources[0].uri} uri={sources[0].uri} count={sources[0].pageCount} embedded disabled={busy} onClose={() => {}} />
-      : <FlatList key={columns} data={sources} numColumns={columns} keyExtractor={file => file.uri} contentContainerStyle={styles.list} columnWrapperStyle={columns > 1 ? styles.columns : undefined}
+      : <SortableGrid data={sources} geometry={geometry} enabled={!busy} onMove={reorder} keyExtractor={file => file.uri}
+        contentContainerStyle={styles.list} columnWrapperStyle={styles.columns} extraData={visibleKeys}
         initialNumToRender={6} maxToRenderPerBatch={4} windowSize={5} onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig}
-        ListHeaderComponent={<View style={styles.form}>
+        header={<View style={styles.form}>
           <ThemedText style={styles.label}>{sources.length ? `Merge order · ${sources.length} PDFs · ${pageCount} pages` : 'Choose PDFs to get started.'}</ThemedText>
-          {sources.length > 0 && <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Tap a card to preview. Use the arrows to change the order.</ThemedText>}
+          {sources.length > 0 && <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>Tap a card to preview. Long-press and drag a card, or use the arrows, to change the order.</ThemedText>}
           {!available && <ThemedText accessibilityRole="alert">Install a new development build to use native PDF {operation}.</ThemedText>}
         </View>}
-        renderItem={({ item, index }) => <PdfSourceCard uri={item.uri} name={item.name} label={`PDF ${index + 1}`} detail={`${item.pageCount} pages · ${formatSize(item.size)}`} kind="pdf" active={active && visibleKeys.has(item.uri)} disabled={busy} fullWidth={columns === 1}
-          onPreview={() => setPreviewSource(item)} onMove={direction => move(index, direction)} onRemove={() => removeSource(index)} canMoveBack={index > 0} canMoveForward={index + 1 < sources.length} />} />}
+        renderItem={({ item, index, dragging }) => <PdfSourceCard uri={item.uri} name={item.name} label={`PDF ${index + 1}`} detail={`${item.pageCount} pages · ${formatSize(item.size)}`} kind="pdf" active={active && visibleKeys.has(item.uri)} disabled={busy} fullWidth={columns === 1}
+          lifted={dragging} onLayout={index === 0 ? event => { const { width: w, height: h } = event.nativeEvent.layout; setCard(current => current?.width === w && current.height === h ? current : { width: w, height: h }); } : undefined}
+          onPreview={() => setPreviewSource(item)} onMove={direction => move(index, direction)} onRemove={() => removeSource(index)} canMoveBack={index > 0} canMoveForward={index + 1 < sources.length} />}
+        renderGhost={(item, index) => <PdfSourceCard uri={item.uri} name={item.name} label={`PDF ${index + 1}`} detail={`${item.pageCount} pages · ${formatSize(item.size)}`} kind="pdf" active={active} disabled fullWidth
+          onPreview={() => {}} onMove={() => {}} onRemove={() => {}} canMoveBack={false} canMoveForward={false} />} />}
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
       {!merge && sources.length > 0 && <>

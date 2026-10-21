@@ -20,7 +20,7 @@ const EMPTY: HeaderAction[] = [];
 export const headerButtonStyle = StyleSheet.create({ button: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' } }).button;
 
 export function HeaderIconButton({ label, ios, android, selected, disabled, onPress }: Omit<HeaderAction, 'id'>) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!selected, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={2}
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!selected, disabled: !!disabled }} disabled={disabled} onPress={onPress} helpOnLongPress hitSlop={2}
     style={({ pressed }) => [headerButtonStyle, { opacity: disabled ? 0.4 : pressed ? 0.6 : 1 }]}>
     <HeaderGlyph ios={ios} android={android} selected={selected} />
   </Pressable>;

@@ -5,7 +5,7 @@ import { responsiveToolbarStyles, useResponsiveEditorToolbar } from '../editor/r
 import { pdfDraftId, pruneSignatureDraftAssets } from '../editor/editor-drafts';
 import { PagePositionPicker } from './page-position-picker';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Keyboard, Platform, FlatList, ScrollView, StyleSheet, View, type TextInputProps } from 'react-native';
+import { KeyboardAvoidingView, Keyboard, Platform, FlatList, Pressable, ScrollView, StyleSheet, View, type TextInputProps } from 'react-native';
 import { HelpTextInput as TextInput, HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-text-input';
 import { Directory, File, Paths } from 'expo-file-system';
 import { FileEngine } from '../../../modules/file-engine';
@@ -25,6 +25,7 @@ import { SHAPES, ShapePicker } from './shape-picker';
 import { MarkupZoomButtons, useMarkupZoom } from './markup-zoom';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
 import PdfMarkupView, { type PdfMark, type PdfMarkChange } from '../../../modules/pdf-engine/src/PdfMarkupView';
+import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { UniversalIcon } from '@/components/universal-icon';
@@ -35,10 +36,12 @@ import { showDialog } from '@/components/app-dialog';
 import { usePalette } from '@/theme/colors';
 import { optionIcon, type OptionIcon } from '@/theme/editor-icons';
 import { browseFiles, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, shareRenderedPdf, type LocalFile } from '../files/file-storage';
-import { askNewFileName, askSaveOptions, saveEditedOutput, savePdfResult, saveToDevice } from '../files/save-file';
+import { askNewFileName, askSaveOptions, saveEditedOutput, savePdfResult, saveToDevice, showSavedImage } from '../files/save-file';
 import { forgetRecentUri } from '../files/recent-files';
+import { markProtectedPdf } from '../files/protected-pdfs';
 import { usePdfScreenActive } from './use-pdf-screen-active';
-import { openPdfResult } from './open-pdf-screen';
+import { openPdfResult, showSavedPdf } from './open-pdf-screen';
+import { toast } from '@/components/toast';
 import type { PdfToolSession } from './pdf-tool-session';
 import { PdfPagePreview, PdfPreviewBody, PdfPreviewStage, PdfPreviewToolbar, PdfPreviewFooter, PDF_PREVIEW_BACKGROUND, type PdfPreviewImage } from './pdf-preview';
 import { PdfDocumentPreview } from './pdf-document-preview';
@@ -70,6 +73,25 @@ const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 /** BottomSheetTextInput only works inside a sheet; it lets the sheet move above the keyboard. */
 function FieldInput({ sheet, ...props }: TextInputProps & { sheet: boolean }) {
   return sheet ? <BottomSheetTextInput {...props} /> : <TextInput {...props} />;
+}
+function PasswordField({ label, value, onChange, sheet, busy, colors, inputStyle }: {
+  label: string; value: string; onChange: (value: string) => void; sheet: boolean; busy: boolean;
+  colors: { secondaryLabel: string }; inputStyle: object[];
+}) {
+  const [visible, setVisible] = useState(false);
+  return <View style={styles.field}>
+    <ThemedText style={styles.label}>{label}</ThemedText>
+    <View style={styles.passwordRow}>
+      <FieldInput sheet={sheet} accessibilityLabel={label} editable={!busy} value={value} onChangeText={onChange}
+        keyboardType="default" secureTextEntry={!visible} autoCapitalize="none" autoCorrect={false}
+        returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={64}
+        style={[...inputStyle, styles.passwordInput]} />
+      <Pressable accessibilityRole="button" accessibilityLabel={visible ? `Hide ${label}` : `Show ${label}`}
+        disabled={busy} onPress={() => setVisible(current => !current)} style={styles.passwordEye} hitSlop={8}>
+        <UniversalIcon ios={visible ? 'eye.slash' : 'eye'} android={visible ? 'visibility-off' : 'visibility'} size={20} color={colors.secondaryLabel} />
+      </Pressable>
+    </View>
+  </View>;
 }
 /** `process` already shows its own error; this stops the share dialog repeating it. */
 const SHARE_HANDLED = 'versara-share-handled';
@@ -206,6 +228,8 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   const [inkColor, setInkColor] = useState(tool === 'highlight' ? '#FACC15' : '#1D4ED8');
   const [inkWidth, setInkWidth] = useState(tool === 'highlight' ? .025 : .005);
   const [results, setResults] = useState<Output[]>([]);
+  // A single saved file opens by itself; until then the result list stays hidden.
+  const [leaving, setLeaving] = useState(false);
   const [textPreview, setTextPreview] = useState('');
   const [notice, setNotice] = useState('');
   const saveTitle = markup ? `Save PDF${marks.length + annotationEditCount ? ` (${marks.length + annotationEditCount})` : ''}` : tool === 'repair' ? 'Attempt repair' : tool === 'compress' ? 'Compress PDF' : tool === 'ocr' && ocrFormat === 'pdf' ? 'Create searchable PDF' : ['ocr', 'extract_text'].includes(tool) ? 'Save text' : tool === 'to_image' ? 'Save images' : 'Save PDF';
@@ -495,7 +519,12 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         if (!file.exists || file.size <= 0) throw new Error('The generated file could not be found. Your edits have been kept; try saving again.');
         return { ...output, uri: file.uri, size: file.size, name: names[i] };
       });
-      setSavedOutputs(new Set()); setResults(outputs);
+      // One saved file opens straight away. Protect (and multi/text exports) stay on a handoff until save finishes so Save/Open do not flash mid-write.
+      const opens = outputs.length === 1 && extension !== 'txt' && tool !== 'protect';
+      const holdUntilSaved = opens || tool === 'protect';
+      setLeaving(holdUntilSaved); setSavedOutputs(new Set());
+      if (!holdUntilSaved) setResults(outputs);
+      let savedImageId: string | undefined;
       for (let index = 0; index < outputs.length; index++) {
         const output = outputs[index];
         let published: Output;
@@ -505,9 +534,15 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         } else {
           const saved = await saveEditedOutput({ output: output.uri, mimeType: mime(output), kind: extension === 'pdf' ? 'pdf' : 'image', mode: choice?.mode ?? 'new', origin: extension === 'pdf' ? session.origin : undefined, name: output.name });
           published = { ...output, uri: saved.file.uri, name: saved.file.name, location: saved.device.location };
+          if (extension !== 'pdf') savedImageId = saved.recent?.id;
+          // Tag both the app library copy and the device publish path so every list row can show a lock.
+          if (tool === 'protect') markProtectedPdf(saved.file.uri, saved.device.uri, saved.recent?.uri ?? '');
         }
         outputs = outputs.map((item, position) => position === index ? published : item);
-        if (mounted.current) { setResults(outputs); setSavedOutputs(current => new Set(current).add(published.uri)); }
+        if (mounted.current) {
+          setSavedOutputs(current => new Set(current).add(published.uri));
+          if (!holdUntilSaved) setResults(outputs);
+        }
       }
       if (mounted.current) setNotice(`${outputs.length} file${outputs.length === 1 ? '' : 's'} saved to ${outputs[0]?.location}`);
       if (tool === 'sign' && marks.length) void rememberSignatures(marks, preview ? preview.width / Math.max(1, preview.height) : 1 / Math.SQRT2)
@@ -522,7 +557,12 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
         if (mounted.current) { setFullText(recognized); setTextSheet(true); }
       }
       if (mounted.current) { setResults(outputs); setTextPreview(result.textPreview ?? ''); setPassword(''); setConfirmation(''); history.clear(); setAnnotationEdits({}); setFocusAnnotation(undefined); }
-    } catch (cause) { if (mounted.current) setError((cause as Error).message); }
+      if (mounted.current && opens && outputs[0].location) {
+        if (extension === 'pdf' && showSavedPdf(outputs[0], session.returnRoute)) return;
+        if (extension !== 'pdf' && savedImageId) { showSavedImage(savedImageId); return; }
+      }
+      if (mounted.current) setLeaving(false);
+    } catch (cause) { if (mounted.current) { setLeaving(false); setError((cause as Error).message); } }
     finally { locked.current = false; if (mounted.current) { setBusy(false); setPhase(''); } else disposeImports(directory); }
   }
   async function saveRemaining() {
@@ -536,9 +576,14 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
     locked.current = true; setBusy(true); setError('');
     try {
       if (output.name.endsWith('.pdf')) {
-        const saved = await savePdfResult(output, session.origin);
+        const saved = await savePdfResult(output, session.origin, undefined, results.length !== 1 || tool === 'protect');
         completed = !!saved;
-        if (saved && mounted.current) { setSavedOutputs(current => new Set(current).add(saved.file.uri)); setResults(current => current.map(item => item.uri === output.uri ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item)); }
+        if (saved && mounted.current) {
+          if (tool === 'protect') markProtectedPdf(saved.file.uri, saved.device.uri);
+          setSavedOutputs(current => new Set(current).add(saved.file.uri));
+          setResults(current => current.map(item => item.uri === output.uri ? { ...item, uri: saved.file.uri, name: saved.file.name, location: saved.device.location } : item));
+        }
+        if (saved && mounted.current && results.length === 1 && tool !== 'protect') { toast(`Saved to ${saved.device.location}`); if (showSavedPdf(saved.file, session.returnRoute)) setLeaving(true); }
       } else {
         const name = output.name;
         if (name) {
@@ -614,24 +659,28 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
   }, [active, info, busy, results.length, tool, styledPreviewKey]);
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.secondarySystemBackground, borderColor: colors.borderHighlight }];
   // Fields in a bottom sheet use the sheet's input so the sheet rises above the keyboard.
-  const field = (label: string, value: string, setter: (value: string) => void, numeric = false, secure = false, sheet = true) => <View style={styles.field}><ThemedText style={styles.label}>{label}</ThemedText><FieldInput sheet={sheet} accessibilityLabel={label} editable={!busy} value={value} onChangeText={setter} keyboardType={numeric ? 'number-pad' : 'default'} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={secure ? 64 : 100} style={inputStyle} /></View>;
+  const field = (label: string, value: string, setter: (value: string) => void, numeric = false, secure = false, sheet = true) =>
+    secure
+      ? <PasswordField label={label} value={value} onChange={setter} sheet={sheet} busy={busy} colors={colors} inputStyle={inputStyle} />
+      : <View style={styles.field}><ThemedText style={styles.label}>{label}</ThemedText><FieldInput sheet={sheet} accessibilityLabel={label} editable={!busy} value={value} onChangeText={setter} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={Keyboard.dismiss} maxLength={100} style={inputStyle} /></View>;
   const choices = (items: { id: string; label: string; icon?: OptionIcon }[], selected: string, choose: (value: string) => void) => <View style={styles.choices}>{items.map(item => <EditorOption key={item.id} label={item.label} icon={item.icon} selected={selected === item.id} disabled={busy} onPress={() => choose(item.id)} />)}</View>;
   const status = <>{busy && !pageRendering && <View style={styles.status}><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Please wait…'}{progress > 0 ? ` ${Math.round(progress * 100)}%` : ''}</ThemedText>{cancellable && <ToolButton title="Cancel" secondary onPress={() => { if (signatureJob.current) FileEngine?.cancelImageJob(signatureJob.current); if (job.current) { PdfEngine?.cancelPdfTool(job.current); PdfEngine?.cancelTextEdit(job.current); } }} />}</View>}{!!error && <ThemedText accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</ThemedText>}{!!recovery.error && <ThemedText accessibilityRole="alert">{recovery.error}</ThemedText>}{!!notice && <ThemedText accessibilityLiveRegion="polite">{notice}</ThemedText>}</>;
   if (!available) return <View style={styles.content}><ThemedText>Install a new development build to use these native PDF tools on this device.</ThemedText></View>;
+  if (leaving) return <HandoffScreen label={busy && phase ? phase : tool === 'protect' ? 'Saving protected PDF…' : 'Saving and opening your file…'} />;
   if (results.length) return <FlatList data={results} keyExtractor={output => output.uri}
     contentContainerStyle={styles.content} initialNumToRender={4} maxToRenderPerBatch={2} windowSize={5}
     ListHeaderComponent={<View style={styles.field}>{status}
-      <ThemedText style={styles.heading}>{tool === 'repair' ? 'Rewritten and validated' : 'Your files are ready'}</ThemedText>
+      <ThemedText style={styles.heading}>{busy ? (phase || 'Saving…') : tool === 'repair' ? 'Rewritten and validated' : tool === 'protect' ? 'PDF protected' : 'Your files are ready'}</ThemedText>
       {tool === 'to_image' && results.some(output => !savedOutputs.has(output.uri)) && <ToolButton title="Save remaining images" disabled={busy} onPress={() => void saveRemaining()} />}
       {tool === 'compress' && <ThemedText>Original {formatSize(source.size)} · Result {formatSize(results[0].size)}{results[0].size >= source.size ? ' — no size reduction for this document.' : ' — ' + Math.round((1 - results[0].size / source.size) * 100) + '% smaller.'}</ThemedText>}
     </View>}
     renderItem={({ item: output }) => <View style={[styles.result, { backgroundColor: colors.secondarySystemBackground }]}>
       <ThemedText style={styles.label}>{output.name}</ThemedText><ThemedText>{formatSize(output.size)}</ThemedText>
-      {output.name.endsWith('.pdf') && tool !== 'protect' && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}
-      {tool === 'protect' && <ThemedText>Use the password you set when opening this file in a password-capable PDF reader.</ThemedText>}
+      {output.name.endsWith('.pdf') && <ToolButton title="Open PDF" disabled={busy} onPress={() => openPdfResult(output, session.returnRoute)} />}
+      {tool === 'protect' && <ThemedText>Open with the password you set. Versara does not store it.</ThemedText>}
       {output.location && <ThemedText selectable>Saved to {output.location}</ThemedText>}
-      <View style={styles.choices}>{tool !== 'to_image' && !savedOutputs.has(output.uri) && <ToolButton title="Save" disabled={busy} onPress={() => void save(output)} />}<ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>
-      {!savedOutputs.has(output.uri) && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}
+      <View style={styles.choices}>{tool !== 'to_image' && !savedOutputs.has(output.uri) && !output.location && <ToolButton title="Save" disabled={busy} onPress={() => void save(output)} />}<ToolButton title="Share" secondary disabled={busy} onPress={() => void share(output)} /></View>
+      {!savedOutputs.has(output.uri) && !output.location && <ToolButton title="Delete output" secondary disabled={busy} onPress={() => deleteOutput(output)} />}
     </View>}
     ListFooterComponent={<View style={styles.field}>
       {fullText ? <ToolButton title="View and copy text" icon={{ ios: 'doc.on.doc', android: 'content-copy' }} disabled={busy} onPress={() => setTextSheet(true)} /> : !!textPreview && <View style={styles.field}><ThemedText style={styles.label}>Text preview</ThemedText><ThemedText selectable>{textPreview}</ThemedText><ThemedText>The exported file contains the full text.</ThemedText></View>}
@@ -639,8 +688,7 @@ export function AdvancedPdfTool({ session, onUnsavedChange, onDiscardReady }: { 
       {fullText && <RecognizedTextSheet text={fullText.text} truncated={fullText.truncated} page={page} isPresented={textSheet} onClose={() => setTextSheet(false)} />}
     </View>} />;
   if (!info && !inspectFailed) return <View style={styles.loadingScreen}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite">Opening PDF…</ThemedText><ThemedText numberOfLines={2} style={{ color: colors.secondaryLabel, textAlign: 'center' }}>{source.name}</ThemedText></View>;
-  if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true, false)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;
-  if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
+  if (!info) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>{status}<ThemedText style={styles.label}>{source.name}</ThemedText>{!busy && <>{field('Document password (if required)', inputPassword, setInputPassword, false, true, false)}<ToolButton title="Open document" onPress={() => void inspect()} /></>}</ScrollView>;  if (showSourcePreview) return <PdfDocumentPreview uri={source.uri} count={info.pageCount} initialPage={page} inputPassword={inputPassword} onClose={() => setShowSourcePreview(false)} />;
   if (tool === 'info') return <ScrollView contentContainerStyle={styles.content}>{status}<ToolButton title="Preview PDF" secondary onPress={() => setShowSourcePreview(true)} /><ThemedText style={styles.heading}>{source.name}</ThemedText>{Object.entries({ Pages: info.pageCount, Size: formatSize(info.size), 'First page': `${Math.round(info.width)} × ${Math.round(info.height)} pt`, 'PDF version': info.version, Encrypted: info.encrypted ? 'Yes' : 'No', Title: info.title || '—', Author: info.author || '—', Subject: info.subject || '—', Creator: info.creator || '—', Producer: info.producer || '—' }).map(([key, value]) => <View key={key} style={styles.field}><ThemedText style={{ color: colors.secondaryLabel }}>{key}</ThemedText><ThemedText selectable>{value}</ThemedText></View>)}</ScrollView>;
   const renderSettings = (content: ReactNode) => <OptionSheet title={settingsTitles[tool] ?? 'PDF options'} icon={tool === 'protect' ? { ios: 'lock', android: 'lock' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={optionsOpen} keyboardInput dim={!['numbers', 'watermark'].includes(tool)} onClose={() => setOptionsOpen(false)}>
       {textTool && !results.length && <PageTextCard page={page} ocr={textTool === 'ocr'} {...pageText} />}
@@ -868,6 +916,9 @@ const styles = StyleSheet.create({
   landscapeRow: { flexDirection: 'row' }, grow: { flex: 1, minWidth: 0 }, canvasColumn: { flex: 1, minWidth: 0 }, landscapeSide: { width: 300, flexGrow: 0 }, sideContent: { flexGrow: 1 },
   content: { padding: 20, gap: 16, paddingBottom: 40 }, field: { gap: 6 }, heading: { fontSize: 23, fontWeight: '700' }, label: { fontSize: 15, fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 12, minHeight: 48, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
+  passwordRow: { position: 'relative' },
+  passwordInput: { paddingRight: 48 },
+  passwordEye: { position: 'absolute', right: 4, top: 0, bottom: 0, width: 44, alignItems: 'center', justifyContent: 'center' },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }, chip: { minHeight: 44, borderRadius: 12, padding: 12, justifyContent: 'center' },
   status: { padding: 12, gap: 10, alignItems: 'center', justifyContent: 'center' },
   loadingScreen: { flex: 1, padding: 24, gap: 12, alignItems: 'center', justifyContent: 'center' }, result: { padding: 16, borderRadius: 18, gap: 12 },

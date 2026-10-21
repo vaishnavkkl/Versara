@@ -329,13 +329,16 @@ final class ImageTools {
         (redaction ? UIColor.black : color(mark["color"] as? String ?? "#1D4ED8").withAlphaComponent(alpha)).setStroke(); path.stroke()
       }
       if let mark {
-        let x = number(mark,"x",0.5,0...1)*width, y = number(mark,"y",0.5,0...1)*height
+        let fx = number(mark,"x",0.5,0...1), fy = number(mark,"y",0.5,0...1)
+        let margin = min(width, height) * 0.04
+        // The mark's centre follows x and y, but the whole mark stays inside the image with a small margin.
+        func place(_ fraction: CGFloat, _ extent: CGFloat, _ length: CGFloat) -> CGFloat { extent + 2 * margin >= length ? length / 2 : min(max(fraction * length, margin + extent / 2), length - margin - extent / 2) }
         let opacity = number(mark,"opacity",0.5,0.05...1)
-        if let logo { let w = width*number(mark,"imageScale",0.25,0.05...0.8); let h = w*CGFloat(logo.height)/CGFloat(logo.width); UIImage(cgImage: logo).draw(in: CGRect(x: x-w/2, y: y-h/2, width: w, height: h), blendMode: .normal, alpha: opacity) }
+        if let logo { let w = width*number(mark,"imageScale",0.25,0.05...0.8); let h = w*CGFloat(logo.height)/CGFloat(logo.width); let x = place(fx, w, width), y = place(fy, h, height); UIImage(cgImage: logo).draw(in: CGRect(x: x-w/2, y: y-h/2, width: w, height: h), blendMode: .normal, alpha: opacity) }
         else {
           let text = String((mark["text"] as? String ?? "").prefix(200)) as NSString
           let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: number(mark,"size",0.06,0.01...0.3)*width), .foregroundColor: color(mark["color"] as? String ?? "#FFFFFF").withAlphaComponent(opacity)]
-          let size = text.size(withAttributes: attributes); text.draw(at: CGPoint(x: x-size.width/2,y: y-size.height/2), withAttributes: attributes)
+          let size = text.size(withAttributes: attributes); let x = place(fx, size.width, width), y = place(fy, size.height, height); text.draw(at: CGPoint(x: x-size.width/2,y: y-size.height/2), withAttributes: attributes)
         }
       }
     }

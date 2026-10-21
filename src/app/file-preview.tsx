@@ -3,6 +3,7 @@ import { BackHandler, Pressable, StyleSheet, View } from 'react-native';
 import { AppLoader, withLoading } from '@/components/app-loader';
 import { ReaderScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
 import { HeaderIconButton } from '@/components/header-actions';
+import type { EditorMenuItem } from '@/components/editor-menu';
 import { useFileBookmarked } from '@/features/files/bookmarks';
 import { toggleFileBookmarkWithFeedback } from '@/features/files/bookmark-actions';
 import { router, Stack, useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router';
@@ -164,10 +165,17 @@ export default function FilePreviewScreen() {
     } catch (cause) { if (session) discardPdfToolSession(session); if (mounted.current) setError((cause as Error).message || 'Could not complete this action. Try again.'); }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   }
+  const imageMenu: EditorMenuItem[] | undefined = file?.kind === 'image' && !resultUri ? [
+    { id: 'share', label: 'Share image', disabled: busy, icon: { ios: 'square.and.arrow.up', android: 'share' }, onPress: () => void action('share') },
+    { id: 'save', label: working ? 'Save changes' : 'Save a copy to device', disabled: busy, icon: { ios: 'square.and.arrow.down', android: 'save' }, onPress: () => void action('save') },
+    { id: 'pdf', label: 'Create PDF', disabled: busy, icon: { ios: 'doc.richtext', android: 'picture-as-pdf' }, onPress: () => void action('pdf') },
+    { id: 'info', label: 'File details', disabled: busy, icon: { ios: 'info.circle', android: 'info-outline' }, onPress: () => void action('info') },
+    { id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', disabled: busy, icon: { ios: 'rotate.right', android: 'screen-rotation' }, onPress: () => setLandscape(value => !value) },
+  ] : undefined;
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
     <LayoutAnimationConfig skipEntering>
-    {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}</>} tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} helpIntercept={handleReaderHelp} /></FocusChrome>}
+    {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}</>} menu={imageMenu} tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} helpIntercept={handleReaderHelp} /></FocusChrome>}
     {loading && !resultUri ? <View style={styles.empty}><AppLoader /><ThemedText>Opening file...</ThemedText></View> : <>
       {error && !resultUri && <ThemedText accessibilityRole="alert" style={styles.error}>{error}</ThemedText>}
       {resultUri ? <PdfViewer key={`${resultUri}:${revision}`} initialDocument={{ uri: resultUri, name: resultName ?? 'Document.pdf' }} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : !file ? <View style={styles.empty}><ToolButton title="Back to recent files" onPress={close} /></View> : file.kind === 'pdf' ? <PdfViewer key={file.uri} initialDocument={file} onFocusChange={setFocused} onSurroundChange={setSurrounding} /> : <>

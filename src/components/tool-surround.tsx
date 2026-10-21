@@ -9,6 +9,7 @@ import type { RailTool } from '@/components/tool-rail';
 import { usePalette } from '@/theme/colors';
 import { toolColors } from '@/theme/tool-colors';
 import { AppGlyph } from './app-glyph';
+import { aboveChrome } from './focus-chrome';
 
 // Tiles carry a small two-line name under the icon.
 const TILE_WIDTH = 62;
@@ -146,7 +147,7 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
       {chunks.map((chunk, index) => strip(`${side}-${index}`, chunk, horizontal, horizontal ? chunk.length > layout.perRow : layout.overflow(side)))}
     </RevealBand>;
   };
-  return <View style={styles.root} onLayout={onLayout}>
+  return <View style={[styles.root, presented && aboveChrome]} onLayout={onLayout}>
     {presented && showClose && <View style={styles.closeRow}>
       <ToolSurroundCloseButton disabled={!active} onPress={onClose} />
     </View>}

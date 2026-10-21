@@ -8,14 +8,14 @@ import { askSaveOptions, saveEditedOutput, type SaveMode } from '../files/save-f
 import { toast } from '@/components/toast';
 import { showDialog } from '@/components/app-dialog';
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
+import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
-import { ColorSwatches } from '@/components/color-swatches';
-import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
+import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, type TextStyle } from '@/components/text-style-controls';
 import { fontFile, useEditFonts, withFontFiles } from '@/constants/edit-fonts';
 import { OptionCard, OptionSheet } from '@/components/option-sheet';
+import { TextOptionsPanel } from './text-options-panel';
 import { ToolRowButton } from '@/components/tool-action-row';
 import { usePublishHeaderShare } from '@/components/header-share';
 import { copyPdf, renderPdf, usePublishPdfHandoff } from './pdf-handoff';
@@ -27,13 +27,14 @@ import type { InitialSelection } from './pdf-tool-session';
 import { UniversalIcon } from '@/components/universal-icon';
 import { File } from 'expo-file-system';
 import { PdfEngine, type PdfResult } from '../../../modules/pdf-engine';
+import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { EditorOption } from '@/components/editor-option';
 import { usePalette } from '@/theme/colors';
 import { radius, spacing as s, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, shareFile, shareNamedFile, shareRenderedPdf, type LocalFile } from '../files/file-storage';
-import { openPdfResult } from './open-pdf-screen';
+import { openPdfResult, showSavedPdf } from './open-pdf-screen';
 import { PdfPreviewQueue, type PagePreview } from './pdf-preview-queue';
 import { usePdfScreenActive } from './use-pdf-screen-active';
 import { PdfPreviewBody, PdfPreviewToolbar, PdfPreviewStage, usePageSwipe } from './pdf-preview';
@@ -151,8 +152,11 @@ function makeDraft(edits: Edit[], page: number, selected: TextObject | null, pla
   return changes.length > 500 ? { changes: edits, error: 'Save these changes before adding more.' } : { changes };
 }
 
-/** `onUnsavedChange` lets the screen confirm before leaving with edits that are not saved. */
-export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsavedChange, onDiscardReady }: { initialMode?: 'edit' | 'add' | 'delete' | 'replace'; initialSelection?: InitialSelection; onUnsavedChange?: (unsaved: boolean) => void; onDiscardReady?: (action: () => Promise<void>) => void }) {
+/**
+ * `onUnsavedChange` lets the screen confirm before leaving with edits that are not saved.
+ * `onTypingChange` lets the screen hide its header while text is typed, so the page keeps more room above the keyboard.
+ */
+export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsavedChange, onDiscardReady, onTypingChange }: { initialMode?: 'edit' | 'add' | 'delete' | 'replace'; initialSelection?: InitialSelection; onUnsavedChange?: (unsaved: boolean) => void; onDiscardReady?: (action: () => Promise<void>) => void; onTypingChange?: (typing: boolean) => void }) {
   const colors = usePalette();
   const controlHelp = useControlHelp();
   const layout = usePdfToolLayout();
@@ -192,6 +196,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const [previewError, setPreviewError] = useState('');
   const [draftRevision, setDraftRevision] = useState(0);
   const [result, setResult] = useState<(PdfResult & { name: string; location: string }) | null>(null);
+  // The saved PDF opens by itself; until then the result screen stays hidden.
+  const [leaving, setLeaving] = useState(false);
   const [byParagraph, setByParagraph] = useState(false);
   const [overlayFor, setOverlayFor] = useState<number | null>(null);
 
@@ -217,6 +223,16 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
+  const typingNow = keyboardOpen && !!(selected || placement);
+  useEffect(() => { onTypingChange?.(typingNow); }, [typingNow, onTypingChange]);
+  useEffect(() => () => onTypingChange?.(false), [onTypingChange]);
+  // Back closes text options before leaving the editor, so the page stays available for the live preview.
+  useEffect(() => {
+    if (!showFormatting) return;
+    const close = () => { setShowFormatting(false); return true; };
+    const subscription = BackHandler.addEventListener('hardwareBackPress', close);
+    return () => subscription.remove();
+  }, [showFormatting]);
   const toolbar = useResponsiveEditorToolbar(
     [],
     [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, 'Save (' + edits.length + ')'],
@@ -285,8 +301,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   // Drafts use the same commands as Apply/Save. PDF pixels and text changes still
   // come from the native engine; JS only schedules work and displays its image.
   const nativeTextBox = !!NativeEditCanvas && adding && !!placement && !selected;
-  // Paragraph editing needs the native reflow; older builds and multi-select keep line-by-line pieces.
-  const paragraphMode = !!PdfEngine?.nativeParagraphEditVersion && byParagraph && !multiDelete;
+  // Paragraph mode groups lines for edit and for remove; older builds stay line-by-line.
+  const paragraphMode = !!PdfEngine?.nativeParagraphEditVersion && byParagraph;
   const paragraphs = useMemo(() => {
     if (!paragraphMode || !preview) return [];
     const pointWidth = preview.pointWidth || 612;
@@ -508,7 +524,18 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     if (!object.editable) { setError('This text also clips page graphics and cannot be changed safely. You can still add text to this page.'); return; }
     if (multiDelete) {
       setError(''); setShowSearch(false);
-      setMarked(current => current.includes(object.id) ? current.filter(id => id !== object.id) : [...current, object.id]);
+      // Paragraph mode selects every line in the block so Delete removes the whole paragraph.
+      const group = paragraphMode
+        ? (onPage === page ? paragraphOf.get(object.id) : undefined) ?? paragraphs.find(item => item.id === object.id)
+        : undefined;
+      const members = group?.members ?? [object.id];
+      setMarked(current => {
+        const allOn = members.every(id => current.includes(id));
+        if (allOn) return current.filter(id => !members.includes(id));
+        const next = new Set(current);
+        for (const id of members) next.add(id);
+        return [...next];
+      });
       return;
     }
     invalidateDraft();
@@ -651,8 +678,11 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       const output: PdfResult = JSON.parse(await PdfEngine.editPdfText(id, JSON.stringify({ action: 'save', uri: source.uri, outputUri, edits: withFontFiles(edits) })));
       const saved = await saveEditedOutput({ output: output.uri, mimeType: 'application/pdf', kind: 'pdf', mode, origin, name: `${base}.pdf` });
       await recovery.clear();
-      if (mounted.current) { setResult({ ...output, uri: saved.file.uri, name: saved.file.name, location: saved.device.location }); setSavedEdits(edits); }
       toast(`Saved to ${saved.device.location}`);
+      if (!mounted.current) return;
+      setSavedEdits(edits);
+      if (showSavedPdf({ uri: saved.file.uri, name: saved.file.name }, initialSelection?.returnRoute)) setLeaving(true);
+      else setResult({ ...output, uri: saved.file.uri, name: saved.file.name, location: saved.device.location });
     } catch (cause) { fail(cause); }
     finally { finish(); }
   }
@@ -710,6 +740,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     finally { finish(); }
   }
 
+  if (leaving) return <HandoffScreen label="Opening your PDF…" />;
   if (result) return <ScrollView contentContainerStyle={styles.form}>
     <ThemedText style={styles.heading}>Your PDF is saved</ThemedText>
     <ThemedText>{result.name}</ThemedText>
@@ -720,6 +751,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
     {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
   </ScrollView>;
   const openOptions = () => { Keyboard.dismiss(); setShowOptions(true); setShowTextList(false); setShowFormatting(false); setShowSearch(false); };
+  const openFormatting = () => { Keyboard.dismiss(); setShowFormatting(true); setShowTextList(false); setShowOptions(false); setShowSearch(false); };
   const openSearch = () => { Keyboard.dismiss(); setShowSearch(true); setShowOptions(false); setShowTextList(false); setShowFormatting(false); };
   const closeSearch = () => { searchVersion.current++; setShowSearch(false); setFindQuery(''); setFindResult(null); setSearchIndex(0); Keyboard.dismiss(); };
   const updateQuery = (value: string) => { searchVersion.current++; setFindQuery(value); setFindResult(null); setSearchIndex(0); };
@@ -734,6 +766,8 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   const replacePlaces = replaceMatches.reduce((sum, match) => sum + match.count, 0);
   const replacePages = new Set(replaceMatches.map(match => match.page)).size;
   const editingText = !!(selected || placement);
+  // While typing, only the page and the text controls stay on screen.
+  const typing = typingNow;
   const inputStyle = [styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }];
   const changeStyle = (next: TextStyle) => { invalidateDraft(); setTextStyle(next); };
   const stepSize = (delta: number) => { invalidateDraft(); setSize(value => String(Math.max(4, Math.min(200, Math.round(Number(value) || 16) + delta)))); };
@@ -759,19 +793,25 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         {findResult && !searchMatches.length && <ThemedText accessibilityLiveRegion="polite" style={[styles.searchStatus, { color: colors.secondaryLabel }]}>No editable text matches. Scans and words split across text pieces are skipped.</ThemedText>}
         {!!findResult?.locked && <ThemedText style={[styles.searchStatus, { color: colors.secondaryLabel }]}>{findResult.locked} matching text pieces are protected and cannot be edited.</ThemedText>}
       </View>}
-      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={inlineSearch ? null : <PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!editingText}>
-        {editingText && <ToolRowButton caption label="Style" icon={{ ios: 'textformat', android: 'text-format' }} selected={showFormatting} expanded={showFormatting} disabled={busy}
-          onPress={() => { Keyboard.dismiss(); setShowFormatting(true); setShowTextList(false); setShowOptions(false); }} />}
+      <PdfPreviewBody pages={{ uri: source.uri, count: preview.pageCount, page, onSelect: target => void navigate(target) }} toolbar={inlineSearch || typing ? null : <PdfPreviewToolbar history page={page + 1} count={preview.pageCount} disabled={busy} onPageChange={target => void navigate(target - 1)} rotate={!editingText}>
+        {editingText && <ToolRowButton caption label="Style" icon={{ ios: 'textformat', android: 'text-format' }} selected={showFormatting} expanded={showFormatting} disabled={busy} onPress={openFormatting} />}
         {(replaceAvailable || replacing) && !editingText && <ToolRowButton caption label={replacing ? 'Replace' : 'Search'} icon={replacing ? { ios: 'text.magnifyingglass', android: 'find-replace' } : { ios: 'magnifyingglass', android: 'search' }} selected={showSearch} expanded={showSearch} disabled={busy} onPress={openSearch} />}
         <ToolRowButton caption label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={showOptions} expanded={showOptions} disabled={busy} onPress={openOptions} />
       </PdfPreviewToolbar>}>
-      {!adding && !multiDelete && !replacing && <View style={[styles.editMode, { backgroundColor: colors.systemBackground }]}>
-        <ThemedText style={styles.note}>Edit by</ThemedText>
-        <EditorOption label="Line" selected={!byParagraph} disabled={busy || editingText} onPress={() => { invalidateDraft(); setByParagraph(false); }} icon={{ ios: 'text.alignleft', android: 'short-text' }} />
-        <EditorOption label="Paragraph" selected={byParagraph} disabled={busy || editingText || !PdfEngine?.nativeParagraphEditVersion} onPress={() => { invalidateDraft(); setByParagraph(true); }} icon={{ ios: 'text.justify.left', android: 'format-align-left' }} />
-        {!PdfEngine?.nativeParagraphEditVersion && <ThemedText style={styles.note}>Update the app to edit paragraphs.</ThemedText>}
+      {!adding && !replacing && !typing && <View style={[styles.editMode, { backgroundColor: colors.systemBackground }]}>
+        <ThemedText style={styles.note}>{multiDelete ? 'Remove by' : 'Edit by'}</ThemedText>
+        <EditorOption label="Line" selected={!byParagraph} disabled={busy || editingText} onPress={() => { invalidateDraft(); setByParagraph(false); setMarked([]); }} icon={{ ios: 'text.alignleft', android: 'short-text' }} />
+        <EditorOption label="Paragraph" selected={byParagraph} disabled={busy || editingText || !PdfEngine?.nativeParagraphEditVersion} onPress={() => { invalidateDraft(); setByParagraph(true); setMarked([]); }} icon={{ ios: 'text.justify.left', android: 'format-align-left' }} />
+        {!PdfEngine?.nativeParagraphEditVersion && <ThemedText style={styles.note}>Update the app to {multiDelete ? 'remove' : 'edit'} paragraphs.</ThemedText>}
       </View>}
-      <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={selected ? 'Tap the tick to apply, or close to cancel before changing editing mode.' : nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Style is in the row above.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? 'Tap text boxes to select them, then delete them together.' : byParagraph ? 'Tap a paragraph to rewrite it. Matching lines rewrap together.' : 'Tap a line to edit it, or choose Paragraph to rewrite a block.'}>
+      {showFormatting && editingText && <TextOptionsPanel
+        style={textStyle} onStyleChange={changeStyle} size={size} onSizeChange={value => { invalidateDraft(); setSize(value); }}
+        indent={indent} indentStep={INDENT_STEP} onIndentChange={changeIndent} allowOriginal={!!selected}
+        ink={ink} onInkChange={value => { invalidateDraft(); setInk(value ?? (selected ? null : DEFAULT_INK)); }}
+        originalInk={selected ? { label: 'Original', value: null } : undefined} disabled={busy}
+        note={preview.fontFallbacks && textStyle.family === 'original' ? 'This draft uses a substituted font. Reopen it with the updated native build to preserve the original font.' : undefined}
+        onClose={() => setShowFormatting(false)} />}
+      <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={typing || showFormatting ? '' : selected ? 'Tap the tick to apply, or close to cancel before changing editing mode.' : nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Text options sit next to the size controls.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? (byParagraph ? 'Tap a paragraph to select it, then delete the selection.' : 'Tap text boxes to select them, then delete them together.') : byParagraph ? 'Tap a paragraph to rewrite it. Matching lines rewrap together.' : 'Tap a line to edit it, or choose Paragraph to rewrite a block.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
         pageLayout={JSON.stringify({ width: preview.width, height: preview.height, pointWidth: preview.pointWidth ?? 0 })}
         objects={objectsJson} selectedId={selected?.id ?? -1} markedIds={marked.join(',')} adding={adding} disabled={busy || !!controlHelp?.active} placement={placement ? JSON.stringify(placement) : ''}
@@ -797,10 +837,6 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         </Pressable>
       </View>}
       {(selected || placement) && <View style={[styles.editorBar, { backgroundColor: colors.secondarySystemBackground }]}>
-        {!nativeTextBox && !nativeParagraph && <View style={styles.editorInput}>
-          <ThemedText style={[styles.inputLabel, { color: colors.systemBlue }]}>{paragraph ? 'Edit paragraph here' : 'Edit text here'}</ThemedText>
-          <TextInput ref={textField} accessibilityLabel={paragraph ? "Edit paragraph here" : "Edit text here"} selectionColor={colors.systemBlue} cursorColor={colors.systemBlue} multiline={!!paragraph} onFocus={() => { setShowFormatting(false); setShowTextList(false); setShowOptions(false); }} value={text} onChangeText={value => { invalidateDraft(); setText(value); }} editable={!busy} maxLength={4000} returnKeyType={paragraph ? "default" : "done"} submitBehavior={paragraph ? "newline" : "blurAndSubmit"} onSubmitEditing={() => { if (text.trim()) apply(selected ? 'replace' : 'add'); }} placeholder="Type the new text" placeholderTextColor={colors.secondaryLabel} style={[inputStyle, styles.activeInput, paragraph && styles.multiline, { borderColor: colors.systemBlue }]} />
-        </View>}
         <View style={styles.row}>
           <ThemedText style={[styles.grow, styles.markCount]} numberOfLines={1}>{nativeTextBox || nativeParagraph ? 'Editing on the page' : selected ? 'Page preview' : 'New text'}</ThemedText>
           <View style={styles.sizeStepper}>
@@ -808,24 +844,22 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
             <ThemedText accessibilityLabel={`Text size ${size} points`} style={styles.sizeLabel}>{size}</ThemedText>
             <Pressable accessibilityRole="button" accessibilityLabel="Larger text" disabled={busy || Number(size) >= 200} hitSlop={2} style={[styles.sizeButton, (busy || Number(size) >= 200) && styles.dim]} onPress={() => stepSize(1)}><UniversalIcon ios="textformat.size.larger" android="text-increase" size={22} color={colors.systemBlue} /></Pressable>
           </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Text options" accessibilityHint="Change colour, font and text style. The page preview updates as you change them." accessibilityState={{ selected: showFormatting, disabled: busy }} disabled={busy}
+            style={[styles.icon, showFormatting && { backgroundColor: colors.accentSurface }]} onPress={openFormatting}>
+            <UniversalIcon ios="textformat" android="text-format" size={22} color={colors.systemBlue} />
+          </Pressable>
           {selected && <Pressable accessibilityRole="button" accessibilityLabel="Delete selected text" disabled={busy} style={styles.icon} onPress={() => apply('delete')}><UniversalIcon ios="trash" android="delete-outline" size={22} color={colors.destructive} /></Pressable>}
           {editingAddition !== null && <Pressable accessibilityRole="button" accessibilityLabel="Remove added text" disabled={busy} style={styles.icon} onPress={() => { Keyboard.dismiss(); void change(edits.filter((_, index) => index !== editingAddition)); }}><UniversalIcon ios="trash" android="delete-outline" size={22} color={colors.destructive} /></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Apply text" disabled={busy || !text.trim()} style={styles.icon} onPress={() => apply(selected ? 'replace' : 'add')}><UniversalIcon ios="checkmark" android="check" size={22} color={colors.systemBlue} /></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Cancel selection" style={styles.icon} onPress={() => { Keyboard.dismiss(); invalidateDraft(); setSelected(null); setPlacement(null); setEditingAddition(null); }}><UniversalIcon ios="xmark" android="close" size={22} color={colors.secondaryLabel} /></Pressable>
         </View>
+        {!nativeTextBox && !nativeParagraph && <View style={styles.editorInput}>
+          <ThemedText style={[styles.inputLabel, { color: colors.systemBlue }]}>{paragraph ? 'Edit paragraph here' : 'Edit text here'}</ThemedText>
+          <TextInput ref={textField} accessibilityLabel={paragraph ? "Edit paragraph here" : "Edit text here"} selectionColor={colors.systemBlue} cursorColor={colors.systemBlue} multiline={!!paragraph} onFocus={() => { setShowFormatting(false); setShowTextList(false); setShowOptions(false); }} value={text} onChangeText={value => { invalidateDraft(); setText(value); }} editable={!busy} maxLength={4000} returnKeyType={paragraph ? "default" : "done"} submitBehavior={paragraph ? "newline" : "blurAndSubmit"} onSubmitEditing={() => { if (text.trim()) apply(selected ? 'replace' : 'add'); }} placeholder="Type the new text" placeholderTextColor={colors.secondaryLabel} style={[inputStyle, styles.activeInput, paragraph && styles.multiline, { borderColor: colors.systemBlue }]} />
+        </View>}
       </View>}
       {!!(draftIssue || previewError || recovery.error) && <ThemedText accessibilityRole="alert" style={styles.hint}>{draftIssue || previewError || recovery.error}</ThemedText>}
-      {editingText && !keyboardOpen && <ToolSettingsSummary title="Font, colour and spacing" summary={`${textStyle.family === 'original' ? 'Original font' : fontName(textStyle)} · ${size} pt`} disabled={busy} expanded={showFormatting} onPress={() => { Keyboard.dismiss(); setShowFormatting(true); setShowTextList(false); setShowOptions(false); }} />}
-      <OptionSheet title="Text style" icon={{ ios: 'textformat', android: 'text-format' }} isPresented={showFormatting && editingText} onClose={() => setShowFormatting(false)}>
-        <OptionCard title="Font" icon={{ ios: 'textformat.size', android: 'format-size' }}>
-          <TextStyleControls style={textStyle} onChange={changeStyle} size={size} onSizeChange={value => { invalidateDraft(); setSize(value); }} sizeUnit="pt" minSize={4} maxSize={200} allowOriginal={!!selected} disabled={busy} indent={indent} indentStep={INDENT_STEP} onIndentChange={changeIndent} />
-          {!!preview.fontFallbacks && textStyle.family === 'original' && <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>This draft uses a substituted font. Reopen it with the updated native build to preserve the original font.</ThemedText>}
-        </OptionCard>
-        <OptionCard title="Colour" icon={{ ios: 'paintpalette', android: 'palette' }}>
-          <ColorSwatches value={ink} disabled={busy} original={selected ? { label: 'Original', value: null } : undefined} onChange={value => { invalidateDraft(); setInk(value ?? (selected ? null : DEFAULT_INK)); }} />
-        </OptionCard>
-        {editingAddition !== null && <ToolButton title="Remove added text" secondary disabled={busy} onPress={() => { setShowFormatting(false); void change(edits.filter((_, index) => index !== editingAddition)); }} />}
-      </OptionSheet>
+      {editingText && !keyboardOpen && !showFormatting && <ToolSettingsSummary title="Font, colour and spacing" summary={`${textStyle.family === 'original' ? 'Original font' : fontName(textStyle)} · ${size} pt`} disabled={busy} expanded={showFormatting} onPress={openFormatting} />}
       <OptionSheet expandable title={`Text on page ${page + 1}`} icon={{ ios: 'list.bullet', android: 'format-list-bulleted' }} isPresented={showTextList && !editingText} onClose={() => setShowTextList(false)}>
         {edits.some(edit => edit.kind === 'add' && edit.page === page) && <OptionCard title="Text you added" icon={{ ios: 'text.badge.plus', android: 'text-fields' }}>{edits.map((edit, index) => edit.kind === 'add' && edit.page === page && <Pressable key={index} accessibilityRole="button" accessibilityLabel={`Edit added text: ${edit.text}`} disabled={busy} style={({ pressed }) => [styles.textRow, { borderColor: colors.separator, opacity: pressed ? 0.6 : 1 }]} onPress={() => openAddition(index)}><ThemedText numberOfLines={2} style={styles.grow}>{edit.text}</ThemedText><ThemedText style={[styles.badge, { color: colors.systemBlue }]}>Added</ThemedText></Pressable>)}</OptionCard>}
         <OptionCard title={multiDelete ? 'Tap text to select it for deletion' : 'Tap text to edit it'} icon={{ ios: 'text.alignleft', android: 'notes' }}>
@@ -933,5 +967,5 @@ const styles = StyleSheet.create({
   placement: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#1565ff', transform: [{ translateX: -7 }, { translateY: -7 }] },
   textRow: { flexDirection: 'row', alignItems: 'center', gap: s.sm, paddingVertical: s.sm, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48 },
   footer: { padding: s.sm, gap: s.sm, borderTopWidth: StyleSheet.hairlineWidth },
-  multiline: { maxHeight: 140, textAlignVertical: 'top' }, notice: { flexDirection: 'row', alignItems: 'center', gap: s.sm, padding: s.sm, borderRadius: radius.sm }, dim: { opacity: 0.35 },
+  multiline: { minHeight: 48, maxHeight: 92, textAlignVertical: 'top' }, notice: { flexDirection: 'row', alignItems: 'center', gap: s.sm, padding: s.sm, borderRadius: radius.sm }, dim: { opacity: 0.35 },
 });

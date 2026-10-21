@@ -14,7 +14,7 @@ export const ExplorerRow = memo(function ExplorerRow({ entry, onPress, showFolde
   const colors = usePalette();
   const glyph = KIND_GLYPHS[entry.kind] ?? KIND_GLYPHS.other;
   const detail = entry.directory
-    ? entry.count >= 0 ? `${entry.count} ${entry.count === 1 ? 'item' : 'items'}` : 'Folder'
+    ? entry.modified > 0 ? `Folder · ${formatDate(entry.modified)}` : 'Folder'
     : `${formatSize(entry.size)} · ${formatDate(entry.modified)}`;
   const folder = showFolder ? entry.path.slice(0, entry.path.length - entry.name.length - 1).split('/').pop() : undefined;
   return (

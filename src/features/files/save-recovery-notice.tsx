@@ -11,7 +11,7 @@ export function SaveRecoveryNotice({ message, busy, onRetry, onDismiss }: { mess
       <ThemedText accessibilityRole="alert" style={styles.message}>{message}</ThemedText>
       <View style={styles.actions}>
         <Pressable accessibilityRole="button" accessibilityLabel="Dismiss save recovery notice" disabled={busy} onPress={onDismiss} style={styles.button}><ThemedText>Later</ThemedText></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Retry interrupted save recovery" accessibilityState={{ busy, disabled: busy }} disabled={busy} onPress={onRetry} style={styles.button}><ThemedText style={{ color: colors.accent, fontWeight: '600' }}>{busy ? 'Recovering…' : 'Retry'}</ThemedText></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Retry interrupted save recovery" accessibilityState={{ busy, disabled: busy }} disabled={busy} onPress={onRetry} style={styles.button}><ThemedText style={{ color: colors.systemBlue, fontWeight: '600' }}>{busy ? 'Recovering…' : 'Retry'}</ThemedText></Pressable>
       </View>
     </View>
   </SafeAreaView>;

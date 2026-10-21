@@ -271,7 +271,7 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
 
   const objectsJson = useMemo(() => JSON.stringify(analysis?.lines.map(item => ({ id: item.id, x: item.x, y: item.y, width: item.width, height: item.height })) ?? []), [analysis]);
   return <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.systemBackground }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-    <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} onBack={requestClose}
+    <ScreenHeader title={addOnly ? 'Add text' : 'Edit text'} subtitle={file?.name} onBack={requestClose}
       share={{ onPress: shareImage, disabled: !file || !analysis || busy || !recovery.ready, label: shareEdits.length ? 'Share edited image' : 'Share image' }}
        />
     <ToolActionRow

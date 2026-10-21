@@ -4,7 +4,8 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { showDialog } from '@/components/app-dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
-import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
+import { ReaderScreenHeader, ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
+import { AppLoader } from '@/components/app-loader';
 import { useHeaderShare } from '@/components/header-share';
 import { PdfToolLayoutContext } from '@/features/pdf/pdf-tool-layout';
 import { ToolButton } from '@/components/tool-button';
@@ -20,14 +21,14 @@ import { AdvancedPdfTool } from '@/features/pdf/advanced-pdf-tool';
 import { File } from 'expo-file-system';
 import { createImportDirectory, disposeImports, savedPdfDirectory } from '@/features/files/file-storage';
 import { savePdfResult } from '@/features/files/save-file';
+import { showSavedPdf } from '@/features/pdf/open-pdf-screen';
+import { toast } from '@/components/toast';
 import { createPdfToolForWorkingCopy, forgetPdfToolSession, getPdfToolSession, implementedPdfTools, retainPdfEditingSource, type PdfTool } from '@/features/pdf/pdf-tool-session';
 import { copyPdf, currentPdfHandoff, usePdfHandoffState } from '@/features/pdf/pdf-handoff';
 import { PDF_SECTIONS } from '@/constants/pdf-methods';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { recordToolUse } from '@/features/search/search-history';
 import { ControlHelpProvider, useControlHelp } from '@/components/control-help';
-import { HelpPressable } from '@/components/help-pressable';
-import { BrandGlyph } from '@/components/app-glyph';
 
 const pdfMethods = PDF_SECTIONS.flatMap(section => [...section.tools]);
 
@@ -44,6 +45,7 @@ function PdfToolContent() {
   const mounted = useRef(true);
   const [focused, setFocused] = useState(false);
   const [surrounding, setSurrounding] = useState(false);
+  const [typing, setTyping] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
   const discardDraft = useRef<() => Promise<void>>(() => Promise.resolve());
   const registerDiscard = useCallback((action: () => Promise<void>) => { discardDraft.current = action; }, []);
@@ -148,32 +150,33 @@ function PdfToolContent() {
     const output = new File(library, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
     try {
       await copyPdf(session.files[0].uri, output.uri);
-      const saved = await savePdfResult({ uri: output.uri, name: session.origin?.name ?? session.files[0].name }, session.origin);
+      const saved = await savePdfResult({ uri: output.uri, name: session.origin?.name ?? session.files[0].name }, session.origin, undefined, false);
       if (!saved) { if (output.exists) output.delete(); return; }
-      if (mounted.current) setWorkingSaved({ uri: saved.file.uri, name: saved.file.name });
+      toast(`Saved to ${saved.device.location}`);
+      if (mounted.current && !showSavedPdf(saved.file, session.returnRoute)) setWorkingSaved({ uri: saved.file.uri, name: saved.file.name });
     } catch (cause) { if (output.exists) output.delete(); throw cause; }
   }
   // Tools without their own changes still save what earlier tools carried in.
   const saveAction = carriedUnsaved && !handoff?.changed ? { label: 'Save PDF', onPress: saveWorkingCopy } : undefined;
   const tool = session?.tool;
-  const toolsButton = !!session && tool !== 'viewer' && <HelpPressable accessibilityRole="button" accessibilityLabel="All tools" accessibilityHint="Continue with this PDF in another tool" accessibilityState={{ disabled: switching, busy: switching }} disabled={switching} onPress={() => { Keyboard.dismiss(); setToolsOpen(true); }} hitSlop={4} style={({ pressed }) => [styles.orientation, { opacity: pressed ? .6 : 1 }]}><BrandGlyph art="tools" size={36} loading={switching} color={colors.systemBlue} /></HelpPressable>;
+  const canSwitch = !!session && tool !== 'viewer';
+  const Header = tool === 'viewer' ? ReaderScreenHeader : ScreenHeader;
   return <PdfToolLayoutContext.Provider value={layout}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !leaveUnsaved && !switching, orientation: landscape ? 'landscape' : 'portrait' }} />
-    {!focused && !surrounding && <ScreenHeader title={session?.title ?? 'PDF'} onBack={close} share={share} save={saveAction} leading={toolsButton}
+    {!focused && !surrounding && !typing && <Header title={session?.title ?? 'PDF'} subtitle={tool === 'viewer' ? undefined : session?.origin?.name ?? session?.files[0]?.name} onBack={close} share={share} save={saveAction} leading={switching ? <AppLoader accessibilityLabel="Opening the next tool" /> : undefined}
       tool={session?.tool} helpIntercept={session?.tool === 'viewer' ? handleReaderHelp : undefined}
-      menu={[{ id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', disabled: switching, icon: { ios: 'rotate.right', android: 'screen-rotation' }, onPress: () => setLandscape(value => !value) }]} />}
+      menu={[...(canSwitch ? [{ id: 'tools', label: 'All tools', disabled: switching, selected: toolsOpen, icon: { ios: 'wrench.and.screwdriver' as const, android: 'mdi:toolbox-outline' as const }, onPress: () => { Keyboard.dismiss(); setToolsOpen(true); } }] : []), { id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', disabled: switching, icon: { ios: 'rotate.right', android: 'screen-rotation' }, onPress: () => setLandscape(value => !value) }]} />}
     {!session ? <View style={styles.empty}><ThemedText>Select a file from the PDF tools to get started.</ThemedText><ToolButton title="Back to PDF tools" onPress={close} /></View>
       : tool === 'viewer' ? <PdfViewer initialDocument={session.files[0]} onFocusChange={setFocused} onSurroundChange={setSurrounding} />
-      : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' || tool === 'replace_text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : tool === 'replace_text' ? 'replace' : 'edit'} />
+      : tool === 'edit_text' || tool === 'remove_text' || tool === 'text' || tool === 'replace_text' ? <PdfTextEditor initialSelection={session} onUnsavedChange={setUnsaved} onTypingChange={setTyping} onDiscardReady={registerDiscard} initialMode={tool === 'text' ? 'add' : tool === 'remove_text' ? 'delete' : tool === 'replace_text' ? 'replace' : 'edit'} />
       : tool === 'merge' || tool === 'split' ? <OrganizePdf operation={tool} initialSelection={session} />
       : tool === 'extract' || tool === 'delete' ? <EditPdfPages operation={tool} initialSelection={session} />
       : tool === 'reorder' || tool === 'rotate' ? <ArrangePdfPages operation={tool} initialSelection={session} />
       : tool === 'from_image' ? <ImageToPdf initialSelection={session} />
       : <AdvancedPdfTool session={session} onUnsavedChange={setUnsaved} onDiscardReady={registerDiscard} />}
-    {toolsButton && <ToolboxSheet visible={toolsOpen} title="All tools" subtitle={session?.origin?.name ?? session?.files[0]?.name ?? 'PDF'} caption="Your changes carry into the next tool. Save when you are done." sections={toolSections} footer={<View />} onClose={() => setToolsOpen(false)} onAction={chooseTool} />}
+    {canSwitch && <ToolboxSheet visible={toolsOpen} title="All tools" subtitle={session?.origin?.name ?? session?.files[0]?.name ?? 'PDF'} caption="Your changes carry into the next tool. Save when you are done." sections={toolSections} footer={<View />} onClose={() => setToolsOpen(false)} onAction={chooseTool} />}
   </SafeAreaView></PdfToolLayoutContext.Provider>;
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 }, empty: { flex: 1, padding: 24, gap: 16, justifyContent: 'center' },
-  orientation: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });

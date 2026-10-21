@@ -23,7 +23,7 @@ function PdfViewerContent() {
   function back() { if (help?.close() || handleReaderBack()) return; if (router.canGoBack()) router.back(); else router.replace('/(modules)/documents'); }
   return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <LayoutAnimationConfig skipEntering>
-      {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader variant="close" title={name ?? 'PDF'} onBack={back} tool="viewer" helpIntercept={handleReaderHelp} /></FocusChrome>}
+      {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader title={name ?? 'PDF'} onBack={back} tool="viewer" helpIntercept={handleReaderHelp} /></FocusChrome>}
       <PdfViewer key={`${uri}:${revision}`} initialDocument={uri ? { uri, name: name ?? 'Document.pdf' } : undefined} initialPage={Math.max(0, Number.parseInt(page ?? '0', 10) || 0)} onFocusChange={setFocused} onSurroundChange={setSurrounding} />
     </LayoutAnimationConfig>
   </SafeAreaView>;

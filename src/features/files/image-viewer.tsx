@@ -10,8 +10,9 @@ import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { railSections } from '@/components/tool-rail';
 import { ToolSurround } from '@/components/tool-surround';
 import { ToolboxSheet } from '@/components/toolbox-sheet';
-import { FocusChrome, useFocusLayout } from '@/components/focus-chrome';
+import { aboveChrome, FocusChrome, useFocusLayout } from '@/components/focus-chrome';
 import { useToolRing } from '@/hooks/use-tool-ring';
+import { usePublishHeaderActions } from '@/components/header-actions';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { MediaPreview } from './media-preview';
 import { MediaToolbar, mediaTools } from './media-toolbar';
@@ -31,7 +32,7 @@ type Props = {
 };
 
 /**
- * The image preview laid out like the PDF reader: Fit and All tools above the image, recent tools below,
+ * The image preview laid out like the PDF reader: Fit above the image, All tools in the header's More menu, recent tools below,
  * and a Tools button that frames the image with every tool.
  */
 export function ImageViewer({ file, revision, busy, active, showImage, landscape, onToggleLandscape, onAction, onClose, changed, onSave, onDiscard, onSurroundChange, onFocusChange }: Props) {
@@ -59,21 +60,22 @@ export function ImageViewer({ file, revision, busy, active, showImage, landscape
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
   const imageLayout = useFocusLayout(surrounding);
   useEffect(() => { onFocusChange?.(focused); }, [focused, onFocusChange]);
+  // All tools sits first in the header's More menu.
+  usePublishHeaderActions(rails && active, [{ id: 'tools', label: 'All tools', ios: 'wrench.and.screwdriver', android: 'mdi:toolbox-outline', selected: toolboxOpen, disabled: busy, onPress: () => { ring.close(); setToolboxOpen(true); } }]);
   const toggleFocus = () => { if (showImage && !surrounding && !toolboxOpen && !busy) setFocused(value => !value); };
 
-  return <Animated.View layout={imageLayout} style={[styles.screen, landscape && styles.row]}>
+  return <Animated.View layout={imageLayout} style={[styles.screen, landscape && styles.row, surrounding && aboveChrome]}>
     {landscape && rails && <FocusChrome edge="side"><MediaToolbar side="left" kind="image" busy={busy} landscape onToggleLandscape={onToggleLandscape} onAction={onAction} /></FocusChrome>}
-    <View style={styles.screen}>
+    <View style={[styles.screen, surrounding && aboveChrome]}>
       {rails && <FocusChrome edge="top"><ToolActionRow left={<>
         <ToolRowButton label="Fit image" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={!showImage} onPress={() => setFitRevision(value => value + 1)} />
-        <ToolRowButton label="All tools" icon={{ ios: 'wrench.and.screwdriver', android: 'handyman' }} expanded={toolboxOpen} disabled={busy} onPress={() => { ring.close(); setToolboxOpen(true); }} />
       </>} right={changed && <>
         <ToolRowButton label="Discard all changes" icon={{ ios: 'arrow.uturn.backward', android: 'undo' }} disabled={busy} onPress={onDiscard} />
         <Pressable accessibilityRole="button" accessibilityLabel="Save edited image" disabled={busy} onPress={onSave} style={({ pressed }) => [styles.save, getGradients(colors).module, { opacity: busy ? 0.4 : pressed ? 0.7 : 1 }]}>
           {busy ? <AppLoader color={colors.moduleText} /> : <><UniversalIcon ios="square.and.arrow.down" android="save" size={18} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText, fontWeight: '600' }}>Save</ThemedText></>}
         </Pressable>
       </>} /></FocusChrome>}
-      <Animated.View layout={imageLayout} style={styles.screen}>
+      <Animated.View layout={imageLayout} style={[styles.screen, surrounding && aboveChrome]}>
         <ToolSurround active={ring.active && !ring.closing} naming={ring.naming} tools={ringTools} disabled={busy} onAction={perform} onClose={ring.close} onHidden={ring.finishClose}>
           {showImage ? <MediaPreview key={`${file.uri}:${revision ?? ''}:${fitRevision}`} file={file} onClose={onClose} onTap={toggleFocus} /> : <View style={styles.empty}>{active && <AppLoader />}</View>}
         </ToolSurround>

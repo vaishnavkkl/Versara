@@ -60,7 +60,7 @@ class FileEngineModule : Module() {
       else imageTools.run(context, id, request, promise)
     }
     Function("cancelImageJob") { id: String -> imageTools.cancel(id) }
-    Constant("nativeImageListVersion") { 6 }
+    Constant("nativeImageListVersion") { 8 }
     Constant("nativePdfLibraryVersion") { 1 }
     Constant("nativeZoomImageVersion") { 1 }
     Constant("nativeVideoVersion") { 1 }

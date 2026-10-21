@@ -10,7 +10,7 @@ import { getGradients, spacing as s, typography as t } from '@/theme/dashboard';
 import { useScreenActive } from '@/hooks/use-screen-active';
 import { FileEngine, type ExplorerEntry } from '../../../modules/file-engine';
 import { ExplorerRow } from '@/features/files/explorer-row';
-import { explorerAvailable, KIND_GLYPHS, openExplorerEntry } from '@/features/files/explorer';
+import { explorerAvailable, isSupportedEntry, KIND_GLYPHS, openExplorerEntry } from '@/features/files/explorer';
 import { SEARCH_TOOLS, SUGGESTED_TOOLS, type SearchTool } from './search-tools';
 import { clearSearchHistory, hydrateSearchHistory, recordSearch, removeSearch, useSearchHistory } from './search-history';
 import { openSearchTool } from './open-search-tool';
@@ -65,7 +65,7 @@ export function SearchScreen() {
     let request: ReturnType<typeof requestFileSearch> | undefined;
     const timer = setTimeout(() => {
       request = requestFileSearch(term, MAX_FILES);
-      void request.promise.then(value => { if (!cancelled) setResult({ key, files: value }); })
+      void request.promise.then(value => { if (!cancelled) setResult({ key, files: value.filter(isSupportedEntry) }); })
         .catch(cause => { if (!cancelled) setResult({ key, files: [], error: (cause as Error).message || 'Could not search your files.' }); });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); request?.release(); };
@@ -150,7 +150,7 @@ export function SearchScreen() {
         <TextInput value={query} onChangeText={setQuery} onSubmitEditing={() => { recordSearch(term); Keyboard.dismiss(); }} placeholder="Files, PDFs, tools…" placeholderTextColor={colors.muted} returnKeyType="search" autoCorrect={false} autoCapitalize="none" maxLength={100} style={[styles.input, { color: colors.label }]} accessibilityLabel="Search files and tools" />
         {!!query && <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => setQuery('')} style={styles.clear}><UniversalIcon ios="xmark.circle.fill" android="cancel" size={22} color={colors.muted} /></Pressable>}
       </View>
-      {!!term && <View style={styles.chips}>{(['All', 'Tools', 'Files'] as const).map(value => <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: scope === value }} onPress={() => setScope(value)} style={[styles.chip, { backgroundColor: scope === value ? colors.systemBlue : colors.tileSurface, borderColor: colors.tileBorder }]}><ThemedText style={[styles.chipLabel, { color: scope === value ? colors.onAccent : colors.label }]}>{value}</ThemedText></Pressable>)}</View>}
+      {!!term && <View style={styles.chips}>{(['All', 'Tools', 'Files'] as const).map(value => <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: scope === value }} onPress={() => setScope(value)} style={[styles.chip, { backgroundColor: scope === value ? colors.systemBlue : colors.tileSurface, borderColor: colors.tileBorder }]}><ThemedText style={[styles.chipLabel, { color: scope === value ? colors.systemBackground : colors.label }]}>{value}</ThemedText></Pressable>)}</View>}
       {!!opening && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>Opening your selection…</ThemedText>}
     </View>
     <FlatList ref={list} data={rows} keyExtractor={item => item.key} renderItem={renderItem} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.list} initialNumToRender={12} maxToRenderPerBatch={8} windowSize={5} ListHeaderComponent={!term ? idle : null} ListFooterComponent={status} />
