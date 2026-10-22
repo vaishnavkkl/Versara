@@ -12,10 +12,10 @@ import { BackHandler, Keyboard, KeyboardAvoidingView, Platform, ScrollView, Styl
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
-import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, type TextStyle } from '@/components/text-style-controls';
+import { ColorSwatches } from '@/components/color-swatches';
+import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type TextStyle } from '@/components/text-style-controls';
 import { fontFile, useEditFonts, withFontFiles } from '@/constants/edit-fonts';
 import { OptionCard, OptionSheet } from '@/components/option-sheet';
-import { TextOptionsPanel } from './text-options-panel';
 import { ToolRowButton } from '@/components/tool-action-row';
 import { usePublishHeaderShare } from '@/components/header-share';
 import { copyPdf, renderPdf, usePublishPdfHandoff } from './pdf-handoff';
@@ -37,7 +37,7 @@ import { browseFiles, createImportDirectory, disposeImports, savedPdfDirectory, 
 import { openPdfResult, showSavedPdf } from './open-pdf-screen';
 import { PdfPreviewQueue, type PagePreview } from './pdf-preview-queue';
 import { usePdfScreenActive } from './use-pdf-screen-active';
-import { PdfPreviewBody, PdfPreviewToolbar, PdfPreviewStage, usePageSwipe } from './pdf-preview';
+import { PdfPreviewBody, PdfPreviewFooter, PdfPreviewToolbar, PdfPreviewStage, usePageSwipe } from './pdf-preview';
 import { PublishHeaderHistory } from '@/components/header-history';
 import { useControlHelp } from '@/components/control-help';
 import { usePdfToolLayout } from './pdf-tool-layout';
@@ -235,7 +235,15 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
   }, [showFormatting]);
   const toolbar = useResponsiveEditorToolbar(
     [],
-    [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, 'Save (' + edits.length + ')'],
+    multiDelete || (!adding && !replacing)
+      ? [
+          { label: 'Line', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH },
+          { label: 'Paragraph', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH },
+          ...(!multiDelete ? [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }] : []),
+          { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH },
+          'Save (' + edits.length + ')',
+        ]
+      : [{ label: adding ? 'Select text' : 'Add text', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, { label: 'Text list', compact: true, minWidth: TEXT_ACTION_MIN_WIDTH }, 'Save (' + edits.length + ')'],
   );
   const mounted = useRef(true);
   const locked = useRef(false);
@@ -798,20 +806,7 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
         {(replaceAvailable || replacing) && !editingText && <ToolRowButton caption label={replacing ? 'Replace' : 'Search'} icon={replacing ? { ios: 'text.magnifyingglass', android: 'find-replace' } : { ios: 'magnifyingglass', android: 'search' }} selected={showSearch} expanded={showSearch} disabled={busy} onPress={openSearch} />}
         <ToolRowButton caption label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={showOptions} expanded={showOptions} disabled={busy} onPress={openOptions} />
       </PdfPreviewToolbar>}>
-      {!adding && !replacing && !typing && <View style={[styles.editMode, { backgroundColor: colors.systemBackground }]}>
-        <ThemedText style={styles.note}>{multiDelete ? 'Remove by' : 'Edit by'}</ThemedText>
-        <EditorOption label="Line" selected={!byParagraph} disabled={busy || editingText} onPress={() => { invalidateDraft(); setByParagraph(false); setMarked([]); }} icon={{ ios: 'text.alignleft', android: 'short-text' }} />
-        <EditorOption label="Paragraph" selected={byParagraph} disabled={busy || editingText || !PdfEngine?.nativeParagraphEditVersion} onPress={() => { invalidateDraft(); setByParagraph(true); setMarked([]); }} icon={{ ios: 'text.justify.left', android: 'format-align-left' }} />
-        {!PdfEngine?.nativeParagraphEditVersion && <ThemedText style={styles.note}>Update the app to {multiDelete ? 'remove' : 'edit'} paragraphs.</ThemedText>}
-      </View>}
-      {showFormatting && editingText && <TextOptionsPanel
-        style={textStyle} onStyleChange={changeStyle} size={size} onSizeChange={value => { invalidateDraft(); setSize(value); }}
-        indent={indent} indentStep={INDENT_STEP} onIndentChange={changeIndent} allowOriginal={!!selected}
-        ink={ink} onInkChange={value => { invalidateDraft(); setInk(value ?? (selected ? null : DEFAULT_INK)); }}
-        originalInk={selected ? { label: 'Original', value: null } : undefined} disabled={busy}
-        note={preview.fontFallbacks && textStyle.family === 'original' ? 'This draft uses a substituted font. Reopen it with the updated native build to preserve the original font.' : undefined}
-        onClose={() => setShowFormatting(false)} />}
-      <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={typing || showFormatting ? '' : selected ? 'Tap the tick to apply, or close to cancel before changing editing mode.' : nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Text options sit next to the size controls.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? (byParagraph ? 'Tap a paragraph to select it, then delete the selection.' : 'Tap text boxes to select them, then delete them together.') : byParagraph ? 'Tap a paragraph to rewrite it. Matching lines rewrap together.' : 'Tap a line to edit it, or choose Paragraph to rewrite a block.'}>
+      <PdfPreviewStage status={draftIssue ? 'Preview paused' : previewStatus} hint={typing || showFormatting ? '' : selected ? 'Tap the tick to apply, or close to cancel before changing editing mode.' : nativeTextBox ? 'Type on the page. Drag the blue handle to move text. Open Style for font and colour — the page stays in view.' : adding ? 'Tap to place text. Pinch to zoom.' : multiDelete ? (byParagraph ? 'Tap a paragraph to select it, then delete the selection.' : 'Tap text boxes to select them, then delete them together.') : byParagraph ? 'Tap a paragraph to rewrite it. Matching lines rewrap together.' : 'Tap a line to edit it, or choose Paragraph to rewrite a block.'}>
       {screenActive && NativeEditCanvas ? <NativeEditCanvas key={source.uri + ':' + page} style={styles.canvas} source={preview.imageUri}
         pageLayout={JSON.stringify({ width: preview.width, height: preview.height, pointWidth: preview.pointWidth ?? 0 })}
         objects={objectsJson} selectedId={selected?.id ?? -1} markedIds={marked.join(',')} adding={adding} disabled={busy || !!controlHelp?.active} placement={placement ? JSON.stringify(placement) : ''}
@@ -860,6 +855,18 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       </View>}
       {!!(draftIssue || previewError || recovery.error) && <ThemedText accessibilityRole="alert" style={styles.hint}>{draftIssue || previewError || recovery.error}</ThemedText>}
       {editingText && !keyboardOpen && !showFormatting && <ToolSettingsSummary title="Font, colour and spacing" summary={`${textStyle.family === 'original' ? 'Original font' : fontName(textStyle)} · ${size} pt`} disabled={busy} expanded={showFormatting} onPress={openFormatting} />}
+      <OptionSheet title="Text style" icon={{ ios: 'textformat', android: 'text-format' }} isPresented={editingText && showFormatting} onClose={() => setShowFormatting(false)} dim={false} maxHeight={0.5}>
+        <OptionCard title="Font" icon={{ ios: 'textformat.size', android: 'format-size' }}>
+          <TextStyleControls style={textStyle} onChange={changeStyle} size={size} onSizeChange={value => { invalidateDraft(); setSize(value); }} sizeUnit="pt" minSize={4} maxSize={200}
+            allowOriginal={!!selected} disabled={busy} indent={indent} indentStep={INDENT_STEP} onIndentChange={changeIndent} />
+          {preview.fontFallbacks && textStyle.family === 'original' && <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>This draft uses a substituted font. Reopen it with the updated native build to preserve the original font.</ThemedText>}
+        </OptionCard>
+        <OptionCard title="Colour" icon={{ ios: 'paintpalette', android: 'palette' }}>
+          <ColorSwatches value={ink} disabled={busy} original={selected ? { label: 'Original', value: null } : undefined}
+            onChange={value => { invalidateDraft(); setInk(value ?? (selected ? null : DEFAULT_INK)); }} />
+        </OptionCard>
+        <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Style updates on the page above. Swipe down or close when you are finished.</ThemedText>
+      </OptionSheet>
       <OptionSheet expandable title={`Text on page ${page + 1}`} icon={{ ios: 'list.bullet', android: 'format-list-bulleted' }} isPresented={showTextList && !editingText} onClose={() => setShowTextList(false)}>
         {edits.some(edit => edit.kind === 'add' && edit.page === page) && <OptionCard title="Text you added" icon={{ ios: 'text.badge.plus', android: 'text-fields' }}>{edits.map((edit, index) => edit.kind === 'add' && edit.page === page && <Pressable key={index} accessibilityRole="button" accessibilityLabel={`Edit added text: ${edit.text}`} disabled={busy} style={({ pressed }) => [styles.textRow, { borderColor: colors.separator, opacity: pressed ? 0.6 : 1 }]} onPress={() => openAddition(index)}><ThemedText numberOfLines={2} style={styles.grow}>{edit.text}</ThemedText><ThemedText style={[styles.badge, { color: colors.systemBlue }]}>Added</ThemedText></Pressable>)}</OptionCard>}
         <OptionCard title={multiDelete ? 'Tap text to select it for deletion' : 'Tap text to edit it'} icon={{ ios: 'text.alignleft', android: 'notes' }}>
@@ -889,7 +896,9 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
           }} />
         </OptionCard>
         {layout && <OptionCard title="View" icon={{ ios: 'rectangle.landscape.rotate', android: 'screen-rotation' }}>
-          <EditorOption label={layout.landscape ? 'Switch to portrait' : 'Switch to landscape'} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} selected={layout.landscape} onPress={() => layout.setLandscape(value => !value)} />
+          <EditorActionBar>
+            <EditorOption compact label={layout.landscape ? 'Portrait' : 'Landscape'} accessibilityLabel={layout.landscape ? 'Switch to portrait' : 'Switch to landscape'} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} selected={layout.landscape} onPress={() => layout.setLandscape(value => !value)} />
+          </EditorActionBar>
         </OptionCard>}
         <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Scans and text inside embedded groups cannot be edited. Delete removes page text; it is not secure redaction.</ThemedText>
       </OptionSheet>
@@ -902,8 +911,10 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
             <ThemedText style={styles.label}>Replace with</ThemedText>
             <TextInput accessibilityLabel="Replacement text" value={replaceWith} onChangeText={setReplaceWith} editable={!busy && replaceAvailable} maxLength={500} autoCorrect={false} returnKeyType="done" placeholder="Leave empty to remove the text" placeholderTextColor={colors.secondaryLabel} style={inputStyle} />
           </>}
-          <EditorOption label="Match case" icon={{ ios: 'textformat', android: 'text-format' }} selected={matchCase} disabled={busy || !replaceAvailable} onPress={() => { setMatchCase(value => !value); setFindResult(null); }} />
-          <ToolButton title="Find in all pages" disabled={busy || !replaceAvailable || !findQuery.trim()} onPress={() => void findText()} />
+          <EditorActionBar>
+            <EditorOption compact label="Match case" icon={{ ios: 'textformat', android: 'text-format' }} selected={matchCase} disabled={busy || !replaceAvailable} onPress={() => { setMatchCase(value => !value); setFindResult(null); }} />
+            <ToolButton title="Find in all pages" disabled={busy || !replaceAvailable || !findQuery.trim()} onPress={() => void findText()} icon={{ ios: 'magnifyingglass', android: 'search' }} />
+          </EditorActionBar>
           {busy && <ThemedText accessibilityLiveRegion="polite" style={[styles.note, { color: colors.secondaryLabel }]}>{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText>}
         </OptionCard>
         {findResult && <OptionCard title="Results" icon={{ ios: 'list.bullet', android: 'format-list-bulleted' }}>
@@ -925,26 +936,28 @@ export function PdfTextEditor({ initialMode = 'edit', initialSelection, onUnsave
       </OptionSheet>}
       </PdfPreviewBody>
     </View> : <View style={styles.empty}>
-      {busy ? <AppLoader size="large" /> : <>
-        <ThemedText>{available ? 'Choose a PDF to start editing.' : 'Install a new development build to use the native editor.'}</ThemedText>
+      <ThemedText>{busy ? (phase || 'Opening PDF…') : available ? 'Choose a PDF to start editing.' : 'Install a new development build to use the native editor.'}</ThemedText>
+      {!busy && <>
         {!!error && !!initialSelection?.files.length && <ToolButton title="Retry this PDF" disabled={!available} onPress={() => choose(initialSelection.files)} />}
         <ToolButton title="Choose PDF" secondary={!!error && !!initialSelection?.files.length} disabled={!available} onPress={() => choose()} />
       </>}
     </View>}
-    {!keyboardOpen && <View style={[styles.footer, landscape && styles.landscapeSide, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}>
+    {!keyboardOpen && <PdfPreviewFooter style={landscape ? styles.landscapeSide : undefined}>
       {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
       {busy ? <View style={[styles.row, landscape && styles.landscapeStack]}><AppLoader /><ThemedText style={landscape ? undefined : styles.grow} accessibilityLiveRegion="polite">{phase}{progress !== null ? ' ' + Math.round(progress * 100) + '%' : ''}</ThemedText><ToolButton title="Cancel" secondary onPress={() => { previewQueue.cancel(); if (job.current) PdfEngine?.cancelTextEdit(job.current); }} /></View> : source && <EditorActionBar onLayout={toolbar.onBottomLayout} vertical={landscape}>
-        <EditorOption compact label={adding ? 'Select text' : 'Add text'} style={landscape ? undefined : styles.textAction} selected={adding} disabled={busy} icon={{ ios: adding ? 'cursorarrow' : 'text.badge.plus', android: adding ? 'touch-app' : 'text-fields' }} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} />
-        <EditorOption compact label="Text list" style={landscape ? undefined : styles.textAction} selected={showTextList} disabled={busy} onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
+        {(multiDelete || !adding) && <>
+          <EditorOption compact label="Line" selected={!byParagraph} disabled={busy || editingText} icon={{ ios: 'text.alignleft', android: 'short-text' }} onPress={() => { invalidateDraft(); setByParagraph(false); setMarked([]); }} />
+          <EditorOption compact label="Paragraph" selected={byParagraph} disabled={busy || editingText || !PdfEngine?.nativeParagraphEditVersion} accessibilityLabel={PdfEngine?.nativeParagraphEditVersion ? 'Paragraph' : `Paragraph, update the app to ${multiDelete ? 'remove' : 'edit'} paragraphs`} icon={{ ios: 'text.justify.left', android: 'format-align-left' }} onPress={() => { invalidateDraft(); setByParagraph(true); setMarked([]); }} />
+        </>}
+        {!multiDelete && <EditorOption compact label={adding ? 'Select text' : 'Add text'} selected={adding} disabled={busy} icon={{ ios: adding ? 'cursorarrow' : 'text.badge.plus', android: adding ? 'touch-app' : 'text-fields' }} onPress={() => { invalidateDraft(); setAdding(!adding); setSelected(null); setPlacement(null); setEditingAddition(null); setText(''); setIndent(0); setTextStyle(current => current.family === 'original' ? DEFAULT_TEXT_STYLE : current); setShowTextList(false); }} />}
+        <EditorOption compact label="Text list" selected={showTextList} disabled={busy} onPress={() => { invalidateDraft(); setShowTextList(!showTextList); setShowOptions(false); setSelected(null); setPlacement(null); setAdding(false); }} />
         <ToolButton title={'Save (' + edits.length + ')'} disabled={!edits.length || !recovery.ready} onPress={requestSave} />
       </EditorActionBar>}
-    </View>}
+    </PdfPreviewFooter>}
   </KeyboardAvoidingView>;
 }
 
 const styles = StyleSheet.create({
-  editMode: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: s.sm, paddingHorizontal: s.sm, paddingVertical: s.xs },
-  textAction: { minWidth: TEXT_ACTION_MIN_WIDTH },
   searchPanel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8, paddingVertical: 2 },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   searchInput: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, fontSize: 15 },
@@ -966,6 +979,5 @@ const styles = StyleSheet.create({
   landscapeStack: { flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch' },
   placement: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#1565ff', transform: [{ translateX: -7 }, { translateY: -7 }] },
   textRow: { flexDirection: 'row', alignItems: 'center', gap: s.sm, paddingVertical: s.sm, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48 },
-  footer: { padding: s.sm, gap: s.sm, borderTopWidth: StyleSheet.hairlineWidth },
   multiline: { minHeight: 48, maxHeight: 92, textAlignVertical: 'top' }, notice: { flexDirection: 'row', alignItems: 'center', gap: s.sm, padding: s.sm, borderRadius: radius.sm }, dim: { opacity: 0.35 },
 });

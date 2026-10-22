@@ -10,11 +10,14 @@ import type { OptionIcon } from '@/theme/editor-icons';
  * Bottom sheet for tool options. It overlays the preview instead of shrinking it.
  * The sheet sizes to its content up to a cap, and the options scroll inside it.
  */
-export function OptionSheet({ title, icon, isPresented, onClose, expandable = false, dim = true, keyboardInput = false, children }: {
-  title: string; icon?: OptionIcon; isPresented: boolean; onClose: () => void; expandable?: boolean; dim?: boolean; keyboardInput?: boolean; children: ReactNode;
+export function OptionSheet({ title, icon, isPresented, onClose, expandable = false, dim = true, keyboardInput = false, maxHeight, children }: {
+  title: string; icon?: OptionIcon; isPresented: boolean; onClose: () => void; expandable?: boolean; dim?: boolean; keyboardInput?: boolean;
+  /** Caps sheet height as a share of the window. Defaults to a tall sheet, or nearly full when expandable / landscape. */
+  maxHeight?: number; children: ReactNode;
 }) {
   const { width, height } = useWindowDimensions();
-  return <AppBottomSheet visible={isPresented} onClose={onClose} title={title} icon={icon} dim={dim} keyboardInput={keyboardInput} maxHeight={expandable || width > height ? 0.92 : 0.7}>
+  const capped = maxHeight ?? (expandable || width > height ? 0.92 : 0.7);
+  return <AppBottomSheet visible={isPresented} onClose={onClose} title={title} icon={icon} dim={dim} keyboardInput={keyboardInput} maxHeight={capped}>
     {children}
   </AppBottomSheet>;
 }

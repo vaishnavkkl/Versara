@@ -66,7 +66,7 @@ export function ScreenHeader({ title, onBack, backLabel, variant = 'back', child
     ...(save ? [{ id: 'save', label: save.label ?? 'Save', disabled: saveDisabled, icon: { ios: 'square.and.arrow.down' as const, android: 'save' as const }, onPress: () => void runSave() }] : []),
     ...menu,
   ]} />;
-  return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator }]}>
+  return <View style={[styles.header, close && styles.closeHeader, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]}>
     <View style={[styles.side, styles.start]}>{close ? children : <>{button}{leading}</>}</View>
     {subtitle ? <View style={styles.titles}>
       <ThemedText accessibilityRole="header" numberOfLines={1} style={[styles.title, styles.stacked]}>{title}</ThemedText>

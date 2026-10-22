@@ -172,7 +172,8 @@ export default function FilePreviewScreen() {
     { id: 'info', label: 'File details', disabled: busy, icon: { ios: 'info.circle', android: 'info-outline' }, onPress: () => void action('info') },
     { id: 'orientation', label: landscape ? 'Portrait view' : 'Landscape view', disabled: busy, icon: { ios: 'rotate.right', android: 'screen-rotation' }, onPress: () => setLandscape(value => !value) },
   ] : undefined;
-  return <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
+  // Bottom inset is owned by the preview tool rails / footers so they sit flush above the system nav bar.
+  return <SafeAreaView edges={['top', 'left', 'right']} style={[styles.screen, { backgroundColor: colors.systemBackground }]}>
     <Stack.Screen options={{ gestureEnabled: !working, ...(!resultUri && file?.kind !== 'pdf' ? { orientation: landscape ? 'landscape' as const : 'portrait' as const } : {}), animation: resultUri || file?.kind === 'pdf' ? 'none' : 'slide_from_right' }} />
     <LayoutAnimationConfig skipEntering>
     {!focused && !surrounding && <FocusChrome edge="top"><ScreenHeader title={resultUri ? resultName ?? 'PDF' : file?.name ?? 'Preview'} onBack={close} trailing={<>{file?.kind === 'image' && !resultUri && <ImageBookmarkButton file={file} />}</>} menu={imageMenu} tool={resultUri || file?.kind === 'pdf' ? 'viewer' : undefined} helpIntercept={handleReaderHelp} /></FocusChrome>}
@@ -196,8 +197,8 @@ export default function FilePreviewScreen() {
 }
 function ImageBookmarkButton({ file }: { file: RecentFile }) {
   const bookmarked = useFileBookmarked(file);
-  return <HeaderIconButton label={bookmarked ? 'Remove bookmark' : 'Bookmark this image'} ios={bookmarked ? 'bookmark.fill' : 'bookmark'} android={bookmarked ? 'mdi:bookmark' : 'mdi:bookmark-outline'} selected={bookmarked}
+  return <HeaderIconButton id="bookmark" label={bookmarked ? 'Remove bookmark' : 'Bookmark this image'} ios={bookmarked ? 'bookmark.fill' : 'bookmark'} android={bookmarked ? 'mdi:bookmark' : 'mdi:bookmark-outline'} selected={bookmarked}
     onPress={() => toggleFileBookmarkWithFeedback(file)} />;
 }
 
-const styles = StyleSheet.create({ screen: { flex: 1 }, row: { flexDirection: 'row' }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }, error: { padding: 16 }, footer: { padding: 12, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 12 }, meta: { flex: 1, ...t.caption }, options: { minHeight: 48, borderRadius: 24, paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ screen: { flex: 1 }, row: { flexDirection: 'row' }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }, error: { padding: 16 }, footer: { paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', gap: 12 }, meta: { flex: 1, ...t.caption }, options: { minHeight: 48, borderRadius: 24, paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' } });

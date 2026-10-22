@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Keyboard, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { AppLoader } from '@/components/app-loader';
-import { router, Stack, usePathname } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { PdfEngine, PdfEngineView, isPdfEngineAvailable } from '../../../modules/pdf-engine';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
@@ -15,9 +16,8 @@ import { getGradients, radius, spacing as s, typography as t } from '@/theme/das
 import { copyForExport, prunePdfCache, removeViewerFile } from './pdf-cache';
 import { importRecentFile, rememberFile } from '../files/recent-files';
 import { markProtectedPdf } from '../files/protected-pdfs';
-import { railSections, ToolRail, type RailTool } from '@/components/tool-rail';
+import { ToolRail, type RailTool } from '@/components/tool-rail';
 import { ToolSurround } from '@/components/tool-surround';
-import { ToolboxSheet } from '@/components/toolbox-sheet';
 import { hydrateSearchHistory, useSearchHistory } from '../search/search-history';
 import { useToolRing } from '@/hooks/use-tool-ring';
 import { PdfPageStrip } from './pdf-page-strip';
@@ -28,7 +28,6 @@ import { PDF_SECTIONS } from '@/constants/pdf-methods';
 import { usePdfScreenActive } from './use-pdf-screen-active';
 import { usePdfToolLayout } from './pdf-tool-layout';
 import { usePublishHeaderShare } from '@/components/header-share';
-import { usePublishHeaderOrientation } from '@/components/header-orientation';
 import { ToolRowButton } from '@/components/tool-action-row';
 import { PdfPreviewToolbar } from './pdf-preview';
 import { usePdfSearch } from './use-pdf-search';
@@ -66,6 +65,7 @@ const SLOW_OPEN_MS = 350;
 /** `onSurroundChange` hides the screen header while the tool ring supplies its own Close button. */
 export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onSurroundChange }: { initialDocument?: Document; initialPage?: number; onFocusChange?: (focused: boolean) => void; onSurroundChange?: (surrounding: boolean) => void } = {}) {
   const colors = usePalette();
+  const insets = useSafeAreaInsets();
   const screenActive = usePdfScreenActive();
   const pathname = usePathname();
   const mode = useAppearance(state => state.mode);
@@ -82,7 +82,6 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const [thumbnails, setThumbnails] = useState(true);
   const [stripReady, setStripReady] = useState(false);
   const [focused, setFocused] = useState(false);
-  const [toolboxOpen, setToolboxOpen] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const recentTools = useSearchHistory(state => state.tools);
   useEffect(hydrateSearchHistory, []);
@@ -115,9 +114,6 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
   const toolLayout = usePdfToolLayout();
-  const [localLandscape, setLocalLandscape] = useState(false);
-  const landscapeRequested = toolLayout?.landscape ?? localLandscape;
-  const setLandscapeRequested = toolLayout?.setLandscape ?? setLocalLandscape;
   const [previousLandscape, setPreviousLandscape] = useState(landscape);
   if (previousLandscape !== landscape) {
     setPreviousLandscape(landscape);
@@ -289,11 +285,9 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
     Keyboard.dismiss();
     if (id === 'search') { if (searchAvailable) { setSearchOpen(true); setViewOptionsOpen(false); setFocused(false); } return; }
     if (id === 'info') { ring.close(); setDetailsOpen(true); return; }
-    if (id === 'tools') { ring.close(); setToolboxOpen(true); return; }
     if (id === 'reading') { ring.close(); setSearchOpen(false); setSearchQuery(''); setViewOptionsOpen(true); return; }
     if (id === 'previous') { goToPage(page - 1); return; }
     if (id === 'next') { goToPage(page + 1); return; }
-    if (id === 'orientation') { setLandscapeRequested(value => !value); return; }
     if (id === 'open') { void chooseFile(); return; }
     if (id === 'save') { void saveDocument(); return; }
     if (id === 'share') { void exportDocument(); return; }
@@ -316,7 +310,8 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
       if (!session) { setOpeningEditor(false); return; }
       if (!mounted.current) { discardPdfToolSession(session); return; }
       // The tool opens on the same page and in the same orientation as the reader.
-      router.push({ pathname: '/pdf-tool', params: landscapeRequested ? { session, landscape: '1' } : { session } });
+      const openLandscape = toolLayout?.landscape ?? landscape;
+      router.push({ pathname: '/pdf-tool', params: openLandscape ? { session, landscape: '1' } : { session } });
     } catch (cause) {
       if (session) discardPdfToolSession(session);
       if (mounted.current) { setOpeningEditor(false); setActionError((cause as Error).message || 'Could not open this tool. Please try again.'); }
@@ -333,30 +328,24 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   const ring = useToolRing(ready && !focused);
   const tools = useMemo<RailTool[]>(() => [
     ...(searchAvailable ? [{ id: 'search', title: 'Search PDF', ios: 'doc.text.magnifyingglass' as const, android: 'search' as const }] : []),
-    { id: 'orientation', title: landscapeRequested ? 'Portrait' : 'Landscape', ios: 'rectangle', android: 'screen-rotation', highlighted: true, accessibilityLabel: `Switch to ${landscapeRequested ? 'portrait' : 'landscape'} view` },
     ...editTools,
     { id: 'fit', title: 'Fit page', ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' },
     { id: 'focus', title: 'Focus', ios: 'arrow.up.left.and.arrow.down.right', android: 'fullscreen' },
     ...fileTools, ...upcomingTools,
-  ], [searchAvailable, landscapeRequested]);
-  const visibleTools = useMemo(() => tools.filter(tool => tool.id !== 'orientation'), [tools]);
-  const toolboxSections = useMemo(() => railSections(visibleTools), [visibleTools]);
+  ], [searchAvailable]);
   const surrounding = ring.active;
   useEffect(() => { onSurroundChange?.(surrounding); }, [surrounding, onSurroundChange]);
   const pageLayout = useFocusLayout(surrounding);
   // Surround mode offers document operations only; file and reader actions stay in the normal view.
   const surroundTools = editTools;
   const showStrip = ready && !surrounding && !busy && !openingEditor && !focused && thumbnails && stripReady && screenActive && !!document;
-  const strip = showStrip && !landscape ? <FocusChrome edge="bottom"><PdfPageStrip enabled={!toolboxOpen && !gridOpen} rightToLeft={rightToLeft} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
+  const strip = showStrip && !landscape ? <FocusChrome edge="bottom"><PdfPageStrip enabled={!gridOpen} rightToLeft={rightToLeft} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
   // Landscape keeps the page full height: odd pages list on the left, even pages on the right (mirrored right to left).
-  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <FocusChrome edge="side"><PdfPageStrip enabled={!toolboxOpen && !gridOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
+  const sideStrip = (parity: 0 | 1) => showStrip && landscape && pageCount > parity ? <FocusChrome edge="side"><PdfPageStrip enabled={!gridOpen} vertical parity={parity} uri={document.uri} count={pageCount} page={page} onSelect={goToPage} /></FocusChrome> : null;
   const controls = ready && !focused && !surrounding;
   // Search takes the page row's place; closing it brings the row back.
   const searching = controls && searchOpen;
   const searchMessage = search.busy ? 'Searching on your device...' : search.error || (!searchQuery.trim() ? 'Search selectable PDF text' : search.matches.length ? `Result ${searchIndex + 1} of ${search.matches.length}${search.truncated ? '+, narrow your search' : ''}` : 'No matches. Scanned pages may need OCR.');
-  const orientation = { landscape: landscapeRequested, onToggle: () => performOption('orientation') };
-  // Standalone, landscape moves the switch next to the header's close button so it never covers the rails.
-  usePublishHeaderOrientation({ active: controls && landscape && !toolLayout, landscape: landscapeRequested, disabled: busy || loading, onToggle: orientation.onToggle });
   const bookmarkedPages = usePageBookmarks(document?.name);
   const pageBookmarked = bookmarkedPages.includes(page);
   function toggleBookmark() {
@@ -364,10 +353,9 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
     const on = togglePageBookmark(document, page);
     toast(on ? `Page ${page + 1} bookmarked · see All pages` : `Bookmark on page ${page + 1} removed`);
   }
-  // The header's More menu holds the tools first, then file actions, then reading choices. Inside a tool screen,
-  // that screen's header already offers share and save.
+  // The header's More menu holds file actions and reading choices. Inside a tool screen,
+  // that screen's header already offers share and save. Tools open from the bottom rail surround.
   usePublishHeaderActions(controls && !!document, [
-    { id: 'tools', label: 'All tools', ios: 'wrench.and.screwdriver', android: 'mdi:toolbox-outline', selected: toolboxOpen, disabled: busy || loading, onPress: () => performOption('tools') },
     ...(toolLayout ? [] : [
       { id: 'share', label: 'Share PDF', ios: 'square.and.arrow.up' as const, android: 'mdi:share-variant-outline' as const, disabled: busy || loading, onPress: () => performOption('share') },
       { id: 'save', label: 'Save a copy to device', ios: 'square.and.arrow.down' as const, android: 'mdi:content-save-outline' as const, disabled: busy || loading, onPress: () => performOption('save') },
@@ -386,8 +374,8 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
     return () => { release(); back.remove(); };
   }, [readingOpen]);
   // Tapping the page toggles focus mode whenever no panel or tool is using the page.
-  const canToggleFocus = ready && !locked && !surrounding && !searchOpen && !toolboxOpen && !gridOpen && !viewOptionsOpen && !busy && !openingEditor;
-  const pageBar = controls && <FocusChrome edge={landscape ? 'side' : 'top'}><PdfPreviewToolbar compact step={spread ? 2 : 1} rightToLeft={rightToLeft} page={page + 1} count={pageCount} disabled={busy || loading} onPageChange={target => goToPage(target - 1)} orientation={toolLayout ? undefined : orientation} rotate={!landscape || !!toolLayout}
+  const canToggleFocus = ready && !locked && !surrounding && !searchOpen && !gridOpen && !viewOptionsOpen && !busy && !openingEditor;
+  const pageBar = controls && <FocusChrome edge={landscape ? 'side' : 'top'}><PdfPreviewToolbar compact step={spread ? 2 : 1} rightToLeft={rightToLeft} page={page + 1} count={pageCount} disabled={busy || loading} onPageChange={target => goToPage(target - 1)} rotate={false}
     leading={<>
       <ToolRowButton compact label="Fit page" icon={{ ios: 'arrow.down.right.and.arrow.up.left', android: 'fit-screen' }} disabled={busy || loading} onPress={() => performOption('fit')} />
       <ToolRowButton compact label="All pages in a grid" icon={{ ios: 'square.grid.3x3', android: 'grid-view' }} expanded={gridOpen} disabled={busy || loading} onPress={() => { Keyboard.dismiss(); ring.close(); setGridOpen(true); }} />
@@ -397,7 +385,6 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   </PdfPreviewToolbar></FocusChrome>;
   return (
     <Animated.View layout={pageLayout} style={[styles.screen, surrounding && aboveChrome]}>
-      {!toolLayout && <Stack.Screen options={{ orientation: landscapeRequested ? 'landscape' : 'portrait' }} />}
       {!isPdfEngineAvailable ? (
         <View style={styles.empty}>
           <UniversalIcon ios="doc.richtext" android="picture-as-pdf" size={40} color={colors.systemBlue} />
@@ -421,73 +408,75 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
           </View>}
           {readingOpen && <ReadingOptionsPanel landscape={landscape} thumbnails={{ visible: thumbnails, onChange: setThumbnails }} onClose={() => setViewOptionsOpen(false)} />}
           {!landscape && !searching && !readingOpen && pageBar}
-          <Animated.View layout={pageLayout} style={[styles.body2, surrounding && aboveChrome]}>
-          <View style={[styles.body2, landscape && styles.row]}>
-          {landscape && !searching && !readingOpen && pageBar}
-          {sideStrip(rightToLeft ? 1 : 0)}
-          <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
-          <View style={[styles.canvas, landscape && !surrounding && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
-            {document && !error && readerMounted && <PdfEngineView
-              key={document.uri}
-              uri={document.uri}
-              page={page}
-              pageRevision={pageRequest.revision}
-              vertical={!landscape && (surrounding || vertical)}
-              {...(layoutAvailable ? { twoPage: spread, rightToLeft } : {})}
-              {...(focusAvailable ? { focusCurrent: false } : {})}
-              zoom={zoomRequest.value}
-              zoomRevision={zoomRequest.revision}
-              dark={mode === 'dark'}
-              {...(searchAvailable ? { searchHighlights: searchOpen && searchMatch ? JSON.stringify({ ...searchMatch, result: searchIndex, query: searchQuery.trim() }) : '' } : {})}
-              style={styles.nativeView}
-              onLoad={({ nativeEvent }) => { setPageCount(nativeEvent.pageCount); setLoading(false); }}
-              onPageChange={({ nativeEvent }) => { setPage(nativeEvent.page); setLoading(false); }}
-              onZoomChange={() => {}}
-              onTap={() => { if (readingOpen) setViewOptionsOpen(false); else if (canToggleFocus) setFocused(value => !value); }}
-              password={password}
-              onError={({ nativeEvent }) => {
-                setLoading(false);
-                if (nativeEvent.code === 'PDF_PASSWORD_REQUIRED' || nativeEvent.code === 'PDF_PASSWORD_INCORRECT') {
-                  if (document?.uri) markProtectedPdf(document.uri);
-                  setLocked({ message: nativeEvent.message, incorrect: nativeEvent.code === 'PDF_PASSWORD_INCORRECT' });
-                } else setError(nativeEvent.message);
-              }}
-            />}
-            {((busy && (!openingEditor || openingSlow)) || (loading && !error && screenActive)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
-            {locked && document && !error && <View style={[styles.locked, { backgroundColor: colors.systemBackground }]}>
-              <View style={[styles.lockCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}>
-                <UniversalIcon ios="lock.doc" android="lock" size={36} color={colors.systemBlue} />
-                <ThemedText style={styles.heading}>Password protected</ThemedText>
-                <ThemedText numberOfLines={1} style={[styles.body, { color: colors.secondaryLabel }]}>{document.name}</ThemedText>
-                <View style={styles.passwordRow}>
-                  <TextInput accessibilityLabel="PDF password" autoFocus secureTextEntry={!showPassword} autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="password" importantForAutofill="no"
-                    value={passwordDraft} onChangeText={value => { setPasswordDraft(value); if (locked.incorrect) setLocked({ ...locked, incorrect: false }); }} maxLength={128} returnKeyType="go" onSubmitEditing={unlock}
-                    placeholder="Enter password" placeholderTextColor={colors.secondaryLabel} style={[styles.passwordInput, { color: colors.label, backgroundColor: colors.accentSurface, borderColor: locked.incorrect ? colors.destructive : 'transparent', paddingRight: 48 }]} />
-                  <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={() => setShowPassword(value => !value)} style={styles.passwordEye} hitSlop={8}>
-                    <UniversalIcon ios={showPassword ? 'eye.slash' : 'eye'} android={showPassword ? 'visibility-off' : 'visibility'} size={20} color={colors.secondaryLabel} />
-                  </Pressable>
+          {/* Preview column grows; recent tools stay a sibling so short pages cannot lift the toolbar. */}
+          <Animated.View layout={pageLayout} style={[styles.preview, surrounding && aboveChrome, landscape && styles.row]}>
+            {landscape && !searching && !readingOpen && pageBar}
+            {sideStrip(rightToLeft ? 1 : 0)}
+            <View style={styles.previewMain}>
+              <ToolSurround active={surrounding && !ring.closing} naming={ring.naming} tools={surroundTools} disabled={busy || loading} onAction={performOption} onClose={ring.close} onHidden={ring.finishClose}>
+                <View style={[styles.canvas, landscape && !surrounding && styles.landscapeCanvas, { backgroundColor: colors.systemBackground }]}>
+                  {document && !error && readerMounted && <PdfEngineView
+                    key={document.uri}
+                    uri={document.uri}
+                    page={page}
+                    pageRevision={pageRequest.revision}
+                    vertical={!landscape && (surrounding || vertical)}
+                    {...(layoutAvailable ? { twoPage: spread, rightToLeft } : {})}
+                    {...(focusAvailable ? { focusCurrent: false } : {})}
+                    zoom={zoomRequest.value}
+                    zoomRevision={zoomRequest.revision}
+                    dark={mode === 'dark'}
+                    {...(searchAvailable ? { searchHighlights: searchOpen && searchMatch ? JSON.stringify({ ...searchMatch, result: searchIndex, query: searchQuery.trim() }) : '' } : {})}
+                    style={styles.nativeView}
+                    onLoad={({ nativeEvent }) => { setPageCount(nativeEvent.pageCount); setLoading(false); }}
+                    onPageChange={({ nativeEvent }) => { setPage(nativeEvent.page); setLoading(false); }}
+                    onZoomChange={() => {}}
+                    onTap={() => { if (readingOpen) setViewOptionsOpen(false); else if (canToggleFocus) setFocused(value => !value); }}
+                    password={password}
+                    onError={({ nativeEvent }) => {
+                      setLoading(false);
+                      if (nativeEvent.code === 'PDF_PASSWORD_REQUIRED' || nativeEvent.code === 'PDF_PASSWORD_INCORRECT') {
+                        if (document?.uri) markProtectedPdf(document.uri);
+                        setLocked({ message: nativeEvent.message, incorrect: nativeEvent.code === 'PDF_PASSWORD_INCORRECT' });
+                      } else setError(nativeEvent.message);
+                    }}
+                  />}
+                  {((busy && (!openingEditor || openingSlow)) || (loading && !error && screenActive)) && <View pointerEvents="none" style={[styles.loading, { backgroundColor: loading || !document || error ? colors.systemBackground : 'transparent' }]}><View style={[styles.loadingCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}><AppLoader size="large" /><ThemedText accessibilityLiveRegion="polite" style={styles.rowTitle}>{busy ? busyLabel : 'Opening PDF...'}</ThemedText><ThemedText numberOfLines={2} style={[styles.body, { color: colors.secondaryLabel }]}>{document?.name ?? 'Choose a document to continue'}</ThemedText></View></View>}
+                  {locked && document && !error && <View style={[styles.locked, { backgroundColor: colors.systemBackground }]}>
+                    <View style={[styles.lockCard, { backgroundColor: colors.secondarySystemBackground, borderColor: colors.separator }]}>
+                      <UniversalIcon ios="lock.doc" android="lock" size={36} color={colors.systemBlue} />
+                      <ThemedText style={styles.heading}>Password protected</ThemedText>
+                      <ThemedText numberOfLines={1} style={[styles.body, { color: colors.secondaryLabel }]}>{document.name}</ThemedText>
+                      <View style={styles.passwordRow}>
+                        <TextInput accessibilityLabel="PDF password" autoFocus secureTextEntry={!showPassword} autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="password" importantForAutofill="no"
+                          value={passwordDraft} onChangeText={value => { setPasswordDraft(value); if (locked.incorrect) setLocked({ ...locked, incorrect: false }); }} maxLength={128} returnKeyType="go" onSubmitEditing={unlock}
+                          placeholder="Enter password" placeholderTextColor={colors.secondaryLabel} style={[styles.passwordInput, { color: colors.label, backgroundColor: colors.accentSurface, borderColor: locked.incorrect ? colors.destructive : 'transparent', paddingRight: 48 }]} />
+                        <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={() => setShowPassword(value => !value)} style={styles.passwordEye} hitSlop={8}>
+                          <UniversalIcon ios={showPassword ? 'eye.slash' : 'eye'} android={showPassword ? 'visibility-off' : 'visibility'} size={20} color={colors.secondaryLabel} />
+                        </Pressable>
+                      </View>
+                      <ThemedText accessibilityLiveRegion="polite" accessibilityRole={locked.incorrect ? 'alert' : undefined} style={[styles.body, { color: locked.incorrect ? colors.destructive : colors.secondaryLabel }]}>{locked.incorrect ? 'That password is not correct. Try again.' : 'Enter the password to read this PDF. It is used only on this device and is not saved.'}</ThemedText>
+                      <ToolButton title="Open PDF" disabled={!passwordDraft} onPress={unlock} />
+                    </View>
+                  </View>}
+                  {(!document || error) && !busy && <View style={styles.empty}>
+                    <UniversalIcon ios={error ? 'exclamationmark.triangle' : 'doc.richtext'} android={error ? 'error-outline' : 'picture-as-pdf'} size={40} color={colors.systemBlue} />
+                    <ThemedText style={styles.heading}>{error ? 'Unable to display PDF' : 'Your documents, on your device'}</ThemedText>
+                    <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{error ?? 'Choose a PDF, swipe up to read and pinch to zoom. Editing and reading tools appear below.'}</ThemedText>
+                  </View>}
                 </View>
-                <ThemedText accessibilityLiveRegion="polite" accessibilityRole={locked.incorrect ? 'alert' : undefined} style={[styles.body, { color: locked.incorrect ? colors.destructive : colors.secondaryLabel }]}>{locked.incorrect ? 'That password is not correct. Try again.' : 'Enter the password to read this PDF. It is used only on this device and is not saved.'}</ThemedText>
-                <ToolButton title="Open PDF" disabled={!passwordDraft} onPress={unlock} />
-              </View>
-            </View>}
-            {(!document || error) && !busy && <View style={styles.empty}>
-              <UniversalIcon ios={error ? 'exclamationmark.triangle' : 'doc.richtext'} android={error ? 'error-outline' : 'picture-as-pdf'} size={40} color={colors.systemBlue} />
-              <ThemedText style={styles.heading}>{error ? 'Unable to display PDF' : 'Your documents, on your device'}</ThemedText>
-              <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{error ?? 'Choose a PDF, swipe up to read and pinch to zoom. Editing and reading tools appear below.'}</ThemedText>
-            </View>}
-          </View>
-          </ToolSurround>
-          {strip}
-          {sideStrip(rightToLeft ? 0 : 1)}
-          {ready && !focused && !surrounding && <FocusChrome edge={landscape ? 'side' : 'bottom'}><ToolRail tools={visibleTools} quickIds={quickIds} disabled={busy || loading} landscape={landscape} onAction={performOption}
-            toolsButton={{ label: 'Tools', accessibilityLabel: 'Show all tools around the page', onPress: () => performOption('surround') }} /></FocusChrome>}
-          {ready && document && <PdfPageGrid visible={gridOpen && !surrounding && screenActive} uri={document.uri} name={document.name} count={pageCount} page={page} rightToLeft={rightToLeft} bookmarks={bookmarkedPages} onSelect={goToPage} onClose={() => setGridOpen(false)} />}
-          {ready && document && <PdfDetailsSheet visible={detailsOpen && !surrounding && screenActive} uri={document.uri} name={document.name} pageCount={pageCount} password={password} onClose={() => setDetailsOpen(false)} />}
-          {ready && <ToolboxSheet visible={toolboxOpen && !surrounding && screenActive} title="All tools" subtitle={document?.name ?? 'PDF'} sections={toolboxSections} footer={<View />} onClose={() => setToolboxOpen(false)} onAction={performOption} />}
-          </View>
+              </ToolSurround>
+              {strip}
+            </View>
+            {sideStrip(rightToLeft ? 0 : 1)}
+            {landscape && ready && !focused && !surrounding && <FocusChrome edge="side"><ToolRail tools={tools} quickIds={quickIds} disabled={busy || loading} landscape onAction={performOption}
+              toolsButton={{ label: 'Tools', accessibilityLabel: 'Show all tools around the page', onPress: () => performOption('surround') }} /></FocusChrome>}
+            {ready && document && <PdfPageGrid visible={gridOpen && !surrounding && screenActive} uri={document.uri} name={document.name} count={pageCount} page={page} rightToLeft={rightToLeft} bookmarks={bookmarkedPages} onSelect={goToPage} onClose={() => setGridOpen(false)} />}
+            {ready && document && <PdfDetailsSheet visible={detailsOpen && !surrounding && screenActive} uri={document.uri} name={document.name} pageCount={pageCount} password={password} onClose={() => setDetailsOpen(false)} />}
           </Animated.View>
-          {focused && <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)} style={styles.restore}><Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" accessibilityHint="Or tap the page" onPress={() => setFocused(false)} style={[styles.restoreButton, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} /></Pressable></Animated.View>}
+          {!landscape && ready && !focused && !surrounding && <FocusChrome edge="bottom"><ToolRail tools={tools} quickIds={quickIds} disabled={busy || loading} landscape={false} onAction={performOption}
+            toolsButton={{ label: 'Tools', accessibilityLabel: 'Show all tools around the page', onPress: () => performOption('surround') }} /></FocusChrome>}
+          {focused && <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)} style={[styles.restore, { bottom: 16 + insets.bottom }]}><Pressable accessibilityRole="button" accessibilityLabel="Exit focus view and show controls" accessibilityHint="Or tap the page" onPress={() => setFocused(false)} style={[styles.restoreButton, { backgroundColor: colors.accentSurface }]}><UniversalIcon ios="arrow.down.right.and.arrow.up.left" android="fullscreen-exit" size={22} color={colors.systemBlue} /></Pressable></Animated.View>}
           {(!document || error) && <Pressable accessibilityRole="button" disabled={busy} onPress={chooseFile} style={[styles.openButton, getGradients(colors).module]}><UniversalIcon ios="folder" android="folder-open" size={22} color={colors.moduleText} /><ThemedText style={{ color: colors.moduleText }}>Choose PDF</ThemedText></Pressable>}
         </>
       )}
@@ -495,18 +484,20 @@ export function PdfViewer({ initialDocument, initialPage = 0, onFocusChange, onS
   );
 }
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
+  screen: { flex: 1, minHeight: 0 },
+  preview: { flex: 1, minHeight: 0 },
+  previewMain: { flex: 1, minHeight: 0, minWidth: 0 },
   searchPanel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8, paddingVertical: 2 },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   searchCount: { minWidth: 28, fontSize: 13, textAlign: 'center', fontVariant: ['tabular-nums'] },
   searchInput: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, fontSize: 15 },
   searchStatus: { fontSize: 12, paddingHorizontal: 28, paddingBottom: 4 },
-  restore: { position: 'absolute', bottom: 16, right: 16 },
+  restore: { position: 'absolute', right: 16 },
   restoreButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', opacity: 0.9 },
   iconButton: { minWidth: 44, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   message: { ...t.caption, marginHorizontal: s.lg, padding: s.md, borderRadius: radius.sm },
-  canvas: { flex: 1, minHeight: 120 },
-  nativeView: { flex: 1 },
+  canvas: { flex: 1, minHeight: 0 },
+  nativeView: { flex: 1, minHeight: 0 },
   landscapeCanvas: { padding: 8 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: s.lg, padding: s.xxl },
   locked: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', padding: s.lg, paddingTop: s.xxl },
@@ -517,7 +508,6 @@ const styles = StyleSheet.create({
   heading: { ...t.heading, textAlign: 'center' },
   body: { ...t.body, textAlign: 'center' },
   loading: { ...StyleSheet.absoluteFill, justifyContent: 'center', alignItems: 'center' },
-  body2: { flex: 1 },
   row: { flexDirection: 'row' },
   loadingCard: { maxWidth: 300, padding: 24, margin: 20, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', gap: 12 },
   rowTitle: { fontSize: 16, fontWeight: '600', textAlign: 'center' },

@@ -161,7 +161,8 @@ function PdfToolContent() {
   const tool = session?.tool;
   const canSwitch = !!session && tool !== 'viewer';
   const Header = tool === 'viewer' ? ReaderScreenHeader : ScreenHeader;
-  return <PdfToolLayoutContext.Provider value={layout}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'bottom', 'left', 'right']}>
+  // Bottom inset is owned by ToolRail / PdfPreviewFooter so docks sit just above the system nav bar.
+  return <PdfToolLayoutContext.Provider value={layout}><SafeAreaView style={[styles.screen, { backgroundColor: colors.systemBackground }]} edges={['top', 'left', 'right']}>
     <Stack.Screen options={{ gestureEnabled: !leaveUnsaved && !switching, orientation: landscape ? 'landscape' : 'portrait' }} />
     {!focused && !surrounding && !typing && <Header title={session?.title ?? 'PDF'} subtitle={tool === 'viewer' ? undefined : session?.origin?.name ?? session?.files[0]?.name} onBack={close} share={share} save={saveAction} leading={switching ? <AppLoader accessibilityLabel="Opening the next tool" /> : undefined}
       tool={session?.tool} helpIntercept={session?.tool === 'viewer' ? handleReaderHelp : undefined}

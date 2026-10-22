@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Stack } from 'expo-router';
-import { Keyboard, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Keyboard, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HelpTextInput as TextInput } from '@/components/help-text-input';
 import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from '@/components/themed-text';
@@ -10,6 +11,7 @@ import { HeaderHistorySlot } from '@/components/header-history';
 import { FitSlotButton, usePublishFit } from '@/components/fit-slot';
 import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { usePalette } from '@/theme/colors';
+import { toolChrome } from '@/theme/dashboard';
 import NativeEditCanvas from '../../../modules/pdf-engine/src/PdfEditCanvasView';
 import { PdfEditCanvas } from './pdf-edit-canvas';
 import { usePdfToolLayout } from './pdf-tool-layout';
@@ -93,8 +95,10 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
       <UniversalIcon ios={sideways ? forward ? 'chevron.down' : 'chevron.up' : pointsLeft ? 'chevron.left' : 'chevron.right'} android={sideways ? forward ? 'keyboard-arrow-down' : 'keyboard-arrow-up' : pointsLeft ? 'chevron-left' : 'chevron-right'} size={22} color={colors.systemBlue} />
     </Pressable>;
   };
+  // Only lock the route orientation when this toolbar owns a landscape switch.
+  const ownsOrientation = rotate && !toolLayout;
   return <>
-    {!toolLayout && !orientation && <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />}
+    {ownsOrientation && !orientation && <Stack.Screen options={{ orientation: landscape ? 'landscape' : 'portrait' }} />}
     <ToolActionRow vertical={sideways} compact={tight}
       left={<><FitSlotButton />{history && <HeaderHistorySlot />}{leading}</>}
       center={<>
@@ -103,7 +107,7 @@ export function PdfPreviewToolbar({ page, count, disabled, onPageChange, childre
         <ThemedText numberOfLines={1} style={[styles.pageCount, tight && styles.tightCount]}>{tight ? `/ ${count}` : `of ${count}`}</ThemedText>
         {arrow(!flipped)}
       </>}
-      right={<>{children}{rotate && !toolLayout && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
+      right={<>{children}{ownsOrientation && <ToolRowButton compact={tight} label={landscape ? 'Switch to portrait' : 'Switch to landscape'} selected={landscape} icon={{ ios: 'rotate.right', android: 'screen-rotation' }} onPress={toggleLandscape} />}</>}
       below={below} />
   </>;
 }
@@ -166,9 +170,10 @@ export function PdfPagePreview({ image, active = true, preserveViewport = false,
   </PdfPreviewStage>;
 }
 
-export function PdfPreviewFooter({ children }: { children: ReactNode }) {
+export function PdfPreviewFooter({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   const colors = usePalette();
-  return <View style={[styles.footer, { backgroundColor: colors.systemBackground, borderColor: colors.separator }]}>{children}</View>;
+  const insets = useSafeAreaInsets();
+  return <View style={[styles.footer, { paddingBottom: toolChrome.paddingVertical + insets.bottom, backgroundColor: colors.systemBackground, borderColor: colors.separator }, style]}>{children}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -183,5 +188,10 @@ const styles = StyleSheet.create({
   fit: { position: 'absolute', right: 10, top: 10, width: 44, height: 44, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   caption: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6 },
   hint: { fontSize: 12, lineHeight: 16 },
-  footer: { padding: 8, gap: 8, borderTopWidth: StyleSheet.hairlineWidth },
+  footer: {
+    paddingHorizontal: toolChrome.paddingHorizontal,
+    paddingVertical: toolChrome.paddingVertical,
+    gap: toolChrome.gap,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
 });

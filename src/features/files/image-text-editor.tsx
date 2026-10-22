@@ -18,6 +18,7 @@ import { DEFAULT_TEXT_STYLE, fontName, styleFromFont, TextStyleControls, type Te
 import { fontCatalog, fontFile, loadEditFonts, useEditFonts, withFontFiles } from '@/constants/edit-fonts';
 import { OptionCard, OptionSheet } from '@/components/option-sheet';
 import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
+import { PdfPreviewFooter } from '../pdf/pdf-preview';
 import { toast } from '@/components/toast';
 import { usePalette } from '@/theme/colors';
 import { getGradients, radius, spacing as s } from '@/theme/dashboard';
@@ -336,7 +337,11 @@ export function ImageTextEditorScreen({ id, mode }: { id: string; mode: 'add' | 
           <ThemedText style={[styles.grow, styles.note, { color: colors.secondaryLabel }]}>{edits.length ? `${edits.length} change${edits.length === 1 ? '' : 's'}` : addOnly ? 'No text added yet' : `${analysis.lines.length} text line${analysis.lines.length === 1 ? '' : 's'} found`}</ThemedText>
       </View>}
     </View>}
-    {!boxOpen && <View style={styles.dock}><EditorActionBar><ToolButton title="Apply changes" disabled={!edits.length || busy || !recovery.ready} onPress={() => { void applyAndReturn(); }} /></EditorActionBar></View>}
+    {!boxOpen && <PdfPreviewFooter>
+      <EditorActionBar>
+        <ToolButton title="Apply changes" disabled={!edits.length || busy || !recovery.ready} onPress={() => { void applyAndReturn(); }} />
+      </EditorActionBar>
+    </PdfPreviewFooter>}
   </KeyboardAvoidingView>;
 }
 

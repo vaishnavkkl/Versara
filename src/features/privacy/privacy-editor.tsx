@@ -445,11 +445,11 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
             returnKeyType="done" onSubmitEditing={coverText} placeholder="Text or number to redact" placeholderTextColor={colors.secondaryLabel}
             style={[styles.findInput, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
         </View>
-        <View style={styles.row}>
-          <EditorOption compact label="All pages" selected={findScope === 'all'} disabled={busy} onPress={() => setFindScope('all')} />
-          <EditorOption compact label="This page" selected={findScope === 'page'} disabled={busy} onPress={() => setFindScope('page')} />
-          <View style={styles.grow}><ToolButton title="Cover matches" icon={{ ios: 'eye.slash', android: 'visibility-off' }} disabled={busy || !findQuery.trim()} onPress={coverText} /></View>
-        </View>
+        <EditorActionBar>
+          <EditorOption compact label="All pages" icon={{ ios: 'doc.on.doc', android: 'library-books' }} selected={findScope === 'all'} disabled={busy} onPress={() => setFindScope('all')} />
+          <EditorOption compact label="This page" icon={{ ios: 'doc', android: 'description' }} selected={findScope === 'page'} disabled={busy} onPress={() => setFindScope('page')} />
+          <ToolButton title="Cover matches" icon={{ ios: 'eye.slash', android: 'visibility-off' }} disabled={busy || !findQuery.trim()} onPress={coverText} />
+        </EditorActionBar>
         <ThemedText style={[styles.note, secondaryText]}>Matches every place this text appears, ignoring upper and lower case. Works on the text inside the PDF; scanned pages need Scan page or manual covers.</ThemedText>
       </View>}
       {!isPdf && !image && mode !== 'metadata' && <ToolActionRow left={<><FitSlotButton />{historyButtons}</>} />}
@@ -483,10 +483,10 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
             <ThemedText style={styles.label}>{scan ? totalSelected + ' of ' + scan.findings.length + ' suggestions selected' : 'Scan for private text'}</ThemedText>
             <ThemedText style={[styles.note, secondaryText]}>English text suggestions can miss details. Review names, faces and QR codes manually. Match scores are estimates, not a guarantee.</ThemedText>
             {scan?.truncated && <ThemedText style={styles.note}>Scan limit reached. Review the remaining image manually.</ThemedText>}
-            {!!scan?.findings.length && <View style={styles.row}>
-              <EditorOption label="Select all" disabled={busy} onPress={selectAllFindings} />
-              <EditorOption label="Clear selection" disabled={busy || !totalSelected} onPress={() => changeMarks(current => current.filter(mark => !scan.findings.some(finding => mark.id === 'scan-' + finding.id)))} />
-            </View>}
+            {!!scan?.findings.length && <EditorActionBar>
+              <EditorOption compact label="Select all" icon={{ ios: 'checkmark.circle', android: 'select-all' }} disabled={busy} onPress={selectAllFindings} />
+              <EditorOption compact label="Clear" accessibilityLabel="Clear selection" icon={{ ios: 'xmark.circle', android: 'deselect' }} disabled={busy || !totalSelected} onPress={() => changeMarks(current => current.filter(mark => !scan.findings.some(finding => mark.id === 'scan-' + finding.id)))} />
+            </EditorActionBar>}
           </View>}
           ListEmptyComponent={<ThemedText style={secondaryText}>{phase === 'scanning' ? 'Scanning on your device…' : scan ? 'No matching text found. Add covers for anything else you want to hide.' : 'Tap Scan to look for possible private text.'}</ThemedText>}
           renderItem={renderFinding} />}
@@ -507,11 +507,11 @@ export function PrivacyEditor({ id, mode }: { id?: string; mode: Mode }) {
           <EditorActionBar>
             {mode !== 'metadata' && <>
               <EditorOption compact label="Cover" selected={!selecting} disabled={busy} icon={{ ios: 'pencil.tip', android: 'draw' }} onPress={() => { setSelecting(false); setSelectedId(undefined); setReviewing(false); }} />
-              <EditorOption compact label="Select & resize" selected={selecting} disabled={busy || !canSelect} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setReviewing(false); }} />
-              {selecting && <EditorOption label="Delete" compact disabled={!selectedId || !marks.some(mark => mark.id === selectedId)} onPress={() => changeMarks(current => current.filter(mark => mark.id !== selectedId))} />}
+              <EditorOption compact label="Select" accessibilityLabel="Select and resize" selected={selecting} disabled={busy || !canSelect} icon={{ ios: 'arrow.up.and.down.and.arrow.left.and.right', android: 'open-with' }} onPress={() => { setSelecting(true); setReviewing(false); }} />
+              {selecting && <EditorOption compact label="Delete" icon={{ ios: 'trash', android: 'delete-outline' }} disabled={!selectedId || !marks.some(mark => mark.id === selectedId)} onPress={() => changeMarks(current => current.filter(mark => mark.id !== selectedId))} />}
             </>}
-            <EditorOption label={mode === 'metadata' ? 'Metadata' : 'Review'} compact icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => { setReviewing(value => !value); setFinding(false); }} />
-            {canFindText && <EditorOption label="Find text" compact icon={{ ios: 'text.magnifyingglass', android: 'mdi:text-search' }} selected={finding} disabled={busy} onPress={() => { setFinding(value => !value); setReviewing(false); }} />}
+            <EditorOption compact label={mode === 'metadata' ? 'Metadata' : 'Review'} icon={{ ios: mode === 'metadata' ? 'info.circle' : 'checklist', android: mode === 'metadata' ? 'info-outline' : 'fact-check' }} selected={reviewing} onPress={() => { setReviewing(value => !value); setFinding(false); }} />
+            {canFindText && <EditorOption compact label="Find text" icon={{ ios: 'text.magnifyingglass', android: 'mdi:text-search' }} selected={finding} disabled={busy} onPress={() => { setFinding(value => !value); setReviewing(false); }} />}
             {mode !== 'metadata' && <ToolButton title={isPdf ? (scan ? 'Rescan page' : 'Scan page') : scan ? 'Scan again' : 'Scan'} secondary icon={{ ios: 'text.viewfinder', android: 'document-scanner' }} onPress={() => launch(perform('scanning', () => scanSource(isPdf ? basePreview : source)))} />}
             <ToolButton title="Preview copy" icon={{ ios: 'eye', android: 'visibility' }} disabled={(mode !== 'metadata' && !PdfMarkupView) || (isPdf && !marks.length)} onPress={preparePreview} />
           </EditorActionBar>

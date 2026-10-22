@@ -4,7 +4,7 @@ import { HelpPressable as Pressable } from '@/components/help-pressable';
 import { ThemedText } from './themed-text';
 import { usePalette } from '@/theme/colors';
 import type { OptionIcon } from '@/theme/editor-icons';
-import { HeaderGlyph } from './app-glyph';
+import { glyphKey, HeaderGlyph } from './app-glyph';
 
 /** True inside a one-line row: its buttons drop captions and use compact widths so everything fits. */
 export const CompactRowContext = createContext(false);
@@ -22,7 +22,7 @@ export function ToolActionRow({ left, center, right, below, style, vertical = fa
       <View style={styles.railGroup}>{right}{below}</View>
     </ScrollView>
   </View>;
-  if (compact) return <View style={[styles.container, styles.compactContainer, { borderColor: colors.separator }, style]}>
+  if (compact) return <View style={[styles.container, styles.compactContainer, { borderColor: colors.separator, backgroundColor: colors.systemBackground }, style]}>
     <CompactRowContext.Provider value>
       <View style={[styles.row, styles.compactRow]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.compactSide} contentContainerStyle={[styles.compactContent, styles.start]}>{left}</ScrollView>
@@ -32,7 +32,7 @@ export function ToolActionRow({ left, center, right, below, style, vertical = fa
     </CompactRowContext.Provider>
     {below && <View style={styles.below}>{below}</View>}
   </View>;
-  return <View style={[styles.container, { borderColor: colors.separator }, style]}>
+  return <View style={[styles.container, { borderColor: colors.separator, backgroundColor: colors.systemBackground }, style]}>
     <View style={styles.row}>
       <View style={[styles.side, styles.start]}>{left}</View>
       {center && <View style={styles.center}>{center}</View>}
@@ -51,7 +51,7 @@ export function ToolRowButton({ label, icon, onPress, selected = false, disabled
   if (inCompactRow) { compact = true; caption = false; }
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled, expanded }} disabled={disabled} onPress={onPress} helpOnLongPress={!caption} hitSlop={compact ? { top: 2, bottom: 2 } : 2}
     style={({ pressed }) => [styles.button, compact && styles.compactButton, caption && styles.captioned, { opacity: disabled ? 0.35 : pressed ? 0.6 : 1 }]}>
-    <HeaderGlyph {...icon} size={compact ? 38 : 40} selected={selected} />
+    <HeaderGlyph id={glyphKey(icon.android)} {...icon} size={compact ? 38 : 40} selected={selected} />
     {caption && <ThemedText numberOfLines={1} style={[styles.caption, { color: colors.systemBlue }]}>{label}</ThemedText>}
   </Pressable>;
 }

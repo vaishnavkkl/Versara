@@ -48,5 +48,24 @@ export const getGradients = (colors: Palette) => ({
   tabSelected: gradient(`linear-gradient(135deg, ${colors.navActiveStart} 0%, ${colors.navActiveEnd} 100%)`),
 });
 
+/** Shared inset for tool footers, rails and docked action bars. */
+export const toolChrome = {
+  paddingHorizontal: spacing.md,
+  paddingVertical: spacing.sm,
+  gap: spacing.sm,
+} as const;
+
 /** Shared geometry for labelled editing actions, including primary Save/Apply. */
-export const editorActions = { minHeight: 64, minWidth: 96, gap: 8, iconSize: 22, fontSize: 13, lineHeight: 18 } as const;
+export const editorActions = {
+  minHeight: 76,
+  minWidth: 56,
+  gap: 8,
+  /** Keep this many dock tools on one row; more split into two rows. */
+  singleRowMax: 6,
+  /** Flat icon size inside filled ToolButtons. */
+  iconSize: 20,
+  /** App-glyph tile for docked EditorOption controls. */
+  glyphSize: 40,
+  fontSize: 11,
+  lineHeight: 14,
+} as const;

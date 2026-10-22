@@ -1,9 +1,8 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { StyleSheet, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
-import { spacing, typography } from '@/theme/dashboard';
-
-const GAP = 8;
+import { editorActions, spacing, typography } from '@/theme/dashboard';
+const GAP = editorActions.gap;
 type Measurement = { key: string; widths: Record<string, number> };
 type ToolbarControl = string | number | { label: string; compact?: boolean; minWidth?: number };
 
@@ -58,10 +57,10 @@ export const responsiveToolbarStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   probes: { position: 'absolute', opacity: 0, left: 0, top: 0, alignItems: 'flex-start' },
   probe: { alignSelf: 'flex-start', flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
-  compactProbe: { minWidth: 56, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth, gap: 1 },
-  buttonProbe: { flexDirection: 'row', gap: 7, paddingHorizontal: spacing.md },
-  compactSymbol: { width: 20, height: 20 },
+  compactProbe: { minWidth: 64, paddingHorizontal: 4, gap: 6, alignItems: 'center' },
+  buttonProbe: { flexDirection: 'column', gap: 4, paddingHorizontal: spacing.md, minWidth: 72 },
+  compactSymbol: { width: 40, height: 40, borderRadius: 12 },
   buttonSymbol: { width: 20, height: 20 },
-  compactText: { fontSize: 13, lineHeight: 17 },
-  buttonText: { ...typography.label, textAlign: 'center' },
+  compactText: { fontSize: 11, lineHeight: 14 },
+  buttonText: { ...typography.label, fontSize: 11, lineHeight: 14, textAlign: 'center' },
 });

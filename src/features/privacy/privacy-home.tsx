@@ -19,6 +19,13 @@ export function PrivacyHome() {
   const gridAvailable = width >= 360 && fontScale < 1.4;
   const useGrid = grid && gridAvailable;
   const columns = useGrid ? 2 : 1;
+  const cardLayoutKey = `${width}:${fontScale}:${useGrid}`;
+  const [cardSizes, setCardSizes] = useState<{ key: string; heights: Record<string, number> }>({ key: '', heights: {} });
+  const cardHeight = cardSizes.key === cardLayoutKey ? Math.max(0, ...Object.values(cardSizes.heights)) + 2 * s.md : undefined;
+  const measureCard = (id: string, height: number) => setCardSizes(previous => {
+    const heights = previous.key === cardLayoutKey ? previous.heights : {};
+    return heights[id] === height ? previous : { key: cardLayoutKey, heights: { ...heights, [id]: height } };
+  });
   const navigating = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -59,7 +66,9 @@ export function PrivacyHome() {
           {PRIVACY_TOOLS.filter((_, index) => index % columns === 0).map((first, row) => <View key={first.id} style={styles.row}>
             {PRIVACY_TOOLS.slice(row * columns, row * columns + columns).map(tool => <View key={tool.id} style={styles.cell}><ModuleCard
               colorId={tool.id} title={tool.title} description={tool.subtitle} ios={tool.ios} android={tool.android}
-              tone="privacy" loading={opening === tool.id} disabled={opening !== null && opening !== tool.id} variant={useGrid ? 'compact' : 'list'} onPress={() => { void openTool(tool.id); }} /></View>)}
+              tone="privacy" loading={opening === tool.id} disabled={opening !== null && opening !== tool.id} variant={useGrid ? 'compact' : 'list'}
+              onContentHeight={height => measureCard(tool.id, height)} style={{ minHeight: cardHeight, flex: 1 }}
+              onPress={() => { void openTool(tool.id); }} /></View>)}
             {useGrid && !PRIVACY_TOOLS[row * columns + 1] && <View style={styles.cell} />}
           </View>)}
         </View>
@@ -87,7 +96,7 @@ const styles = StyleSheet.create({
   body: { ...t.body },
   sectionTitle: { ...t.catalogTitle },
   tools: { gap: s.md },
-  row: { flexDirection: 'row', gap: s.sm },
+  row: { flexDirection: 'row', alignItems: 'stretch', gap: s.sm },
   // Equal outer columns keep card padding from widening the incomplete last row.
   cell: { flex: 1, flexBasis: 0, minWidth: 0 },
   guidance: { flexDirection: 'row', alignItems: 'flex-start', gap: s.md },

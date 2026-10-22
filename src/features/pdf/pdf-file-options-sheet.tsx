@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Keyboard, StyleSheet } from 'react-native';
+import { EditorActionBar } from '@/components/editor-action-bar';
 import { HelpSheetTextInput as BottomSheetTextInput } from '@/components/help-text-input';
 import { OptionCard, OptionSheet } from '@/components/option-sheet';
 import { ThemedText } from '@/components/themed-text';
@@ -12,7 +13,7 @@ export function PdfFileOptionsSheet({ visible, onClose, name, onName, disabled, 
   onChoose?: () => void; chooseLabel?: string; description?: string; children?: ReactNode;
 }) {
   const colors = usePalette();
-  return <OptionSheet title="PDF options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={visible} onClose={onClose} keyboardInput>
+  return <OptionSheet title="PDF options" icon={{ ios: 'doc.badge.gearshape', android: 'mdi:file-cog-outline' }} isPresented={visible} onClose={onClose} keyboardInput>
     <OptionCard title="Output" icon={{ ios: 'doc', android: 'description' }}>
       <ThemedText>New PDF name</ThemedText>
       <BottomSheetTextInput accessibilityLabel="New PDF name" value={name} onChangeText={onName} editable={!disabled} maxLength={100} returnKeyType="done" onSubmitEditing={Keyboard.dismiss}
@@ -20,7 +21,9 @@ export function PdfFileOptionsSheet({ visible, onClose, name, onName, disabled, 
     </OptionCard>
     {children}
     {description && <ThemedText style={{ color: colors.secondaryLabel }}>{description}</ThemedText>}
-    {onChoose && <ToolButton title={chooseLabel} secondary disabled={disabled} onPress={() => { Keyboard.dismiss(); onClose(); onChoose(); }} />}
+    {onChoose && <EditorActionBar>
+      <ToolButton title={chooseLabel} secondary disabled={disabled} onPress={() => { Keyboard.dismiss(); onClose(); onChoose(); }} icon={{ ios: 'folder', android: 'folder-open' }} />
+    </EditorActionBar>}
   </OptionSheet>;
 }
 const styles = StyleSheet.create({ input: { minHeight: 48, borderRadius: 12, paddingHorizontal: 14, fontSize: 16 } });

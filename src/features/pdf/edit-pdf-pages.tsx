@@ -105,9 +105,11 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
       const id = newId(); job.current = id;
       const details = await PdfEngine.inspectPdfs(id, [picked[0].uri]);
       if (!mounted.current) return;
-      setSource({ ...picked[0], pageCount: details[0].pageCount });
+      const count = details[0].pageCount;
+      setSource({ ...picked[0], pageCount: count });
       setSelected(new Set()); setRangeText(''); setOptionsOpen(false);
       setName(`${picked[0].name.replace(/\.pdf$/i, '')}${extracting ? ' - selected pages' : ' - edited'}`);
+      if (!extracting && count < 2) toast('This PDF has only one page. Deleting it would leave nothing — keep at least one page.');
       accepted = true;
     } catch (cause) { fail(cause); }
     finally {
@@ -132,6 +134,9 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
   }
   const outputCount = source ? extracting ? selected.size : source.pageCount - selected.size : 0;
   const canSave = available && !busy && selected.size > 0 && outputCount > 0;
+  const extractLabel = extracting
+    ? (selected.size === 0 ? 'Extract pages' : selected.size === 1 ? 'Extract 1 page' : `Extract ${selected.size} pages`)
+    : 'Delete pages';
   usePublishHeaderShare({ active: !!shareTarget, disabled: busy, label: result ? 'Share new PDF' : 'Share original PDF',
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
     save: { disabled: busy || !!result?.location || (!result && !canSave), label: result?.location ? 'PDF saved' : extracting ? 'Save PDF with selected pages' : 'Save PDF without selected pages',
@@ -145,12 +150,15 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     write: outputUri => shareTarget ? copyPdf(shareTarget.uri, outputUri) : Promise.reject(new Error('Choose a PDF first.')),
   });
   async function save() {
-    if (!canSave || locked.current || !source || !PdfEngine) return;
+    if (locked.current || !source || !PdfEngine) return;
+    if (selected.size === 0) { toast('Select a page to get started.'); return; }
+    if (outputCount === 0) { toast('Keep at least one page in the new PDF.'); return; }
+    if (extracting && selected.size === source.pageCount) toast('Every page is selected — saving a full copy of the original.');
     Keyboard.dismiss();
     locked.current = true; setBusy(true); setError(''); setProgress(0); setPhase('Creating your PDF…');
     toast('Creating your PDF…');
     const id = newId(); job.current = id;
-    const filename = `${name.trim().replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 80) || 'Edited PDF'}-${id}.pdf`;
+    const filename = `${name.trim().replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9 _-]+/g, '_').slice(0, 80) || 'Edited PDF'}-${id}.pdf`;
     try {
       const outputs = await PdfEngine.organizePdfs({ jobId: id, operation, uris: [source.uri], outputUris: [new File(savedPdfDirectory(), filename).uri], ranges: [], pages: [...selected].sort((a, b) => a - b) });
       if (mounted.current) { setResult({ ...outputs[0], name: filename }); setLeaving(true); }
@@ -195,33 +203,63 @@ export function EditPdfPages({ operation, initialSelection }: { operation: 'extr
     {busy && <AppLoader />}
   </ScrollView>;
 
+  if (!source) {
+    return <View style={styles.screen}>
+      <View style={styles.empty}>
+        <UniversalIcon ios={extracting ? 'doc.badge.arrow.up' : 'trash'} android={extracting ? 'mdi:file-export-outline' : 'delete-outline'} size={44} color={colors.systemBlue} />
+        <ThemedText style={styles.heading}>{extracting ? 'Extract pages' : 'Delete pages'}</ThemedText>
+        <ThemedText style={[styles.body, styles.emptyBody, { color: colors.secondaryLabel }]}>
+          {extracting
+            ? 'Choose a PDF, tap the pages to keep, then create a new PDF. Your original stays unchanged.'
+            : 'Choose a PDF, tap the pages to remove, then create a new copy. Your original stays unchanged.'}
+        </ThemedText>
+        {!available && <ThemedText accessibilityRole="alert">Install a new development build to use this tool.</ThemedText>}
+        {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
+        {busy
+          ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{phase || 'Opening your PDF…'}</ThemedText></>
+          : <ToolButton title="Choose PDF" disabled={!available} onPress={() => void choose()} />}
+      </View>
+    </View>;
+  }
+
   return <View style={styles.screen}>
     <FlatList onViewableItemsChanged={onViewableItemsChanged} viewabilityConfig={viewabilityConfig} data={pages} numColumns={3} extraData={selected} keyExtractor={page => String(page)} contentContainerStyle={styles.list} columnWrapperStyle={styles.row} keyboardShouldPersistTaps="handled" initialNumToRender={9} maxToRenderPerBatch={3} windowSize={3}
       ListHeaderComponent={<View style={styles.form}>
-        <ThemedText numberOfLines={2} style={styles.label}>{source ? `${source.name} - ${source.pageCount} pages` : 'Choose a PDF to get started.'}</ThemedText>
-        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>{extracting ? 'Select pages to keep.' : 'Select pages to remove.'} Tap the eye to preview a page.</ThemedText>
-        {!available && <ThemedText accessibilityRole="alert">Install a new development build to use this tool.</ThemedText>}
+        <ThemedText numberOfLines={2} style={styles.label}>{source.name} · {source.pageCount} {source.pageCount === 1 ? 'page' : 'pages'}</ThemedText>
+        <ThemedText style={[styles.body, { color: colors.secondaryLabel }]}>
+          {extracting
+            ? 'Tap pages to keep in the new PDF. Your original is unchanged.'
+            : 'Tap pages to remove from the new copy. Your original is unchanged.'}
+          {' '}Tap the eye to preview a page.
+        </ThemedText>
       </View>}
       renderItem={renderPage}
     />
     <PdfFileOptionsSheet visible={optionsOpen} onClose={() => setOptionsOpen(false)} name={name} onName={setName} disabled={busy} onChoose={available ? () => void choose() : undefined}
       description={extracting ? 'Selected pages are saved in a new PDF. Your original is kept.' : 'Selected pages are removed from a new copy. Your original is kept.'}>
-      {source && <>
-        <ThemedText>Page numbers or ranges</ThemedText>
-        <BottomSheetTextInput accessibilityLabel="Page numbers or ranges" placeholder="For example: 1, 3, 5-8" placeholderTextColor={colors.secondaryLabel} value={rangeText} onChangeText={setRangeText} editable={!busy} maxLength={1400} style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
-        {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
-        <ToolButton title="Select these pages" secondary onPress={applyRanges} disabled={busy || !rangeText.trim()} />
-      </>}
+      <ThemedText>Page numbers or ranges</ThemedText>
+      <BottomSheetTextInput accessibilityLabel="Page numbers or ranges" placeholder="For example: 1, 3, 5-8" placeholderTextColor={colors.secondaryLabel} value={rangeText} onChangeText={setRangeText} editable={!busy} maxLength={1400} style={[styles.input, { color: colors.label, backgroundColor: colors.fieldSurface }]} />
+      {!!error && <ThemedText accessibilityRole="alert">{error}</ThemedText>}
+      <ToolButton title="Select these pages" secondary onPress={applyRanges} disabled={busy || !rangeText.trim()} />
     </PdfFileOptionsSheet>
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
       {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving your PDF...' : `${phase}${progress === null ? '' : ` ${Math.round(progress * 100)}%`}`}</ThemedText>{progress !== null && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}</> : <>
-        {source && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{selected.size === 0 ? 'Select a page to get started.' : outputCount === 0 ? 'Keep at least one page.' : `${selected.size} ${extracting ? 'selected' : 'to remove'} - ${outputCount} pages in the new PDF`}</ThemedText>}
-        <EditorActionBar >
-          <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
-          {source ? <EditorOption compact label={selected.size === source.pageCount ? 'Clear' : 'Select all'} icon={{ ios: 'checkmark.circle', android: 'select-all' }} onPress={() => setSelected(selected.size === source.pageCount ? new Set() : new Set(pages))} />
-            : <EditorOption compact label="Choose PDF" disabled={!available} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} onPress={() => void choose()} />}
-          <ToolButton title={extracting ? 'Extract pages' : 'Delete pages'} disabled={!canSave} onPress={save} />
+        <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{selected.size === 0 ? 'Select a page to get started.'
+          : outputCount === 0 ? 'Keep at least one page in the new PDF.'
+          : extracting && selected.size === source.pageCount ? `Every page is selected — the new PDF will match the original (${outputCount} pages).`
+          : `${selected.size} ${extracting ? 'selected' : 'to remove'} · ${outputCount} ${outputCount === 1 ? 'page' : 'pages'} in the new PDF`}</ThemedText>
+        <EditorActionBar>
+          <EditorOption compact label="Page numbers" accessibilityLabel="Page numbers, ranges, and output name" icon={{ ios: 'list.number', android: 'format-list-numbered' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
+          <EditorOption compact label={selected.size === source.pageCount ? 'Clear' : 'Select all'} icon={{ ios: selected.size === source.pageCount ? 'xmark.circle' : 'checkmark.circle', android: selected.size === source.pageCount ? 'deselect' : 'select-all' }} onPress={() => setSelected(selected.size === source.pageCount ? new Set() : new Set(pages))} />
+          <ToolButton
+            title={extractLabel}
+            icon={extracting
+              ? { ios: 'doc.badge.arrow.up', android: 'mdi:file-export-outline' }
+              : { ios: 'trash', android: 'delete-outline' }}
+            disabled={!canSave}
+            onPress={save}
+          />
         </EditorActionBar>
       </>}
     </PdfPreviewFooter>
@@ -234,24 +272,33 @@ const SelectablePage = memo(function SelectablePage({ item, uri, active, selecte
 }) {
   const colors = usePalette();
   return <View style={[styles.page, { backgroundColor: colors.accentSurface, borderColor: selected ? colors.systemBlue : colors.separator }]}>
-        <Pressable accessibilityRole="checkbox" accessibilityLabel={`Page ${item}, ${extracting ? 'keep in new PDF' : 'remove from new PDF'}`} accessibilityState={{ checked: selected, disabled: busy }} disabled={busy} onPress={() => onToggle(item)} style={styles.select}>
-          <View style={styles.pageThumb}><FileThumbnail uri={uri} kind="pdf" page={item - 1} active={active} /></View>
-          <View style={styles.pageMeta}>
-            <UniversalIcon ios={selected ? 'checkmark.circle.fill' : 'circle'} android={selected ? 'check-circle' : 'radio-button-unchecked'} size={18} color={colors.systemBlue} />
-            <ThemedText style={styles.caption}>Page {item}</ThemedText>
-          </View>
+    <Pressable accessibilityRole="checkbox" accessibilityLabel={`Page ${item}, ${extracting ? 'keep in new PDF' : 'remove from new PDF'}`} accessibilityState={{ checked: selected, disabled: busy }} disabled={busy} onPress={() => onToggle(item)} style={styles.select}>
+      <View style={styles.pageThumb}>
+        <FileThumbnail uri={uri} kind="pdf" page={item - 1} active={active} />
+        {selected && <View style={[styles.checkBadge, { backgroundColor: colors.systemBlue }]}>
+          <UniversalIcon ios="checkmark" android="check" size={12} color="#FFFFFF" />
+        </View>}
+        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => onPreview(item)} hitSlop={4} style={[styles.eyeCorner, { backgroundColor: colors.systemBackground }]}>
+          <UniversalIcon ios="eye" android="visibility" size={16} color={colors.systemBlue} />
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Preview page ${item}`} disabled={busy} onPress={() => onPreview(item)} style={styles.eye}><UniversalIcon ios="eye" android="visibility" size={20} color={colors.systemBlue} /></Pressable>
-      </View>;
+      </View>
+      <View style={styles.pageMeta}>
+        <ThemedText style={styles.caption}>Page {item}</ThemedText>
+      </View>
+    </Pressable>
+  </View>;
 });
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 }, grow: { flex: 1 }, list: { padding: s.lg, gap: s.md }, form: { gap: s.md, paddingVertical: s.md }, row: { flexDirection: 'row', gap: s.sm },
-  heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body }, caption: { ...t.caption },
-  page: { flex: 1 / 3, borderWidth: 2, borderRadius: radius.md, overflow: 'hidden' },
-  select: { alignItems: 'stretch', gap: s.xs, padding: s.xs },
-  pageThumb: { width: '100%', aspectRatio: 3 / 4, minHeight: 88 },
-  pageMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: s.xs, minHeight: 28 },
-  eye: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  input: { minHeight: 48, borderRadius: radius.sm, padding: s.md, ...t.body }, footer: { padding: s.lg, borderTopWidth: StyleSheet.hairlineWidth, gap: s.sm }, result: { flexGrow: 1, padding: s.xl, gap: s.lg, justifyContent: 'center' },
+  screen: { flex: 1 }, grow: { flex: 1 }, list: { padding: s.lg, gap: s.md, flexGrow: 1 }, form: { gap: s.md, paddingVertical: s.md }, row: { flexDirection: 'row', gap: s.sm, alignItems: 'stretch' },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: s.xl, gap: s.lg },
+  emptyBody: { textAlign: 'center', maxWidth: 320 },
+  heading: { ...t.heading, textAlign: 'center' }, label: { ...t.label }, body: { ...t.body }, caption: { ...t.caption },
+  page: { flex: 1, minWidth: 0, borderWidth: 2, borderRadius: radius.md, overflow: 'hidden' },
+  select: { flex: 1, alignItems: 'stretch', gap: s.xs, padding: s.xs },
+  pageThumb: { width: '100%', aspectRatio: 3 / 4, minHeight: 88, borderRadius: 8, overflow: 'hidden' },
+  checkBadge: { position: 'absolute', left: 6, top: 6, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  eyeCorner: { position: 'absolute', right: 4, top: 4, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  pageMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 28 },
+  input: { minHeight: 48, borderRadius: radius.sm, padding: s.md, ...t.body }, result: { flexGrow: 1, padding: s.xl, gap: s.lg, justifyContent: 'center' },
 });

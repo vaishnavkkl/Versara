@@ -26,7 +26,7 @@ export function HeaderHistoryButtons({ canUndo, canRedo, onUndo, onRedo, disable
   const button = (label: string, enabled: boolean, onPress: () => void, ios: 'arrow.uturn.backward' | 'arrow.uturn.forward', android: 'undo' | 'redo') =>
     <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled || !enabled} onPress={onPress} hitSlop={4}
       style={[styles.button, compact && styles.compact, (disabled || !enabled) && styles.dim]}>
-      <HeaderGlyph ios={ios} android={android} size={compact ? 38 : 40} />
+      <HeaderGlyph id={android === 'undo' ? 'undo' : 'redo'} ios={ios} android={android} size={compact ? 38 : 40} />
     </Pressable>;
   return <View style={styles.row}>
     {button('Undo', canUndo, onUndo, 'arrow.uturn.backward', 'undo')}

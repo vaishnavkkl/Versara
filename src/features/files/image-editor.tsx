@@ -12,6 +12,7 @@ import { AppLoader, withLoading } from '@/components/app-loader';
 import { router, Stack } from 'expo-router';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Host, Slider } from '@expo/ui';
+import { AppGlyph } from '@/components/app-glyph';
 import { ThemedText } from '@/components/themed-text';
 import { UniversalIcon } from '@/components/universal-icon';
 import { ToolScreenHeader as ScreenHeader } from '@/components/tool-screen-header';
@@ -30,6 +31,7 @@ import { askSaveOptions, newFileName, saveEditedOutput, showSavedImage } from '.
 import { formatSize, shareNamedFile, shareRenderedFile } from './file-storage';
 import { ToolActionRow, ToolRowButton } from '@/components/tool-action-row';
 import { OptionSheet } from '@/components/option-sheet';
+import { PdfPreviewFooter } from '../pdf/pdf-preview';
 
 export type EditorTab = 'crop' | 'rotate' | 'adjust' | 'filters' | 'resize' | 'export';
 type Edits = { rotation: number; flipH: boolean; flipV: boolean; brightness: number; contrast: number; saturation: number; warmth: number; filter: string };
@@ -292,35 +294,33 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
   const controlsDisabled = busy || !draft.ready || compare;
   const slider = (setting: SliderSetting, value: number) => <ImageAdjustmentSlider key={setting} setting={setting} value={value} disabled={busy || !draft.ready || compare} onChange={onSliderChange} />;
 
-  const chipRow = (children: ReactNode) => landscape
-    ? <View style={[styles.chips, styles.wrap]}>{children}</View>
-    : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{children}</ScrollView>;
+  const dock = (children: ReactNode) => <EditorActionBar vertical={landscape}>{children}</EditorActionBar>;
   const panel = <View style={styles.panel}>
     {!!draft.error && <ThemedText accessibilityRole="alert" style={styles.note}>{draft.error}</ThemedText>}
 
-    {tab === 'crop' && chipRow(<>{ASPECTS.map(item => <EditorOption key={item.id} selected={aspect === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => { setAspect(item.id); if (item.id === 'none') setCrop(null); }} />)}</>)}
-    {tab === 'rotate' && chipRow(<>
-      <EditorOption label="Rotate left" disabled={controlsDisabled} onPress={() => update({ rotation: (edits.rotation + 270) % 360 })} />
-      <EditorOption label="Rotate right" disabled={controlsDisabled} onPress={() => update({ rotation: (edits.rotation + 90) % 360 })} />
-      <EditorOption label="Flip horizontal" selected={edits.flipH} disabled={controlsDisabled} onPress={() => update({ flipH: !edits.flipH })} />
-      <EditorOption label="Flip vertical" selected={edits.flipV} disabled={controlsDisabled} onPress={() => update({ flipV: !edits.flipV })} />
-      <EditorOption label="Reset" disabled={controlsDisabled} onPress={() => update({ rotation: 0, flipH: false, flipV: false })} />
+    {tab === 'crop' && dock(<>{ASPECTS.map(item => <EditorOption key={item.id} compact selected={aspect === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => { setAspect(item.id); if (item.id === 'none') setCrop(null); }} />)}</>)}
+    {tab === 'rotate' && dock(<>
+      <EditorOption compact label="Left" accessibilityLabel="Rotate left" icon={{ ios: 'rotate.left', android: 'rotate-left' }} disabled={controlsDisabled} onPress={() => update({ rotation: (edits.rotation + 270) % 360 })} />
+      <EditorOption compact label="Right" accessibilityLabel="Rotate right" icon={{ ios: 'rotate.right', android: 'rotate-right' }} disabled={controlsDisabled} onPress={() => update({ rotation: (edits.rotation + 90) % 360 })} />
+      <EditorOption compact label="Flip H" accessibilityLabel="Flip horizontal" icon={{ ios: 'arrow.left.and.right', android: 'swap-horiz' }} selected={edits.flipH} disabled={controlsDisabled} onPress={() => update({ flipH: !edits.flipH })} />
+      <EditorOption compact label="Flip V" accessibilityLabel="Flip vertical" icon={{ ios: 'arrow.up.and.down', android: 'swap-vert' }} selected={edits.flipV} disabled={controlsDisabled} onPress={() => update({ flipV: !edits.flipV })} />
+      <EditorOption compact label="Reset" icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} disabled={controlsDisabled} onPress={() => update({ rotation: 0, flipH: false, flipV: false })} />
     </>)}
     {tab === 'rotate' && !!FileEngine?.nativeImageToolsVersion && slider('straighten', straighten)}
     {tab === 'adjust' && <>
-      {chipRow(<>
+      {dock(<>
         {ADJUSTMENTS.map(item => <EditorOption key={item.id} compact selected={adjustment === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => setAdjustment(item.id)} />)}
         <EditorOption compact label="Reset all" icon={{ ios: 'arrow.counterclockwise', android: 'restart-alt' }} disabled={controlsDisabled} onPress={() => update({ brightness: 0, contrast: 1, saturation: 1, warmth: 0 })} />
       </>)}
       {slider(adjustment, edits[adjustment])}
     </>}
-    {tab === 'filters' && chipRow(<>{FILTERS.map(item => <EditorOption key={item.id} selected={edits.filter === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => update({ filter: item.id })} />)}</>)}
+    {tab === 'filters' && dock(<>{FILTERS.map(item => <EditorOption key={item.id} compact selected={edits.filter === item.id} label={item.label} icon={item.icon} disabled={controlsDisabled} onPress={() => update({ filter: item.id })} />)}</>)}
     {tab === 'resize' && <>
       <ImageResizeControls source={resizeSource} value={resize} disabled={busy || !draft.ready || compare} inSheet={!landscape} onChange={setResize} />
       <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Dimensions include your crop and rotation. Unlock proportions to stretch to an exact size.</ThemedText>
     </>}
     {tab === 'export' && <>
-      {chipRow(<>{formats.map(value => <EditorOption key={value} selected={format === value} label={value.toUpperCase()} disabled={controlsDisabled} onPress={() => setFormat(value)} />)}</>)}
+      {dock(<>{formats.map(value => <EditorOption key={value} compact selected={format === value} label={value.toUpperCase()} icon={{ ios: 'photo', android: 'image' }} disabled={controlsDisabled} onPress={() => setFormat(value)} />)}</>)}
       {!['png', 'tiff'].includes(format) && slider('quality', quality)}
       <ThemedText style={[styles.note, { color: colors.secondaryLabel }]}>Saving creates a new image without location or camera details. Lower quality makes smaller files.</ThemedText>
     </>}
@@ -328,10 +328,8 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
 
   const tabs = <View style={landscape ? styles.tabColumn : [styles.tabRow, { flexDirection: 'row', flexWrap: 'wrap' }]}>
     {TABS.map(item => <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected: tab === item.id }} disabled={!draft.ready || busy || compare} onPress={() => { if (locked.current) return; setTab(item.id); setSheetOpen(SHEET_TABS.has(item.id)); if (item.id === 'crop' && aspect === 'none') setAspect('free'); }} style={[styles.tab, !landscape && { width: fontScale >= 1.4 ? '31%' : '15.5%' }]}>
-      <View style={[styles.tabIcon, tab === item.id ? { backgroundColor: toolColors(item.id, colors).ink } : toolColors(item.id, colors).fill]}>
-        <UniversalIcon ios={item.ios} android={item.android} size={20} color={tab === item.id ? colors.systemBackground : toolColors(item.id, colors).glyph} />
-      </View>
-      <ThemedText style={styles.tabLabel}>{item.title}</ThemedText>
+      <AppGlyph id={item.id} ios={item.ios} android={item.android} size={40} selected={tab === item.id} />
+      <ThemedText style={[styles.tabLabel, tab === item.id && { color: toolColors(item.id, colors).vivid }]}>{item.title}</ThemedText>
     </Pressable>)}
   </View>;
 
@@ -360,14 +358,17 @@ export function ImageEditorScreen({ id, initialTab = 'crop', tool }: { id: strin
         <View style={[landscape ? [styles.side, { width: sideWidth }] : styles.bottom, { borderColor: colors.separator }]}>
           {landscape ? <View style={[styles.row, styles.grow]}>{tabs}<ScrollView style={styles.grow} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.sidePanel}>{panel}</ScrollView></View> : <>{!SHEET_TABS.has(tab) && panel}{SHEET_TABS.has(tab) && <ToolSettingsSummary title={tab === 'resize' ? 'Dimensions and proportions' : 'Format and quality'} summary={tab === 'resize' ? 'Change size in pixels or percent' : 'Choose the saved image format and quality'} disabled={controlsDisabled} expanded={sheetOpen} onPress={() => { Keyboard.dismiss(); setSheetOpen(true); }} />}{tabs}</>}
         </View>
-        {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={{ ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} keyboardInput={tab === 'resize'} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
+        {!landscape && <OptionSheet title={TABS.find(item => item.id === tab)?.title ?? 'Options'} icon={tab === 'export' ? { ios: 'square.and.arrow.down', android: 'save-alt' } : tab === 'resize' ? { ios: 'arrow.up.left.and.arrow.down.right', android: 'photo-size-select-large' } : { ios: 'slider.horizontal.3', android: 'tune' }} isPresented={sheetOpen && SHEET_TABS.has(tab)} dim={false} keyboardInput={tab === 'resize'} onClose={() => setSheetOpen(false)}>{panel}</OptionSheet>}
       </View>}
-    <View style={styles.actionFooter}><EditorActionBar><ToolButton title={tab === 'export' ? 'Save image' : 'Apply changes'} disabled={!file || busy || !draft.ready || compare} onPress={() => { void (tab === 'export' ? save() : applyAndReturn()); }} /></EditorActionBar></View>
+    <PdfPreviewFooter>
+      <EditorActionBar>
+        <ToolButton title={tab === 'export' ? 'Save image' : 'Apply changes'} disabled={!file || busy || !draft.ready || compare} onPress={() => { void (tab === 'export' ? save() : applyAndReturn()); }} />
+      </EditorActionBar>
+    </PdfPreviewFooter>
   </KeyboardAvoidingView>;
 }
 
 const styles = StyleSheet.create({
-  actionFooter: { padding: s.sm },
   screen: { flex: 1 },
   grow: { flex: 1 },
   row: { flexDirection: 'row' },
@@ -376,10 +377,8 @@ const styles = StyleSheet.create({
   headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   bottom: { borderTopWidth: StyleSheet.hairlineWidth },
   side: { borderLeftWidth: StyleSheet.hairlineWidth },
-  wrap: { flexWrap: 'wrap' },
   sidePanel: { paddingBottom: s.lg },
   panel: { paddingHorizontal: s.md, paddingTop: s.sm, gap: s.xs, minHeight: 64 },
-  chips: { flexDirection: 'row', flexWrap: 'nowrap', gap: s.sm, paddingVertical: s.xs },
   chip: { minHeight: 40, borderRadius: 20, paddingHorizontal: s.lg, alignItems: 'center', justifyContent: 'center' },
   chipText: { fontSize: 13, fontWeight: '600' },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: s.sm, minHeight: 44 },

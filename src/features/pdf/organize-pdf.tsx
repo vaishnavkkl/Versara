@@ -13,7 +13,7 @@ import { HandoffScreen } from '@/components/handoff-screen';
 import { ThemedText } from '@/components/themed-text';
 import { ToolButton } from '@/components/tool-button';
 import { usePalette } from '@/theme/colors';
-import { radius, spacing as s, typography as t } from '@/theme/dashboard';
+import { radius, spacing as s, toolChrome, typography as t } from '@/theme/dashboard';
 import { browseFiles, createImportDirectory, disposeImports, formatSize, savedPdfDirectory, shareFile, shareNamedFile, type LocalFile } from '../files/file-storage';
 import { usePublishHeaderShare } from '@/components/header-share';
 import { copyPdf, usePublishPdfHandoff } from './pdf-handoff';
@@ -106,8 +106,16 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
       if (!mounted.current) return;
       const next = picked.map((file, index) => ({ ...file, pageCount: info[index].pageCount }));
       if (merge && sources.reduce((sum, file) => sum + file.pageCount, 0) + next.reduce((sum, file) => sum + file.pageCount, 0) > 2000) throw new Error('Merge up to 2,000 pages at a time. Choose fewer PDFs.');
+      if (!merge && next[0].pageCount < 2) toast('This PDF has only one page — nothing to split. Choose a PDF with at least two pages.');
+      if (merge && sources.length + next.length < 2) toast('Add at least two PDFs to merge.');
       setSources(current => merge ? [...current, ...next] : next);
-      if (!merge) { setCustomRanges(''); setSplitMode(next[0].pageCount > 100 ? 'groups' : 'each'); setGroupSize(String(Math.max(Math.min(10, next[0].pageCount), Math.ceil(next[0].pageCount / 100)))); }
+      if (!merge) {
+        setCustomRanges('');
+        setSplitMode(next[0].pageCount > 100 ? 'groups' : 'each');
+        const pages = next[0].pageCount;
+        // Prefer groups that actually create more than one output when the PDF is large enough.
+        setGroupSize(String(pages < 2 ? 1 : Math.max(1, Math.min(10, Math.ceil(pages / Math.min(100, pages))))));
+      }
       accepted = true;
     } catch (cause) { fail(cause); }
     finally {
@@ -125,7 +133,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
     catch (cause) { rangeError = (cause as Error).message; }
   }
   const pageCount = sources.reduce((sum, source) => sum + source.pageCount, 0);
-  const canRun = available && !busy && (merge ? sources.length >= 2 : ranges.length > 0);
+  const canRun = available && !busy && !rangeError && (merge ? sources.length >= 2 : ranges.length > 0);
   usePublishHeaderShare({ active: !!(results.length || sources.length), disabled: busy || !shareTarget,
     label: results.length > 1 ? 'Share each PDF from its card' : results.length ? 'Share new PDF' : shareTarget ? 'Share original PDF' : 'Share is available after merging',
     onShare: () => shareTarget && shareNamedFile({ uri: shareTarget.uri, name: shareTarget.name, size: shareTarget.size, mimeType: 'application/pdf' }),
@@ -142,7 +150,14 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   });
 
   async function process() {
-    if (!PdfEngine?.organizePdfs || locked.current || !canRun) return;
+    if (!PdfEngine?.organizePdfs || locked.current) return;
+    if (!canRun) {
+      if (merge && sources.length < 2) toast('Add at least two PDFs to merge.');
+      else if (!merge && sources[0] && sources[0].pageCount < 2) toast('This PDF has only one page — nothing to split.');
+      else if (rangeError) toast(rangeError);
+      else toast(merge ? 'Choose PDFs to merge first.' : 'Choose a split option that creates more than one PDF.');
+      return;
+    }
     locked.current = true; setBusy(true); setError(''); setProgress(0); setCancelling(false); setPhase(merge ? 'Merging PDFs…' : 'Splitting PDF…');
     toast(merge ? 'Merging PDFs…' : 'Splitting PDF…');
     const id = jobId(); job.current = id;
@@ -213,7 +228,7 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
   ];
   return <View style={styles.screen}>
     <PdfFileOptionsSheet visible={optionsOpen} onClose={() => setOptionsOpen(false)} name={name} onName={setName} disabled={busy}
-      description={merge ? 'Choose 2 to 30 PDFs, then long-press and drag the cards to arrange their order. Up to 2,000 pages per merge. Tap a card to preview its pages.' : 'Split into individual pages, equal groups, or custom ranges. Up to 100 output PDFs per operation.'}>
+      description={merge ? 'Choose 2 to 30 PDFs, then long-press and drag the cards to arrange their order. Up to 2,000 pages per merge. Tap a card to preview its pages.' : 'Split a PDF with at least two pages into individual pages, equal groups, or custom ranges. Up to 100 output PDFs per operation.'}>
       {!merge && splitMode === 'groups' && <><ThemedText>Pages per PDF</ThemedText><BottomSheetTextInput accessibilityLabel="Pages per PDF" keyboardType="number-pad" value={groupSize} onChangeText={setGroupSize} editable={!busy} maxLength={4} style={inputStyle} /></>}
       {!merge && splitMode === 'ranges' && <><ThemedText>Each range creates a PDF. Example: 1-3, 4, 5-8. Unlisted pages are excluded.</ThemedText><BottomSheetTextInput accessibilityLabel="Page ranges" placeholder="1-3, 4-8" placeholderTextColor={colors.secondaryLabel} value={customRanges} onChangeText={setCustomRanges} editable={!busy} maxLength={1400} style={inputStyle} /></>}
       {!merge && !!rangeError && <ThemedText accessibilityRole="alert">{rangeError}</ThemedText>}
@@ -234,28 +249,32 @@ export function OrganizePdf({ operation, initialSelection }: { operation: 'merge
           onPreview={() => {}} onMove={() => {}} onRemove={() => {}} canMoveBack={false} canMoveForward={false} />} />}
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      {!merge && sources.length > 0 && <>
-        <EditorActionBar >{splitModes.map(item => <EditorOption key={item.id} compact label={item.label} selected={splitMode === item.id} disabled={busy} onPress={() => { setSplitMode(item.id); if (item.id !== 'each') setOptionsOpen(true); }} />)}</EditorActionBar>
-        <ThemedText accessibilityLiveRegion="polite" style={styles.body}>{rangeError || `${ranges.length} output PDFs · ${ranges.reduce((sum, range) => sum + range.end - range.start + 1, 0)} pages`}</ThemedText>
+      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite" style={styles.body}>{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving and verifying PDFs...' : `${phase}${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}`}</ThemedText>
+        {(progress !== null || phase.startsWith('Reading PDF details')) && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} />}
+      </> : <>
+        {merge && sources.length === 1 && <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>Add at least one more PDF to merge.</ThemedText>}
+        {!merge && sources.length > 0 && <ThemedText accessibilityLiveRegion="polite" accessibilityRole={rangeError ? 'alert' : undefined} style={styles.caption}>{rangeError || (sources[0].pageCount < 2 ? 'This PDF has only one page — nothing to split.' : `${ranges.length} output PDFs · ${ranges.reduce((sum, range) => sum + range.end - range.start + 1, 0)} pages`)}</ThemedText>}
+        <EditorActionBar>
+          {!merge && sources.length > 0 && splitModes.map(item => (
+            <EditorOption key={item.id} compact label={item.label} selected={splitMode === item.id} disabled={sources[0].pageCount < 2}
+              icon={item.id === 'each' ? { ios: 'doc.on.doc', android: 'library-books' } : item.id === 'groups' ? { ios: 'square.grid.2x2', android: 'grid-view' } : { ios: 'list.number', android: 'format-list-numbered' }}
+              onPress={() => { setSplitMode(item.id); if (item.id !== 'each') setOptionsOpen(true); }} />
+          ))}
+          <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
+          <EditorOption compact label={sources.length ? merge ? 'Add PDFs' : 'Change PDF' : 'Choose PDF'} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} disabled={!available || (merge && sources.length >= 30)} onPress={() => void choose()} />
+          <ToolButton title={merge ? 'Merge PDFs' : 'Split PDF'} onPress={() => void process()} disabled={!canRun}
+            icon={merge ? { ios: 'arrow.triangle.merge', android: 'mdi:call-merge' } : { ios: 'arrow.triangle.branch', android: 'mdi:call-split' }} />
+        </EditorActionBar>
       </>}
-      {busy && <><AppLoader /><ThemedText accessibilityLiveRegion="polite" style={styles.body}>{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving and verifying PDFs...' : `${phase}${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}`}</ThemedText></>}
-      <EditorActionBar >
-        <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} disabled={busy} onPress={() => setOptionsOpen(true)} />
-        <EditorOption compact label={sources.length ? merge ? 'Add PDFs' : 'Change PDF' : 'Choose PDF'} icon={{ ios: 'doc.badge.plus', android: 'note-add' }} disabled={busy || !available || (merge && sources.length >= 30)} onPress={() => void choose()} />
-
-          {busy && (progress !== null || phase.startsWith('Reading PDF details')) ? <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelPdfJob(job.current); } }} /> : <ToolButton title={merge ? 'Merge PDFs' : 'Split PDF'} onPress={process} disabled={!canRun} />}
-
-      </EditorActionBar>
     </PdfPreviewFooter>
   </View>;
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 }, grow: { flex: 1, minWidth: 0 }, list: { padding: s.lg, gap: s.md }, form: { gap: s.md, paddingBottom: s.md },
-  heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body },
+  heading: { ...t.heading }, label: { ...t.label }, body: { ...t.body }, caption: { ...t.caption },
   input: { minHeight: 48, borderRadius: radius.sm, paddingHorizontal: s.lg, paddingVertical: s.md, ...t.body },
-  options: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' },
   columns: { justifyContent: 'space-between' },
-  footer: { padding: s.lg, gap: s.sm, borderTopWidth: StyleSheet.hairlineWidth },
+  footer: { paddingHorizontal: toolChrome.paddingHorizontal, paddingVertical: toolChrome.paddingVertical, gap: toolChrome.gap, borderTopWidth: StyleSheet.hairlineWidth },
   resultCard: { padding: s.lg, gap: s.md, borderRadius: radius.md }, actions: { gap: s.sm },
 });

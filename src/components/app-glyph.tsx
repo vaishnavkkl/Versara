@@ -61,11 +61,10 @@ export function glyphKey(android: Icon['android']) {
   return android.replace(/^mdi:/, '').replace(/-(outline|outlined|border|variant)+$/g, '');
 }
 
-/** A compact app-icon tile for header and toolbar buttons; outline icons stay outlined so state stays readable. */
-export function HeaderGlyph({ ios, android, size = 40, selected, loading = false }: { id?: string; ios: Icon['ios']; android: Icon['android']; size?: number; selected?: boolean; loading?: boolean }) {
+/** A compact app-icon tile for header and toolbar buttons, coloured like the matching tool glyph. */
+export function HeaderGlyph({ id, ios, android, size = 40, selected, loading = false }: { id?: string; ios: Icon['ios']; android: Icon['android']; size?: number; selected?: boolean; loading?: boolean }) {
   const colors = usePalette();
-  // Controls share the theme ink so a row of them reads as one set; tool colours stay with the tools themselves.
-  const ink = colors.systemBlue;
+  const ink = toolColors(id ?? glyphKey(android), colors).vivid;
   return <GlyphTile size={size} selected={selected}>
     {loading ? <AppLoader color={ink} /> : <UniversalIcon ios={ios} android={android} size={Math.round(size * 0.6)} color={ink} />}
   </GlyphTile>;

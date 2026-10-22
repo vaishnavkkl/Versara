@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable as ClosePressable, ScrollView, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import Animated, { cancelAnimation, Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 import { ThemedText } from './themed-text';
 import { HelpPressable as Pressable } from './help-pressable';
@@ -80,6 +81,7 @@ function rowsOf(items: RailTool[], perRow: number, maxRows: number) {
  */
 export function ToolSurround({ active, naming = false, tools, disabled = false, showClose = true, onAction, onClose, onHidden, children }: { active: boolean; naming?: boolean; tools: RailTool[]; disabled?: boolean; showClose?: boolean; onAction: (id: string) => void; onClose: () => void; onHidden: () => void; children: ReactNode }) {
   const colors = usePalette();
+  const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const progress = useSharedValue(reducedMotion ? 1 : 0);
@@ -88,6 +90,8 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
   const presented = active || retained;
   const latest = useRef({ active, onHidden });
   const mounted = useRef(true);
+  // Keep bottom tiles above the system nav / home indicator so taps reach the tools, not the bar.
+  const bottomClearance = presented ? insets.bottom : 0;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useLayoutEffect(() => { latest.current = { active, onHidden }; });
   const finishExit = useCallback(() => {
@@ -113,7 +117,9 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
     } else progress.set(0);
     return () => { if (frame !== undefined) cancelAnimationFrame(frame); cancelAnimation(progress); };
   }, [revealing, retained, reducedMotion, progress, finishExit]);
-  const layout = presented && size ? distribute(tools, size.width, size.height - (showClose ? CLOSE_ROW : 0)) : null;
+  const layout = presented && size
+    ? distribute(tools, size.width, size.height - (showClose ? CLOSE_ROW : 0) - bottomClearance)
+    : null;
   const onLayout = ({ nativeEvent }: LayoutChangeEvent) => {
     const { width, height } = nativeEvent.layout;
     setSize(current => current && Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1 ? current : { width, height });
@@ -157,7 +163,9 @@ export function ToolSurround({ active, naming = false, tools, disabled = false, 
       <View style={[styles.center, presented && [styles.framed, { borderColor: colors.separator, backgroundColor: colors.systemBackground }]]}>{children}</View>
       {band('right')}
     </View>
-    {band('bottom')}
+    <View style={bottomClearance > 0 ? { paddingBottom: bottomClearance } : undefined}>
+      {band('bottom')}
+    </View>
   </View>;
 }
 

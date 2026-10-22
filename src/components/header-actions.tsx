@@ -19,17 +19,17 @@ const EMPTY: HeaderAction[] = [];
 /** Every button in a close-style header shares this size, so the row reads as one quiet group. */
 export const headerButtonStyle = StyleSheet.create({ button: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' } }).button;
 
-export function HeaderIconButton({ label, ios, android, selected, disabled, onPress }: Omit<HeaderAction, 'id'>) {
+export function HeaderIconButton({ id, label, ios, android, selected, disabled, onPress }: HeaderAction) {
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!selected, disabled: !!disabled }} disabled={disabled} onPress={onPress} helpOnLongPress hitSlop={2}
     style={({ pressed }) => [headerButtonStyle, { opacity: disabled ? 0.4 : pressed ? 0.6 : 1 }]}>
-    <HeaderGlyph ios={ios} android={android} selected={selected} />
+    <HeaderGlyph id={id} ios={ios} android={android} selected={selected} />
   </Pressable>;
 }
 
 /** Rendered in a close-style header; shows the buttons a reader publishes, such as bookmarks and reading options. */
 export function HeaderActions() {
   const actions = useHeaderActions();
-  return actions.map(({ id, ...action }) => <HeaderIconButton key={id} {...action} />);
+  return actions.map(action => <HeaderIconButton key={action.id} {...action} />);
 }
 
 export function useHeaderActions() { return useSyncExternalStore(subscribe, () => slot, () => EMPTY); }

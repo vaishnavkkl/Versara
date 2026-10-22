@@ -84,7 +84,7 @@ export function PdfDocumentPreview({ uri, count, initialPage = 1, inputPassword 
   return <View style={styles.screen}>
     <PdfPreviewBody pages={inputPassword || hideThumbnails ? null : { uri, count, page: page - 1, onSelect: target => { if (!disabled && target + 1 !== page) changePage(target + 1); } }} toolbar={<PdfPreviewToolbar page={page} count={count} disabled={loading || disabled} onPageChange={changePage}>{toolbarActions}</PdfPreviewToolbar>}>
     {preview ? blank ? <PdfPreviewStage hint={previewHint ?? 'Inserted blank page'}><View style={styles.empty}><View accessibilityLabel="Blank PDF page" style={{ backgroundColor: '#fff', aspectRatio: preview.width / preview.height, width: '100%', maxHeight: '100%', flexShrink: 1 }} /></View></PdfPreviewStage> : <PdfPagePreview image={preview} active={active} rotation={rotation} hint={previewHint} /> : <PdfPreviewStage hint="Preparing page preview">
-      <View style={styles.empty}>{loading ? <><AppLoader /><ThemedText>Preparing page...</ThemedText></> : <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Retry preview" onPress={() => setRetry(value => value + 1)} /></>}</View>
+      <View style={styles.empty}>{loading ? <AppLoader /> : <><ThemedText accessibilityRole="alert">{error}</ThemedText><ToolButton title="Retry preview" onPress={() => setRetry(value => value + 1)} /></>}</View>
     </PdfPreviewStage>}
     </PdfPreviewBody>
     {!embedded && <PdfPreviewFooter><ThemedText>Original PDF - changes appear in the saved result.</ThemedText><ToolButton title="Back to tool" secondary onPress={onClose} /></PdfPreviewFooter>}

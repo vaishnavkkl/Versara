@@ -1,3 +1,4 @@
+import { View } from 'react-native';
 import { EditorMenu } from '@/components/editor-menu';
 import { EditorOption } from '@/components/editor-option';
 
@@ -27,7 +28,9 @@ export const SHAPES: { id: string; label: string; points: [number, number][]; op
 ];
 /** `inline` renders the shapes as options in place; use it inside a bottom sheet, where a second sheet would clash. */
 export function ShapePicker({ value, onChange, disabled, compact = false, iconOnly = false, inline = false, label }: { value: string; onChange: (id: string) => void; disabled: boolean; compact?: boolean; iconOnly?: boolean; inline?: boolean; label?: string }) {
-  if (inline) return <>{SHAPES.map(shape => <EditorOption key={shape.id} compact label={shape.label} selected={shape.id === value} disabled={disabled} onPress={() => onChange(shape.id)} />)}</>;
-  return <EditorMenu label={label ?? `Shape: ${SHAPES.find(shape => shape.id === value)?.label ?? 'Rectangle'}`} compact={compact} iconOnly={iconOnly} grid={4} icon={{ ios: 'square.on.circle', android: 'category' }} disabled={disabled}
-    items={SHAPES.map(shape => ({ id: shape.id, label: shape.label, selected: shape.id === value, onPress: () => onChange(shape.id) }))} />;
+  if (inline) return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+    {SHAPES.map(shape => <EditorOption key={shape.id} compact label={shape.label} colorId="shapes" selected={shape.id === value} disabled={disabled} onPress={() => onChange(shape.id)} />)}
+  </View>;
+  return <EditorMenu label={label ?? `Shape: ${SHAPES.find(shape => shape.id === value)?.label ?? 'Rectangle'}`} compact={compact} iconOnly={iconOnly} grid={4} tintedItems colorKey="shapes" icon={{ ios: 'square.on.circle', android: 'category' }} disabled={disabled}
+    items={SHAPES.map(shape => ({ id: shape.id, label: shape.label, colorKey: 'shapes', selected: shape.id === value, onPress: () => onChange(shape.id) }))} />;
 }

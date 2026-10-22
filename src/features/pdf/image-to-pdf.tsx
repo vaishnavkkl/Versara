@@ -96,7 +96,8 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
   }
 
   async function convert() {
-    if (!PdfEngine?.imagesToPdf || locked.current || !files.length) return;
+    if (!PdfEngine?.imagesToPdf || locked.current) return;
+    if (!files.length) { toast('Add at least one image first.'); return; }
     locked.current = true; setBusy(true); setProgress(0); setError(''); setCancelling(false);
     toast('Creating PDF…');
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -184,25 +185,24 @@ export function ImageToPdf({ initialSelection }: { initialSelection?: InitialSel
         onPreview={() => setPreviewIndex(index)} onMove={offset => reorder(index, offset)} onRemove={() => setFiles(current => current.filter(file => file.uri !== item.uri))} canMoveBack={index > 0} canMoveForward={index + 1 < files.length} />} />
     <PdfPreviewFooter>
       {!!error && <ThemedText accessibilityRole="alert" style={styles.body}>{error}</ThemedText>}
-      <EditorActionBar >{([{ value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }, { value: 'image', label: 'Fit image' }] as const).map(item => <EditorOption key={item.value} compact label={item.label} selected={pageSize === item.value} disabled={busy} onPress={() => setPageSize(item.value)} />)}</EditorActionBar>
-      {busy && <AppLoader />}
-      {progress !== null ? <><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving PDF...' : `Creating pages... ${Math.round(progress * 100)}%`}</ThemedText><ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} /></> : <EditorActionBar >
-        <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} disabled={busy} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
-        <EditorOption compact label="Add images" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={busy || !nativeAvailable || files.length >= 30} onPress={() => void addImages()} />
-        <ToolButton title="Save PDF" disabled={!files.length || busy || !nativeAvailable} onPress={convert} />
-      </EditorActionBar>}
+      {busy ? <><AppLoader /><ThemedText accessibilityLiveRegion="polite">{cancelling ? 'Cancelling...' : progress === 1 ? 'Saving PDF...' : progress !== null ? `Creating pages... ${Math.round(progress * 100)}%` : 'Working…'}</ThemedText>{progress !== null && <ToolButton title="Cancel" secondary disabled={cancelling} onPress={() => { if (job.current) { setCancelling(true); PdfEngine?.cancelConversion(job.current); } }} />}</> : <>
+        <ThemedText accessibilityLiveRegion="polite" style={styles.caption}>{files.length ? `${files.length} ${files.length === 1 ? 'image' : 'images'} · one page each` : 'Add images to get started.'}</ThemedText>
+        <EditorActionBar>
+          <EditorOption compact label="A4" selected={pageSize === 'a4'} icon={{ ios: 'doc', android: 'description' }} onPress={() => setPageSize('a4')} />
+          <EditorOption compact label="Letter" selected={pageSize === 'letter'} icon={{ ios: 'doc.plaintext', android: 'article' }} onPress={() => setPageSize('letter')} />
+          <EditorOption compact label="Fit image" selected={pageSize === 'image'} icon={{ ios: 'photo', android: 'image' }} onPress={() => setPageSize('image')} />
+          <EditorOption compact label="Options" icon={{ ios: 'slider.horizontal.3', android: 'tune' }} selected={optionsOpen} onPress={() => setOptionsOpen(true)} />
+          <EditorOption compact label="Add images" icon={{ ios: 'photo.badge.plus', android: 'add-photo-alternate' }} disabled={!nativeAvailable || files.length >= 30} onPress={() => void addImages()} />
+          <ToolButton title="Save PDF" disabled={!files.length || !nativeAvailable} onPress={convert} icon={{ ios: 'square.and.arrow.down', android: 'save' }} />
+        </EditorActionBar>
+      </>}
     </PdfPreviewFooter>
   </View>;
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 }, columns: { justifyContent: 'space-between' }, list: { padding: s.lg, gap: s.sm }, form: { gap: s.md, paddingBottom: s.lg },
-  body: { ...t.body }, label: { ...t.label }, heading: { ...t.heading },
+  body: { ...t.body }, label: { ...t.label }, heading: { ...t.heading }, caption: { ...t.caption },
   input: { minHeight: 48, paddingHorizontal: s.lg, borderRadius: radius.sm, ...t.body },
-  options: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  row: { flexDirection: 'row', gap: s.xs, alignItems: 'center', borderRadius: radius.sm, padding: s.xs },
-  thumbnail: { width: 44, height: 58, borderRadius: 6 }, fileName: { flex: 1, minWidth: 0, paddingHorizontal: s.xs },
-  smallButton: { width: 44, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
-  footer: { padding: s.lg, borderTopWidth: StyleSheet.hairlineWidth, gap: s.sm },
   result: { flexGrow: 1, padding: s.xl, gap: s.lg, justifyContent: 'center' },
 });

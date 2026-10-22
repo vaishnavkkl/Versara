@@ -1,7 +1,16 @@
 import type { PdfRange } from '../../../modules/pdf-engine';
 
 export type SplitMode = 'each' | 'groups' | 'ranges';
+
+/** True when the plan is a single PDF that still contains every source page (not a real split). */
+function isWholeDocument(ranges: PdfRange[], pageCount: number) {
+  return ranges.length === 1 && ranges[0].start === 1 && ranges[0].end === pageCount;
+}
+
 export function splitRanges(pageCount: number, mode: SplitMode, groupSize: string, custom: string): PdfRange[] {
+  if (!Number.isSafeInteger(pageCount) || pageCount < 1) throw new Error('Choose a PDF with readable pages first.');
+  if (pageCount < 2) throw new Error('This PDF has only one page, so there is nothing to split. Choose a PDF with at least two pages.');
+
   let ranges: PdfRange[];
   if (mode === 'ranges') {
     const parts = custom.trim().split(',');
@@ -19,5 +28,12 @@ export function splitRanges(pageCount: number, mode: SplitMode, groupSize: strin
   }
   if (ranges.some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) || range.start < 1 || range.end < range.start || range.end > pageCount)) throw new Error(`Each range must run forwards between pages 1 and ${pageCount}.`);
   if (ranges.reduce((total, range) => total + range.end - range.start + 1, 0) > 2000) throw new Error('Choose no more than 2,000 output pages per operation.');
+  if (isWholeDocument(ranges, pageCount)) {
+    throw new Error(mode === 'groups'
+      ? 'That group size keeps every page in one PDF. Choose a smaller group size to split this document.'
+      : mode === 'ranges'
+        ? 'That range keeps every page in one PDF. Enter at least two ranges, or a range that leaves some pages out.'
+        : 'This PDF has only one page, so there is nothing to split.');
+  }
   return ranges;
 }

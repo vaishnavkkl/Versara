@@ -37,7 +37,8 @@ export function FocusChrome({ edge, style, children }: { edge: 'top' | 'bottom' 
 }
 
 // Side rails keep stretching to the full height of the row they sit in.
-const styles = StyleSheet.create({ chrome: { zIndex: 1 }, side: { flexDirection: 'row' } });
+// Top/bottom chrome must not shrink, or page tools crowd into the header when space is tight.
+const styles = StyleSheet.create({ chrome: { zIndex: 1, flexShrink: 0 }, side: { flexDirection: 'row', alignSelf: 'stretch' } });
 
 /**
  * For each view between the screen and the tool ring while the ring is shown. Leaving chrome can linger
